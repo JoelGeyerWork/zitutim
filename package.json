@@ -13,6 +13,8 @@
     "test:server": "vitest run --project server",
     "db:up": "docker compose up -d",
     "db:down": "docker compose down",
+    "app:up": "docker compose --profile app up -d --build",
+    "app:down": "docker compose --profile app down",
     "db:seed": "node --env-file=.env.local scripts/seed.mjs",
     "db:seed:demo": "node --env-file=.env.local scripts/seed.mjs --demo"
   },

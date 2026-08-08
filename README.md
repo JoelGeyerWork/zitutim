@@ -51,6 +51,8 @@ the sample data. Seeding demo data is a no-op once the collection is non-empty.
 | `npm run db:down`      | Stop it (the `mongo-data` volume persists)  |
 | `npm run db:seed`      | Create indexes                              |
 | `npm run db:seed:demo` | Indexes + sample quotes, if the DB is empty |
+| `npm run app:up`       | Build and run app + MongoDB in Docker       |
+| `npm run app:down`     | Stop the whole stack                        |
 
 ## Environment
 
@@ -61,6 +63,27 @@ the sample data. Seeding demo data is a no-op once the collection is non-empty.
 
 To point at Atlas instead of Docker, swap `MONGODB_URI` for the Atlas
 connection string — nothing else changes.
+
+## Docker
+
+`Dockerfile` builds a production image from Next.js' `standalone` output — the
+runtime stage is `node:22-alpine` plus `server.js`, the traced subset of
+`node_modules` and the static assets, running as an unprivileged `nextjs` user.
+
+```bash
+npm run app:up     # app on http://localhost:3000, Mongo on :27017
+npm run app:down
+```
+
+The app is a compose profile, so `npm run db:up` still starts Mongo on its own
+for the normal `npm run dev` loop. Inside the compose network the app reaches
+Mongo at `mongodb://mongo:27017`; compose sets that itself rather than reading
+`.env.local`, whose `localhost` URI is only correct from the host. Mongo is
+still published on `27017`, so `npm run db:seed:demo` works from the host
+against the containerised app's database.
+
+The image needs no database at build time — every page that reads Mongo is
+`force-dynamic`.
 
 ## API
 

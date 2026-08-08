@@ -24,6 +24,10 @@ npx tsc --noEmit       # there is no typecheck script; build runs tsc too
 `npm run db:seed` creates the indexes without the sample data. `npm run db:down`
 stops Mongo but keeps the `mongo-data` volume.
 
+`npm run app:up` / `app:down` build and run the containerised app alongside
+Mongo. The `app` service sits behind a compose profile precisely so `db:up`
+(plain `docker compose up -d`) keeps meaning "Mongo only" for the dev loop.
+
 Requires `.env.local` (`cp .env.example .env.local`). Both seed scripts read it
 via `node --env-file`, so they fail without it.
 
@@ -79,6 +83,12 @@ only — the server is the authority.
 - **Search escapes regex metacharacters** before building the `RegExp`. `.*` must
   match the literal text, not everything. `Highlighted` in `quote-card.tsx` does
   the same escaping client-side.
+- **`output: "standalone"` in `next.config.ts` is what the Dockerfile runs.**
+  Remove it and the runtime stage has no `server.js` to start. The standalone
+  bundle deliberately excludes `.next/static`, which the Dockerfile copies in a
+  second `COPY` — drop that and the app serves unstyled HTML.
+- **The feed page stays `force-dynamic`.** It's why `next build` needs no
+  `MONGODB_URI`, and therefore why the image builds without a database.
 - **Palette is light-only by design** — `color-scheme: light` is pinned in
   `globals.css` so the native date picker matches. Red/white/black: red is the
   only chromatic hue, everything else is a pure neutral. `.dark` tokens exist but
