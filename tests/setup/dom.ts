@@ -42,6 +42,24 @@ function createStorage(): Storage {
   };
 }
 
+/**
+ * jsdom has no media-query engine. next-themes watches
+ * `(prefers-color-scheme: dark)`, so report "no match" rather than throwing.
+ */
+function matchMediaStub(query: string): MediaQueryList {
+  return {
+    matches: false,
+    media: query,
+    onchange: null,
+    addEventListener: () => {},
+    removeEventListener: () => {},
+    addListener: () => {},
+    removeListener: () => {},
+    dispatchEvent: () => false,
+  };
+}
+
+vi.stubGlobal("matchMedia", matchMediaStub);
 vi.stubGlobal("ResizeObserver", ResizeObserverStub);
 vi.stubGlobal("IntersectionObserver", IntersectionObserverStub);
 vi.stubGlobal("localStorage", createStorage());

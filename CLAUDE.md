@@ -79,10 +79,15 @@ only — the server is the authority.
 - **Search escapes regex metacharacters** before building the `RegExp`. `.*` must
   match the literal text, not everything. `Highlighted` in `quote-card.tsx` does
   the same escaping client-side.
-- **Palette is light-only by design** — `color-scheme: light` is pinned in
-  `globals.css` so the native date picker matches. Red/white/black: red is the
-  only chromatic hue, everything else is a pure neutral. `.dark` tokens exist but
-  nothing sets the class.
+- **Red/white/black palette** — red is the only chromatic hue, everything else is
+  a pure neutral, in both schemes. `next-themes` puts `.dark` on `<html>`
+  (`ThemeProvider` in `layout.tsx`, picker in `theme-toggle.tsx`), and
+  `globals.css` pins `color-scheme` to whichever is resolved so native controls —
+  notably the date picker — follow the site rather than the OS. New surfaces must
+  use the tokens; a literal colour will be wrong in one scheme. Elevation flips
+  between the two: light tints the page *behind* the cards, dark leaves the page
+  at `--background` and lets the cards sit lighter (`bg-muted/40 dark:bg-background`
+  on `<body>`).
 
 ### RTL
 
@@ -112,7 +117,7 @@ while open (see `quote-card.tsx`), rather than nesting triggers inside menu item
 
 ## Test environment quirks
 
-Both are already handled in `tests/setup/`; don't be surprised by them.
+All of these are already handled in `tests/setup/`; don't be surprised by them.
 
 - `server-only` throws unless imported under Next's react-server condition, so
   `vitest.config.mts` aliases it to a stub.
@@ -123,6 +128,10 @@ Both are already handled in `tests/setup/`; don't be surprised by them.
 - `mockResolvedValue(new Response(...))` breaks on the second call — a body can
   only be read once. Use `respondWith()` from `tests/ui/factories.ts` with
   `mockImplementation`.
+- jsdom has no `matchMedia`, which `next-themes` calls on mount; `dom.ts` stubs it
+  as "never matches", so `system` resolves to light under test. next-themes also
+  writes on the real `<html>`, so tests that switch themes have to reset its
+  class themselves.
 
 ## Conventions
 

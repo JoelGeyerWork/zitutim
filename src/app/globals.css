@@ -129,9 +129,12 @@
   }
   html {
     @apply bg-background font-sans;
-    /* The palette is white/black/red by design. Pinning the scheme keeps
-       native controls (notably the date picker) from rendering dark. */
+    /* Pinned to the resolved theme rather than left to the OS, so native
+       controls (notably the date picker) follow the site's own choice. */
     color-scheme: light;
+  }
+  html.dark {
+    color-scheme: dark;
   }
 }
 
