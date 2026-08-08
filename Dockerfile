@@ -11,6 +11,10 @@ RUN apk add --no-cache libc6-compat
 
 FROM base AS deps
 WORKDIR /app
+# npm ci installs devDependencies (the build needs them), which would otherwise
+# fire mongodb-memory-server's postinstall and pull a MongoDB tarball off
+# fastdl.mongodb.org — only the test suite uses it, and there is no musl build.
+ENV MONGOMS_DISABLE_POSTINSTALL=1
 # Only the manifests, so a source-only change reuses this layer's install.
 COPY package.json package-lock.json ./
 RUN npm ci

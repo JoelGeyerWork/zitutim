@@ -26,10 +26,13 @@ services:
     ports:
       - "3000:3000"
     environment:
-      # Set here rather than pulled from .env.local, which points at the
-      # published localhost:27017 — inside the network it's the service name.
+      # Both are fixed here rather than read from .env.local, which Compose
+      # never loads: its localhost:27017 is wrong inside the network anyway, and
+      # an interpolated ${MONGODB_DB} would quietly fall back to the default
+      # while the host-side seed scripts wrote somewhere else. To use a
+      # different database, change it here as well.
       MONGODB_URI: mongodb://mongo:27017
-      MONGODB_DB: ${MONGODB_DB:-zitutim}
+      MONGODB_DB: zitutim
     depends_on:
       mongo:
         condition: service_healthy
