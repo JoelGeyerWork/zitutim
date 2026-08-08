@@ -43,21 +43,61 @@ function createStorage(): Storage {
 }
 
 /**
- * jsdom has no media-query engine. next-themes watches
- * `(prefers-color-scheme: dark)`, so report "no match" rather than throwing.
+ * jsdom has no media-query engine, and next-themes watches
+ * `(prefers-color-scheme: dark)`. Rather than hardcoding "nothing matches" —
+ * which would leave the `system` → dark path, the one most first-time visitors
+ * take, permanently untestable — keep a set of queries that currently match and
+ * let a test flip them with `setMatchingMedia()`.
  */
+type MediaListener = (event: MediaQueryListEvent) => void;
+
+const matching = new Set<string>();
+const mediaListeners = new Map<string, Set<MediaListener>>();
+
 function matchMediaStub(query: string): MediaQueryList {
+  const listeners =
+    mediaListeners.get(query) ??
+    mediaListeners.set(query, new Set()).get(query)!;
+
+  // Cast at the end: the real MediaQueryList types addEventListener as an
+  // overload over every event name, which a plain object literal can't satisfy.
   return {
-    matches: false,
+    get matches() {
+      return matching.has(query);
+    },
     media: query,
     onchange: null,
-    addEventListener: () => {},
-    removeEventListener: () => {},
-    addListener: () => {},
-    removeListener: () => {},
+    addEventListener: (_type: string, listener: MediaListener) =>
+      void listeners.add(listener),
+    removeEventListener: (_type: string, listener: MediaListener) =>
+      void listeners.delete(listener),
+    // The deprecated pair, which next-themes still falls back to.
+    addListener: (listener: MediaListener) => void listeners.add(listener),
+    removeListener: (listener: MediaListener) => void listeners.delete(listener),
     dispatchEvent: () => false,
-  };
+  } as unknown as MediaQueryList;
 }
+
+/**
+ * Make `queries` the ones that match, and notify anything already listening —
+ * so a test can simulate the OS switching scheme mid-session, not just start
+ * out in one. Reset before every test.
+ */
+export function setMatchingMedia(...queries: string[]) {
+  matching.clear();
+  for (const query of queries) matching.add(query);
+
+  for (const [query, listeners] of mediaListeners) {
+    const event = {
+      matches: matching.has(query),
+      media: query,
+    } as MediaQueryListEvent;
+    for (const listener of listeners) listener(event);
+  }
+}
+
+/** The query next-themes watches; spelled out here so tests needn't repeat it. */
+export const PREFERS_DARK = "(prefers-color-scheme: dark)";
 
 vi.stubGlobal("matchMedia", matchMediaStub);
 vi.stubGlobal("ResizeObserver", ResizeObserverStub);
@@ -70,6 +110,10 @@ if (!Element.prototype.scrollIntoView) {
 
 beforeEach(() => {
   localStorage.clear();
+  // Default to "no media query matches", so a test that flips one can't leak
+  // into the next.
+  setMatchingMedia();
+  mediaListeners.clear();
 });
 
 afterEach(() => {

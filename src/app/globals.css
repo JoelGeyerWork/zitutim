@@ -138,6 +138,16 @@
   }
 }
 
+/* shadcn's stock scrim is bg-black/10, which over a near-black page is not
+   visible at all — the dialog loses its separation from the content behind it.
+   Overriding here rather than in dialog.tsx/alert-dialog.tsx keeps it from
+   being wiped the next time those generated files are regenerated. Unlayered,
+   so it wins against the utility in the class attribute. */
+.dark [data-slot="dialog-overlay"],
+.dark [data-slot="alert-dialog-overlay"] {
+  background-color: color-mix(in oklab, black 50%, transparent);
+}
+
 /* Oversized decorative quotation mark used on quote cards. */
 @utility quote-mark {
   font-family: Georgia, "Times New Roman", serif;

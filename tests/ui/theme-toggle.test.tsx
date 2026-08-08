@@ -1,9 +1,10 @@
-import { render, screen } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { ThemeProvider } from "@/components/theme-provider";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { PREFERS_DARK, setMatchingMedia } from "../setup/dom";
 
 function renderToggle() {
   return render(
@@ -54,6 +55,33 @@ describe("ThemeToggle", () => {
     await user.click(await screen.findByRole("menuitemradio", { name: "בהיר" }));
 
     expect(document.documentElement).not.toHaveClass("dark");
+  });
+
+  it("follows a dark OS preference when the theme is system", () => {
+    setMatchingMedia(PREFERS_DARK);
+    renderToggle();
+
+    // The default is system, so nothing has to be picked for this to apply.
+    expect(document.documentElement).toHaveClass("dark");
+  });
+
+  it("keeps an explicit light choice when the OS is dark", async () => {
+    setMatchingMedia(PREFERS_DARK);
+    renderToggle();
+    const user = await openMenu();
+
+    await user.click(await screen.findByRole("menuitemradio", { name: "בהיר" }));
+
+    expect(document.documentElement).not.toHaveClass("dark");
+  });
+
+  it("tracks the OS switching scheme while set to system", () => {
+    renderToggle();
+    expect(document.documentElement).not.toHaveClass("dark");
+
+    act(() => setMatchingMedia(PREFERS_DARK));
+
+    expect(document.documentElement).toHaveClass("dark");
   });
 
   it("marks the stored theme as the selected one", async () => {

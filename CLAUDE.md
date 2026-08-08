@@ -115,6 +115,12 @@ shadcn/ui on **Base UI** (`@base-ui/react`), not Radix. Consequences that bite:
 Dialogs are driven by controlled `open` state from the parent and mounted only
 while open (see `quote-card.tsx`), rather than nesting triggers inside menu items.
 
+Because these files are regenerated, styling that has to survive a regeneration
+lives outside them: `globals.css` darkens the dialog and alert-dialog scrims in
+dark mode via their `data-slot` attributes, since the stock `bg-black/10` is
+invisible against a near-black page. Override by `data-slot` rather than editing
+the generated class strings.
+
 ## Test environment quirks
 
 All of these are already handled in `tests/setup/`; don't be surprised by them.
