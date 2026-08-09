@@ -96,10 +96,15 @@ only — the server is the authority.
   only inside the container, with nothing in the build output to explain why.
 - **The feed page stays `force-dynamic`.** It's why `next build` needs no
   `MONGODB_URI`, and therefore why the image builds without a database.
-- **Palette is light-only by design** — `color-scheme: light` is pinned in
-  `globals.css` so the native date picker matches. Red/white/black: red is the
-  only chromatic hue, everything else is a pure neutral. `.dark` tokens exist but
-  nothing sets the class.
+- **Red/white/black palette** — red is the only chromatic hue, everything else is
+  a pure neutral, in both schemes. `next-themes` puts `.dark` on `<html>`
+  (`ThemeProvider` in `layout.tsx`, picker in `theme-toggle.tsx`), and
+  `globals.css` pins `color-scheme` to whichever is resolved so native controls —
+  notably the date picker — follow the site rather than the OS. New surfaces must
+  use the tokens; a literal colour will be wrong in one scheme. Elevation flips
+  between the two: light tints the page *behind* the cards, dark leaves the page
+  at `--background` and lets the cards sit lighter (`bg-muted/40 dark:bg-background`
+  on `<body>`).
 
 ### RTL
 
@@ -127,9 +132,15 @@ shadcn/ui on **Base UI** (`@base-ui/react`), not Radix. Consequences that bite:
 Dialogs are driven by controlled `open` state from the parent and mounted only
 while open (see `quote-card.tsx`), rather than nesting triggers inside menu items.
 
+Because these files are regenerated, styling that has to survive a regeneration
+lives outside them: `globals.css` darkens the dialog and alert-dialog scrims in
+dark mode via their `data-slot` attributes, since the stock `bg-black/10` is
+invisible against a near-black page. Override by `data-slot` rather than editing
+the generated class strings.
+
 ## Test environment quirks
 
-Both are already handled in `tests/setup/`; don't be surprised by them.
+All of these are already handled in `tests/setup/`; don't be surprised by them.
 
 - `server-only` throws unless imported under Next's react-server condition, so
   `vitest.config.mts` aliases it to a stub.
@@ -140,6 +151,10 @@ Both are already handled in `tests/setup/`; don't be surprised by them.
 - `mockResolvedValue(new Response(...))` breaks on the second call — a body can
   only be read once. Use `respondWith()` from `tests/ui/factories.ts` with
   `mockImplementation`.
+- jsdom has no `matchMedia`, which `next-themes` calls on mount; `dom.ts` stubs it
+  as "never matches", so `system` resolves to light under test. next-themes also
+  writes on the real `<html>`, so tests that switch themes have to reset its
+  class themselves.
 
 ## Conventions
 

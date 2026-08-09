@@ -1,7 +1,9 @@
 import { render, screen, within } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import userEvent from "@testing-library/user-event";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { SiteNav } from "@/components/site-nav";
+import { ThemeProvider } from "@/components/theme-provider";
 
 const usePathname = vi.hoisted(() => vi.fn(() => "/"));
 vi.mock("next/navigation", () => ({ usePathname }));
@@ -10,6 +12,11 @@ vi.mock("next/navigation", () => ({ usePathname }));
 function desktopNav() {
   return within(screen.getByRole("banner"));
 }
+
+afterEach(() => {
+  // next-themes writes on the real <html>, which persists between tests.
+  document.documentElement.className = "";
+});
 
 describe("SiteNav", () => {
   it("links to all three pages", () => {
@@ -62,5 +69,23 @@ describe("SiteNav", () => {
       "href",
       "/",
     );
+  });
+
+  // next-themes' useTheme() falls back to an inert no-op setter when there is
+  // no provider above it, so a mis-wired tree stays silent — the toggle still
+  // renders and still opens, it just stops doing anything. Drive it through a
+  // real provider so that the wiring, not only the markup, is covered.
+  it("switches the theme from the header toggle", async () => {
+    const user = userEvent.setup();
+    render(
+      <ThemeProvider>
+        <SiteNav />
+      </ThemeProvider>,
+    );
+
+    await user.click(screen.getByRole("button", { name: "ערכת נושא" }));
+    await user.click(await screen.findByRole("menuitemradio", { name: "כהה" }));
+
+    expect(document.documentElement).toHaveClass("dark");
   });
 });

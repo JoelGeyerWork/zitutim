@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Heebo } from "next/font/google";
 
 import { SiteNav } from "@/components/site-nav";
+import { ThemeProvider } from "@/components/theme-provider";
 import { Toaster } from "@/components/ui/sonner";
 
 import "./globals.css";
@@ -23,11 +24,17 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
       lang="he"
       dir="rtl"
       className={`${heebo.variable} h-full antialiased`}
+      // next-themes writes the theme class here before hydration.
+      suppressHydrationWarning
     >
-      <body className="bg-muted/40 flex min-h-full flex-col">
-        <SiteNav />
-        <main className="flex-1 pb-24 md:pb-10">{children}</main>
-        <Toaster position="top-center" richColors closeButton />
+      {/* Light mode tints the page behind the cards; dark mode inverts the
+          elevation, so cards stay lighter than the page instead. */}
+      <body className="bg-muted/40 dark:bg-background flex min-h-full flex-col">
+        <ThemeProvider>
+          <SiteNav />
+          <main className="flex-1 pb-24 md:pb-10">{children}</main>
+          <Toaster position="top-center" richColors closeButton />
+        </ThemeProvider>
       </body>
     </html>
   );
