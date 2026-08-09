@@ -23,7 +23,7 @@ export default defineConfig({
           name: "server",
           environment: "node",
           include: ["tests/server/**/*.test.ts"],
-          setupFiles: ["tests/setup/mongo.ts"],
+          setupFiles: ["tests/setup/env.ts", "tests/setup/mongo.ts"],
           // One in-memory Mongo per worker; serialise so files can't collide.
           fileParallelism: false,
           testTimeout: 30_000,

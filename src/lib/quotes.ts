@@ -13,6 +13,14 @@ import {
 
 export * from "@/lib/quote-schema";
 
+/** Whoever is making the change, taken from the session — never from the body. */
+export interface QuoteActor {
+  /** `users._id` as a hex string. */
+  id: string;
+  /** AD display name, snapshotted onto the document. */
+  name: string;
+}
+
 /** Shape stored in MongoDB. */
 export interface QuoteDoc {
   _id: ObjectId;
@@ -22,8 +30,20 @@ export interface QuoteDoc {
   saidAt: Date;
   /** Optional colour: where it happened, what prompted it. */
   context: string | null;
-  /** Optional: whoever added the quote to the wall. */
+  /**
+   * Display name of whoever added the quote, snapshotted at create time.
+   *
+   * Denormalized on purpose: it is rendered directly, and it is one of the four
+   * fields `listQuotes` regex-searches. Resolving it through `addedById`
+   * instead would need a $lookup and the whole search design falls apart. It is
+   * also the more historically accurate record — the name the adder had then.
+   */
   addedBy: string | null;
+  /** Null on the documents that predate authentication; the key may be absent entirely. */
+  addedById: ObjectId | null;
+  /** Any signed-in user may edit any quote, so record who last did. */
+  updatedBy: string | null;
+  updatedById: ObjectId | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -36,6 +56,10 @@ function serialize(doc: QuoteDoc): Quote {
     saidAt: doc.saidAt.toISOString(),
     context: doc.context,
     addedBy: doc.addedBy,
+    // Pre-auth documents lack these keys entirely, so never assume presence.
+    addedById: doc.addedById?.toHexString() ?? null,
+    updatedBy: doc.updatedBy ?? null,
+    updatedById: doc.updatedById?.toHexString() ?? null,
     createdAt: doc.createdAt.toISOString(),
     updatedAt: doc.updatedAt.toISOString(),
   };
@@ -85,6 +109,8 @@ export async function listQuotes({
   const term = search?.trim();
   if (term) {
     const pattern = new RegExp(escapeRegex(term), "i");
+    // `addedBy` is matched as stored text — this is the reason it stays
+    // denormalized rather than being resolved through `addedById`.
     filter.$or = [
       { text: pattern },
       { author: pattern },
@@ -120,7 +146,15 @@ export async function getQuote(id: string): Promise<Quote | null> {
   return doc ? serialize(doc) : null;
 }
 
-export async function createQuote(input: QuoteValues): Promise<Quote> {
+/**
+ * `actor` is required rather than optional: an optional one lets a forgotten
+ * call site silently create an unattributed quote, where a required one makes
+ * the compiler walk you to every caller.
+ */
+export async function createQuote(
+  input: QuoteValues,
+  actor: QuoteActor,
+): Promise<Quote> {
   const collection = await quotes();
   const now = new Date();
   const doc: Omit<QuoteDoc, "_id"> = {
@@ -128,7 +162,10 @@ export async function createQuote(input: QuoteValues): Promise<Quote> {
     author: input.author,
     saidAt: new Date(input.saidAt),
     context: input.context,
-    addedBy: input.addedBy,
+    addedBy: actor.name,
+    addedById: new ObjectId(actor.id),
+    updatedBy: null,
+    updatedById: null,
     createdAt: now,
     updatedAt: now,
   };
@@ -137,9 +174,16 @@ export async function createQuote(input: QuoteValues): Promise<Quote> {
   return serialize({ ...doc, _id: result.insertedId });
 }
 
+/**
+ * Note what is *not* in the `$set`: `addedBy` and `addedById` are never
+ * rewritten. Any signed-in user may edit any quote, so stamping the editor here
+ * would silently transfer authorship to whoever last touched it. The edit is
+ * recorded in `updatedBy` instead.
+ */
 export async function updateQuote(
   id: string,
   input: QuoteValues,
+  actor: QuoteActor,
 ): Promise<Quote | null> {
   if (!ObjectId.isValid(id)) return null;
   const collection = await quotes();
@@ -152,7 +196,8 @@ export async function updateQuote(
         author: input.author,
         saidAt: new Date(input.saidAt),
         context: input.context,
-        addedBy: input.addedBy,
+        updatedBy: actor.name,
+        updatedById: new ObjectId(actor.id),
         updatedAt: new Date(),
       },
     },

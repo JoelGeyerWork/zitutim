@@ -34,7 +34,13 @@ describe("quoteInputSchema", () => {
       context: "   ",
     });
     expect(parsed.context).toBeNull();
-    expect(parsed.addedBy).toBeNull();
+  });
+
+  it("strips a client-supplied addedBy rather than honouring it", () => {
+    // Attribution comes from the session. If this key survived parsing, any
+    // caller could post a quote under someone else's name.
+    const parsed = quoteInputSchema.parse({ ...valid, addedBy: "מישהו אחר" });
+    expect(parsed).not.toHaveProperty("addedBy");
   });
 
   it.each([

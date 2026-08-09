@@ -6,7 +6,11 @@ import { SiteNav } from "@/components/site-nav";
 import { ThemeProvider } from "@/components/theme-provider";
 
 const usePathname = vi.hoisted(() => vi.fn(() => "/"));
-vi.mock("next/navigation", () => ({ usePathname }));
+const refresh = vi.hoisted(() => vi.fn());
+vi.mock("next/navigation", () => ({
+  usePathname,
+  useRouter: () => ({ refresh }),
+}));
 
 /** The nav renders twice (desktop bar + mobile bar); scope to the desktop one. */
 function desktopNav() {

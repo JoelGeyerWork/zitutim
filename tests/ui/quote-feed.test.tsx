@@ -3,7 +3,8 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { QuoteFeed } from "@/components/quote-feed";
-import { makeQuote, respondWith } from "./factories";
+import { SessionProvider } from "@/components/session-provider";
+import { makeQuote, makeSessionUser, respondWith } from "./factories";
 import type { Quote, QuotePage } from "@/lib/quote-schema";
 
 vi.mock("sonner", () => ({
@@ -122,7 +123,12 @@ describe("QuoteFeed", () => {
   it("refreshes the list after a card is deleted", async () => {
     fetchMock.mockImplementation(respondWith(page([DANA])));
     const user = userEvent.setup();
-    render(<QuoteFeed initial={page([DANA, OMER])} />);
+    // The card's actions menu only renders for a signed-in user.
+    render(
+      <SessionProvider user={makeSessionUser()}>
+        <QuoteFeed initial={page([DANA, OMER])} />
+      </SessionProvider>,
+    );
 
     const menus = screen.getAllByRole("button", { name: "אפשרויות נוספות" });
     await user.click(menus[1]);

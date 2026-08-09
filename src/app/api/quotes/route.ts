@@ -2,6 +2,12 @@ import { NextResponse } from "next/server";
 
 import { fieldErrors } from "@/lib/api";
 import {
+  forbiddenResponse,
+  getSessionFrom,
+  isSameOrigin,
+  unauthorizedResponse,
+} from "@/lib/session";
+import {
   PAGE_SIZE,
   SORT_OPTIONS,
   createQuote,
@@ -12,6 +18,7 @@ import {
 
 export const dynamic = "force-dynamic";
 
+/** Deliberately public: anyone who can reach the wall can read it. */
 export async function GET(request: Request) {
   const params = new URL(request.url).searchParams;
 
@@ -38,6 +45,13 @@ export async function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
+  if (!isSameOrigin(request)) return forbiddenResponse();
+
+  // Before parsing, not after: an anonymous caller should get a 401 rather than
+  // a 400 or 422, or the validation behaviour becomes a probing oracle.
+  const session = await getSessionFrom(request);
+  if (!session) return unauthorizedResponse();
+
   let body: unknown;
   try {
     body = await request.json();
@@ -54,7 +68,10 @@ export async function POST(request: Request) {
   }
 
   try {
-    const quote = await createQuote(parsed.data);
+    const quote = await createQuote(parsed.data, {
+      id: session.id,
+      name: session.name,
+    });
     return NextResponse.json(quote, { status: 201 });
   } catch (error) {
     console.error("POST /api/quotes failed", error);

@@ -1,4 +1,5 @@
 import type { Quote } from "@/lib/quote-schema";
+import type { SessionUser } from "@/lib/auth-schema";
 
 export function makeQuote(overrides: Partial<Quote> = {}): Quote {
   return {
@@ -8,8 +9,22 @@ export function makeQuote(overrides: Partial<Quote> = {}): Quote {
     saidAt: "2026-07-28T00:00:00.000Z",
     context: null,
     addedBy: null,
+    addedById: null,
+    updatedBy: null,
+    updatedById: null,
     createdAt: "2026-08-08T09:00:00.000Z",
     updatedAt: "2026-08-08T09:00:00.000Z",
+    ...overrides,
+  };
+}
+
+export function makeSessionUser(
+  overrides: Partial<SessionUser> = {},
+): SessionUser {
+  return {
+    id: "6b0000000000000000000001",
+    name: "דנה כהן",
+    username: "dana",
     ...overrides,
   };
 }

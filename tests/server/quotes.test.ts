@@ -8,8 +8,12 @@ import {
   getStats,
   listQuotes,
   updateQuote,
+  type QuoteActor,
 } from "@/lib/quotes";
 import type { QuoteValues } from "@/lib/quote-schema";
+
+const YOEL: QuoteActor = { id: "6b0000000000000000000001", name: "יואל" };
+const NOA: QuoteActor = { id: "6b0000000000000000000002", name: "נועה" };
 
 function input(overrides: Partial<QuoteValues> = {}): QuoteValues {
   return {
@@ -17,9 +21,12 @@ function input(overrides: Partial<QuoteValues> = {}): QuoteValues {
     author: "דנה",
     saidAt: "2026-07-28",
     context: null,
-    addedBy: null,
     ...overrides,
   };
+}
+
+function create(overrides: Partial<QuoteValues> = {}, actor: QuoteActor = YOEL) {
+  return createQuote(input(overrides), actor);
 }
 
 beforeEach(async () => {
@@ -29,22 +36,42 @@ beforeEach(async () => {
 
 describe("createQuote", () => {
   it("returns a serialized quote with string dates", async () => {
-    const quote = await createQuote(input({ context: "לפני הריטרו" }));
+    const quote = await create({ context: "לפני הריטרו" });
 
     expect(quote.id).toMatch(/^[a-f0-9]{24}$/);
     expect(quote.text).toBe("תמיד יש זמן לעוד קפה אחד");
     expect(quote.context).toBe("לפני הריטרו");
-    expect(quote.addedBy).toBeNull();
     expect(typeof quote.createdAt).toBe("string");
   });
 
+  it("stamps attribution from the actor, not the input", async () => {
+    const quote = await create();
+
+    expect(quote.addedBy).toBe("יואל");
+    expect(quote.addedById).toBe(YOEL.id);
+    // Nobody has edited it yet.
+    expect(quote.updatedBy).toBeNull();
+    expect(quote.updatedById).toBeNull();
+  });
+
+  it("ignores an addedBy sent by the client", async () => {
+    // A client cannot forge attribution: the schema strips the key before it
+    // ever reaches the data layer.
+    const quote = await createQuote(
+      { ...input(), addedBy: "מישהו אחר" } as QuoteValues,
+      YOEL,
+    );
+
+    expect(quote.addedBy).toBe("יואל");
+  });
+
   it("stores saidAt at UTC midnight so the day cannot drift", async () => {
-    const quote = await createQuote(input({ saidAt: "2026-07-28" }));
+    const quote = await create({ saidAt: "2026-07-28" });
     expect(quote.saidAt).toBe("2026-07-28T00:00:00.000Z");
   });
 
   it("persists the quote so it can be read back", async () => {
-    const created = await createQuote(input());
+    const created = await create();
     await expect(getQuote(created.id)).resolves.toMatchObject({
       id: created.id,
       text: created.text,
@@ -64,35 +91,58 @@ describe("getQuote", () => {
 
 describe("updateQuote", () => {
   it("applies the change and bumps updatedAt", async () => {
-    const created = await createQuote(input());
+    const created = await create();
     const updated = await updateQuote(
       created.id,
-      input({ text: "ניסוח מתוקן", addedBy: "יואל" }),
+      input({ text: "ניסוח מתוקן" }),
+      YOEL,
     );
 
     expect(updated?.text).toBe("ניסוח מתוקן");
-    expect(updated?.addedBy).toBe("יואל");
     expect(updated?.createdAt).toBe(created.createdAt);
     expect(
       new Date(updated!.updatedAt).getTime(),
     ).toBeGreaterThanOrEqual(new Date(created.updatedAt).getTime());
   });
 
+  it("does not change addedBy or addedById on update", async () => {
+    // Any signed-in user may edit any quote, so stamping the editor into
+    // `addedBy` would silently transfer authorship to whoever touched it last.
+    const created = await create({}, YOEL);
+
+    const updated = await updateQuote(
+      created.id,
+      input({ text: "נועה עורכת" }),
+      NOA,
+    );
+
+    expect(updated?.addedBy).toBe("יואל");
+    expect(updated?.addedById).toBe(YOEL.id);
+    expect(updated?.updatedBy).toBe("נועה");
+    expect(updated?.updatedById).toBe(NOA.id);
+  });
+
   it("can clear an optional field back to null", async () => {
-    const created = await createQuote(input({ context: "היה הקשר" }));
-    const updated = await updateQuote(created.id, input({ context: null }));
+    const created = await create({ context: "היה הקשר" });
+    const updated = await updateQuote(
+      created.id,
+      input({ context: null }),
+      YOEL,
+    );
     expect(updated?.context).toBeNull();
   });
 
   it("returns null for a missing or malformed id", async () => {
-    await expect(updateQuote("0".repeat(24), input())).resolves.toBeNull();
-    await expect(updateQuote("nope", input())).resolves.toBeNull();
+    await expect(
+      updateQuote("0".repeat(24), input(), YOEL),
+    ).resolves.toBeNull();
+    await expect(updateQuote("nope", input(), YOEL)).resolves.toBeNull();
   });
 });
 
 describe("deleteQuote", () => {
   it("removes the quote and reports success once", async () => {
-    const created = await createQuote(input());
+    const created = await create();
 
     await expect(deleteQuote(created.id)).resolves.toBe(true);
     await expect(getQuote(created.id)).resolves.toBeNull();
@@ -107,18 +157,21 @@ describe("deleteQuote", () => {
 describe("listQuotes", () => {
   beforeEach(async () => {
     // Created oldest-first, so "added" order is the reverse of this array.
-    await createQuote(input({ author: "דנה", saidAt: "2026-01-10" }));
-    await createQuote(
-      input({ author: "עומר", saidAt: "2026-05-02", text: "בואו נדחה את זה" }),
-    );
-    await createQuote(
-      input({
+    await create({ author: "דנה", saidAt: "2026-01-10" });
+    await create({
+      author: "עומר",
+      saidAt: "2026-05-02",
+      text: "בואו נדחה את זה",
+    });
+    // Added by נועה, so the addedBy search row below has something to match.
+    await create(
+      {
         author: "איתי",
         saidAt: "2026-03-20",
         text: "אין דבר קבוע יותר מפיצ׳ר זמני",
         context: "בקוד רוויו",
-        addedBy: "נועה",
-      }),
+      },
+      NOA,
     );
   });
 
@@ -159,7 +212,7 @@ describe("listQuotes", () => {
   });
 
   it("ignores case", async () => {
-    await createQuote(input({ author: "Noa", text: "Ship it" }));
+    await create({ author: "Noa", text: "Ship it" });
     const page = await listQuotes({ search: "ship" });
     expect(page.quotes.map((quote) => quote.author)).toEqual(["Noa"]);
   });
@@ -169,7 +222,7 @@ describe("listQuotes", () => {
     const page = await listQuotes({ search: ".*" });
     expect(page.total).toBe(0);
 
-    await createQuote(input({ text: "אמר .* בכוונה" }));
+    await create({ text: "אמר .* בכוונה" });
     await expect(listQuotes({ search: ".*" })).resolves.toMatchObject({
       total: 1,
     });
@@ -204,7 +257,7 @@ describe("listQuotes", () => {
   });
 
   it("counts matches, not the page, when searching", async () => {
-    await createQuote(input({ author: "נועה" })); // second quote mentioning קפה
+    await create({ author: "נועה" }); // second quote mentioning קפה
 
     const page = await listQuotes({ search: "קפה", limit: 1 });
     expect(page.quotes).toHaveLength(1);
@@ -225,6 +278,7 @@ describe("listQuotes", () => {
         saidAt: new Date("2026-07-28"),
         context: null,
         addedBy: null,
+        addedById: null,
         createdAt,
         updatedAt: createdAt,
       })),
@@ -271,9 +325,9 @@ describe("getStats", () => {
   });
 
   it("counts quotes, distinct authors and the leader", async () => {
-    await createQuote(input({ author: "דנה" }));
-    await createQuote(input({ author: "דנה" }));
-    await createQuote(input({ author: "עומר" }));
+    await create({ author: "דנה" });
+    await create({ author: "דנה" });
+    await create({ author: "עומר" });
 
     await expect(getStats()).resolves.toEqual({
       total: 3,
@@ -283,8 +337,8 @@ describe("getStats", () => {
   });
 
   it("breaks a tie deterministically", async () => {
-    await createQuote(input({ author: "עומר" }));
-    await createQuote(input({ author: "איתי" }));
+    await create({ author: "עומר" });
+    await create({ author: "איתי" });
 
     const stats = await getStats();
     expect(stats.topAuthor?.count).toBe(1);

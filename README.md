@@ -3,20 +3,25 @@
 A team quote wall — who said it, when, and what led to it. Hebrew-native, RTL
 throughout, in red / white / black.
 
-Three pages:
-
 | Route     | What it is                                                        |
 | --------- | ----------------------------------------------------------------- |
 | `/`       | **פיד** — a scrolling social-style feed, newest first, infinite scroll |
 | `/search` | **חיפוש** — debounced search across text, author and context, with sorting |
 | `/create` | **ציטוט חדש** — the add form, plus everything you added this sitting |
+| `/login`  | **כניסה** — sign in against Active Directory                        |
 
-Editing and deleting live in the `⋯` menu on any card, on all three pages.
+Editing and deleting live in the `⋯` menu on any card.
+
+**Public read, login to write.** Browsing and searching are open to anyone who
+can reach the app; adding, editing and deleting need a session. Sign-in binds
+against the organisation's Active Directory over LDAP — the app keeps no
+passwords of its own. Any signed-in user may edit or delete any quote; edits are
+recorded in `updatedBy` rather than restricted.
 
 ## Stack
 
 Next.js 16 (App Router) · React 19 · TypeScript · Tailwind CSS v4 ·
-shadcn/ui (Base UI, generated in RTL mode) · MongoDB · Zod
+shadcn/ui (Base UI, generated in RTL mode) · MongoDB · Zod · ldapts · jose
 
 ## Getting started
 
@@ -54,29 +59,69 @@ the sample data. Seeding demo data is a no-op once the collection is non-empty.
 
 ## Environment
 
-| Variable      | Default    | Notes                                        |
-| ------------- | ---------- | -------------------------------------------- |
-| `MONGODB_URI` | —          | Required. `mongodb://localhost:27017` locally |
-| `MONGODB_DB`  | `zitutim`  | Database name                                 |
+| Variable              | Default   | Notes                                                                   |
+| --------------------- | --------- | ----------------------------------------------------------------------- |
+| `MONGODB_URI`         | —         | Required. `mongodb://localhost:27017` locally                            |
+| `MONGODB_DB`          | `zitutim` | Database name                                                            |
+| `SESSION_SECRET`      | —         | Required, 32+ chars. `openssl rand -base64 32`                           |
+| `SESSION_TTL_HOURS`   | `8`       | How long a login stays valid                                             |
+| `LDAP_URL`            | —         | Must be `ldaps://` unless `LDAP_STARTTLS=true`                           |
+| `LDAP_STARTTLS`       | `false`   | Upgrade a plain `ldap://` connection instead of using `ldaps://`         |
+| `LDAP_BASE_DN`        | —         | Where to search for user accounts                                        |
+| `LDAP_BIND_DN`        | —         | Read-only service account, **not** a Domain Admin                        |
+| `LDAP_BIND_PASSWORD`  | —         | Required; an empty value would bind anonymously and break every login    |
+| `LDAP_TLS_CA`         | —         | PEM for the enterprise root CA, if the DC's cert isn't publicly trusted   |
+| `LOGIN_TRUSTED_PROXY` | `false`   | Set only behind a proxy that overwrites `X-Forwarded-For`                |
 
 To point at Atlas instead of Docker, swap `MONGODB_URI` for the Atlas
 connection string — nothing else changes.
 
+A few things worth knowing before you deploy this:
+
+- **`ldaps://` is not optional.** A simple bind sends the password in cleartext,
+  so plain `ldap://` puts every employee's Windows password on the wire. There is
+  deliberately no "skip certificate verification" switch: point `LDAP_TLS_CA` at
+  your internal root instead (or use `NODE_EXTRA_CA_CERTS`).
+- **The service account's own password expiring breaks login for everyone.** Give
+  it "password never expires", or monitor it.
+- Without a reachable domain controller the app still runs fine — sign-in just
+  reports the directory as unavailable, distinctly from a wrong password.
+
 ## API
 
 `Quote` fields: `id`, `text`, `author`, `saidAt`, `context`, `addedBy`,
-`createdAt`, `updatedAt`. Dates are ISO strings; `saidAt` is stored at UTC
-midnight and formatted in UTC so the day never drifts across timezones.
+`addedById`, `updatedBy`, `updatedById`, `createdAt`, `updatedAt`. Dates are ISO
+strings; `saidAt` is stored at UTC midnight and formatted in UTC so the day never
+drifts across timezones. `addedBy` is a display-name snapshot taken from the
+session at create time, `addedById` the reference into `users`; neither can be
+set by the client, and neither is rewritten when someone else edits the quote.
 
-| Method   | Path               | Notes                                                            |
-| -------- | ------------------ | ---------------------------------------------------------------- |
-| `GET`    | `/api/quotes`      | `?q=` search, `?sort=added\|recent\|oldest\|author`, `?skip=`, `?limit=` (max 100) |
-| `POST`   | `/api/quotes`      | Create. `422` with per-field Hebrew messages when invalid          |
-| `GET`    | `/api/quotes/:id`  | Single quote, or `404`                                             |
-| `PUT`    | `/api/quotes/:id`  | Replace                                                            |
-| `DELETE` | `/api/quotes/:id`  | `204`, or `404` if already gone                                    |
+| Method   | Path                | Notes                                                            |
+| -------- | ------------------- | ---------------------------------------------------------------- |
+| `GET`    | `/api/quotes`       | Public. `?q=` search, `?sort=added\|recent\|oldest\|author`, `?skip=`, `?limit=` (max 100) |
+| `POST`   | `/api/quotes`       | Create. Needs a session                                            |
+| `GET`    | `/api/quotes/:id`   | Public. Single quote, or `404`                                     |
+| `PUT`    | `/api/quotes/:id`   | Replace. Needs a session                                           |
+| `DELETE` | `/api/quotes/:id`   | `204`, or `404` if already gone. Needs a session                   |
+| `POST`   | `/api/auth/login`   | `{ username, password }` → sets the session cookie, returns `{ user }` |
+| `POST`   | `/api/auth/logout`  | `204`, clears the cookie. POST so an `<img>` tag can't trigger it   |
 
 List responses are `{ quotes, total, hasMore }`.
+
+Error responses are `{ error }` in Hebrew, plus `issues` keyed by field on a 422:
+
+| Status | When                                                                    |
+| ------ | ----------------------------------------------------------------------- |
+| `400`  | Malformed JSON body                                                      |
+| `401`  | Mutation without a session, or bad credentials on login                  |
+| `403`  | `Origin` header from another site (CSRF guard)                           |
+| `404`  | No such quote                                                            |
+| `422`  | Validation failed — `issues` is `{ field: message }`                     |
+| `429`  | Login throttled; `Retry-After` says for how long                         |
+| `503`  | The directory is unreachable — deliberately distinct from bad credentials |
+
+The `401` is returned **before** the body is parsed, so an anonymous caller can't
+use the validation behaviour to probe the schema.
 
 ## Tests
 
@@ -88,8 +133,11 @@ Vitest, split into two projects (`vitest.config.mts`):
 
 | Project  | Environment | Covers                                                    |
 | -------- | ----------- | --------------------------------------------------------- |
-| `server` | node        | Zod validation, date/Hebrew formatting, the Mongo data layer, the API route handlers |
-| `ui`     | jsdom       | `QuoteCard`, `QuoteForm`, `QuoteSearch`, `QuoteFeed`, `SiteNav` via Testing Library |
+| `server` | node        | Zod validation, date/Hebrew formatting, the Mongo data layer, sessions, the LDAP client, login throttling, the API route handlers |
+| `ui`     | jsdom       | `QuoteCard`, `QuoteForm`, `QuoteSearch`, `QuoteFeed`, `SiteNav`, `LoginForm`, `AccountMenu` via Testing Library |
+
+The LDAP client is tested against a fake `ldapts` `Client` rather than a real
+directory, so no server or network is involved there either.
 
 The server suite runs against a real MongoDB — `mongodb-memory-server` starts a
 throwaway instance per run, so `npm test` needs no Docker and touches nothing in
@@ -97,13 +145,17 @@ your dev database. (The first run downloads a Mongo binary and caches it.)
 Route handlers are called directly with `Request` objects rather than over HTTP,
 so no server has to be running.
 
-Two environment quirks are handled in `tests/setup/`:
+A few environment quirks are handled in `tests/setup/`:
 
 - `server-only` throws unless it is imported under Next's react-server
   condition, so it is aliased to a stub.
 - Node 26 defines its own `localStorage` global that stays `undefined` without
   `--localstorage-file`, and it shadows jsdom's. The UI setup substitutes a
   working in-memory `Storage`.
+- jsdom has no `matchMedia`, which `next-themes` calls on mount.
+- The server setup supplies `SESSION_SECRET` and the `LDAP_*` vars. Every one of
+  those is read lazily by the app, which is what lets the setup file fill them in
+  after imports have already run.
 
 ## Notes on the code
 
@@ -119,8 +171,17 @@ Two environment quirks are handled in `tests/setup/`:
   quotes, swap it for a MongoDB text index.
 - **Pagination is offset-based** (`skip`/`limit`), which is plenty at this size
   and keeps "load more" simple on both the feed and search.
-- **The palette is light-only** by design — `color-scheme: light` is pinned in
-  `globals.css` so native controls (the date picker especially) match. Dark
-  tokens are already defined under `.dark` if you ever want to opt in.
-- **No auth.** Anyone who can reach the app can add, edit and delete quotes.
-  `addedBy` is a free-text field remembered in `localStorage`, not an identity.
+- **Light and dark** share one red / white / black palette, driven by
+  `next-themes` with a picker in the header. `globals.css` pins `color-scheme` to
+  whichever is resolved so native controls (the date picker especially) follow
+  the site rather than the OS.
+- **Authentication is a direct LDAP bind.** Two binds per login: once as a
+  read-only service account to find the user's DN, then again as that DN with
+  their password. Binding against the DN the directory returned — rather than one
+  built from user input — is what keeps the flow free of DN-escaping problems.
+- **Sessions are a stateless signed JWT** in an httpOnly cookie carrying only an
+  id, display name and username. The trade-off is that a disabled AD account
+  stays valid until the token expires (8 hours by default).
+- **Login is throttled below the AD lockout threshold.** Every failed bind
+  increments a real `badPwdCount`, so without a limit in front of it anyone could
+  lock the whole company out of Windows by iterating usernames.

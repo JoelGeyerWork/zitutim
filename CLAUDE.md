@@ -7,8 +7,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## What this is
 
 A team quote wall — who said something, when, and what led to it. Hebrew-native
-and RTL throughout; all user-facing strings are Hebrew. Three pages: `/` (feed),
-`/search`, `/create`.
+and RTL throughout; all user-facing strings are Hebrew. Four pages: `/` (feed),
+`/search`, `/create`, `/login`.
+
+Public read, login to write: anyone who can reach the app can browse and search,
+but adding, editing and deleting need a session. Sign-in binds against the
+organisation's Active Directory over LDAP.
 
 ## Commands
 
@@ -19,13 +23,21 @@ npm run dev
 npm run build
 npm run lint
 npx tsc --noEmit       # there is no typecheck script; build runs tsc too
+npx next typegen       # regenerate .next/types after adding a route
 ```
+
+`LayoutProps<"/">` and `PageProps<"/login">` come from `.next/types`, which
+`tsconfig.json` includes. Add a route without regenerating and `tsc` reports a
+phantom "cannot find name" on a file you did not touch.
 
 `npm run db:seed` creates the indexes without the sample data. `npm run db:down`
 stops Mongo but keeps the `mongo-data` volume.
 
 Requires `.env.local` (`cp .env.example .env.local`). Both seed scripts read it
-via `node --env-file`, so they fail without it.
+via `node --env-file`, so they fail without it. Beyond Mongo it needs a
+`SESSION_SECRET` (`openssl rand -base64 32`) and the `LDAP_*` block; without a
+reachable domain controller everything still runs, sign-in just reports the
+directory as unavailable.
 
 ### Tests
 
@@ -56,6 +68,17 @@ objects. The first run downloads and caches a Mongo binary.
 the one import. Pulling `@/lib/quotes` into a `"use client"` file drags the Mongo
 driver into the browser bundle.
 
+Auth mirrors the same split, with the same consequence — `ldapts` and `jose` in
+the browser bundle:
+
+| Module | Marker | Who may import |
+|---|---|---|
+| `src/lib/auth-schema.ts` | none — **client-safe** | client + server |
+| `src/lib/session.ts` | `server-only`, re-exports the schema | server |
+| `src/lib/ldap.ts` | `server-only` | server |
+| `src/lib/users.ts` | `server-only`, re-exports the schema | server |
+| `src/lib/login-throttle.ts` | `server-only` | server |
+
 ### Data flow
 
 Pages are server components that call `listQuotes`/`getStats` directly (no HTTP
@@ -70,6 +93,42 @@ the same `quoteInputSchema` and return `422` with `issues` keyed by field name;
 `QuoteForm` renders those inline. The form's own checks are for responsiveness
 only — the server is the authority.
 
+### Auth
+
+**The app process handles every employee's real domain password.** That is a
+genuine change in what this codebase is, and it drives most of the rules below:
+HTTPS-only in production, `ldaps://` to the DC, and never logging a request body
+on the login route.
+
+`authenticate()` in `ldap.ts` does a **two-bind** dance: bind as the read-only
+service account, search for the user, then bind a *second, separate* client as
+the DN the server returned. Binding against the returned DN — rather than
+templating one out of user input — is why no RFC 4514 DN escaping exists
+anywhere here. Two clients rather than a rebind because a failed rebind leaves
+the connection in an undefined bind state.
+
+Sessions are a stateless HS256 JWT (`jose`) in an httpOnly cookie holding only
+`{ sub, name, username }`. A disabled AD account therefore stays valid until it
+expires — `SESSION_TTL_HOURS`, default 8. The cheap escalation, if that ever
+matters, is a `disabledAt` check on the *write* paths only: mutations already hit
+Mongo, so it costs one indexed lookup, whereas checking it in `getSession()` puts
+a database read on every public page view.
+
+**Route handlers read the session off the `Request`** (`getSessionFrom`), not via
+`next/headers`. The server suite calls handlers directly with plain `Request`
+objects, where there is no Next request scope and `await cookies()` throws. Only
+`getSession()` — for server components, wrapped in React `cache()` — touches
+`next/headers`.
+
+Error contract: `401 { error }` on a mutation without a session, checked **before**
+the body is parsed so validation behaviour isn't an oracle for anonymous probes;
+`403` on an `Origin` mismatch; `429` with `Retry-After` from the login throttle.
+`GET` stays public everywhere.
+
+The session reaches client components through `SessionProvider` (read once in the
+root layout). **It is display state, not a security boundary** — hiding the card
+menu is UX, the API's 401 is the enforcement.
+
 ### Invariants worth not breaking
 
 - **`saidAt` is stored at UTC midnight and formatted in UTC** (`src/lib/format.ts`).
@@ -79,6 +138,27 @@ only — the server is the authority.
 - **Search escapes regex metacharacters** before building the `RegExp`. `.*` must
   match the literal text, not everything. `Highlighted` in `quote-card.tsx` does
   the same escaping client-side.
+- **LDAP filter values are RFC 4515-escaped** (`escapeFilterValue`) — the sibling
+  of the rule above. Unescaped, `admin)(objectClass=*` restructures the filter
+  into a match on the first user in the directory.
+- **A bind is never attempted with an empty password.** RFC 4513 makes that an
+  *unauthenticated* bind: AD returns success and downgrades to anonymous, so
+  reading "the bind resolved" as "the password was correct" logs anyone in as
+  anyone. The same applies to an unset `LDAP_BIND_PASSWORD`, which is why the
+  config reader rejects it.
+- **Login throttles per username below the AD lockout threshold** (3 in 10
+  minutes, vs. a typical policy of 5). Without it, an anonymous visitor can lock
+  the whole company out of *Windows* by iterating usernames. Every failure path
+  is also held open to a fixed floor, or response time tells a nonexistent
+  username from a wrong password.
+- **`updateQuote` never touches `addedBy`/`addedById`.** Any signed-in user may
+  edit any quote, so stamping the editor there would silently transfer
+  authorship; the edit is recorded in `updatedBy`/`updatedById` instead.
+  `addedBy` is a display-name *snapshot*, kept denormalized because it is
+  rendered directly and is one of the four regex-searched fields.
+- **`SESSION_SECRET` and every `LDAP_*` var are read lazily**, like `MONGODB_URI`.
+  A module-scope read captures `undefined` under vitest, which sets env in
+  `beforeAll` after imports have run.
 - **Red/white/black palette** — red is the only chromatic hue, everything else is
   a pure neutral, in both schemes. `next-themes` puts `.dark` on `<html>`
   (`ThemeProvider` in `layout.tsx`, picker in `theme-toggle.tsx`), and
@@ -106,7 +186,13 @@ badly at 1 ("1 תוצאות").
 shadcn/ui on **Base UI** (`@base-ui/react`), not Radix. Consequences that bite:
 
 - Composition uses a `render` prop, not `asChild`.
-- `<Button render={<Link/>}>` needs `nativeButton={false}`, or Base UI logs an error.
+- `<Button render={<Link/>}>` needs `nativeButton={false}`, or Base UI logs an
+  error — but it also puts `role="button"` on the anchor. For something that
+  navigates, prefer `<Link className={cn(buttonVariants(...))}>`, which is what
+  `page.tsx`, `quote-feed.tsx` and `account-menu.tsx` all do.
+- `DropdownMenuLabel` is `Menu.GroupLabel` and **must sit inside a
+  `DropdownMenuGroup`**. Outside one it throws while the popup renders, so the
+  menu simply never opens — no error you would connect to the cause.
 - `<SelectValue>` takes children as a *function* of the value; without it the raw
   value renders instead of the label.
 - Check the installed `.d.ts` under `node_modules/@base-ui/react/` when unsure —
@@ -129,8 +215,13 @@ All of these are already handled in `tests/setup/`; don't be surprised by them.
   `vitest.config.mts` aliases it to a stub.
 - Node 26 defines its own `localStorage` global that stays `undefined` without
   `--localstorage-file` and shadows jsdom's. `tests/setup/dom.ts` substitutes a
-  working in-memory `Storage`. `quote-form.tsx` also guards its reads in
-  try/catch, since storage genuinely throws in Safari private browsing.
+  working in-memory `Storage`. Nothing currently reads it — the shim is kept so
+  the next component that does isn't left rediscovering the shadowing bug.
+- `tests/setup/env.ts` supplies `SESSION_SECRET` and the `LDAP_*` vars to the
+  server project, and pins `LOGIN_MIN_RESPONSE_MS=0` so the login route's
+  anti-timing-oracle delay doesn't slow the suite down.
+- `vi.mock("ldapts")` replaces the error classes too, so `ldap.ts` identifies AD
+  failures by duck-typed `code`, not `instanceof`.
 - `mockResolvedValue(new Response(...))` breaks on the second call — a body can
   only be read once. Use `respondWith()` from `tests/ui/factories.ts` with
   `mockImplementation`.
@@ -144,5 +235,9 @@ All of these are already handled in `tests/setup/`; don't be surprised by them.
 - Comments explain *why*, not what. Most existing ones mark a non-obvious
   constraint; match that density rather than annotating the obvious.
 - New user-facing strings are Hebrew, including API error messages.
-- No auth. `addedBy` is free text remembered in `localStorage`, not an identity —
-  don't treat it as one.
+- `addedBy` is a display-name snapshot taken from the session when a quote is
+  created; `addedById` is the real reference into `users`. A client cannot set
+  either — `quoteInputSchema` has no `addedBy` key, so anything sent under it is
+  stripped rather than honoured.
+- Any signed-in user may edit or delete any quote. No ownership check, no roles,
+  no AD group mapping — deliberately, for a small high-trust team.

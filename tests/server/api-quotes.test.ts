@@ -7,10 +7,13 @@ import {
   PUT,
 } from "@/app/api/quotes/[id]/route";
 import { getDb } from "@/lib/mongodb";
-import { createQuote } from "@/lib/quotes";
+import { createQuote, type QuoteActor } from "@/lib/quotes";
 import type { Quote, QuotePage, QuoteValues } from "@/lib/quote-schema";
+import { TEST_USER, sessionCookie } from "./factories";
 
 const BASE = "http://localhost:3000/api/quotes";
+
+const ACTOR: QuoteActor = { id: TEST_USER.id, name: TEST_USER.name };
 
 function body(overrides: Record<string, unknown> = {}) {
   return {
@@ -18,19 +21,37 @@ function body(overrides: Record<string, unknown> = {}) {
     author: "דנה",
     saidAt: "2026-07-28",
     context: null,
-    addedBy: null,
     ...overrides,
   };
 }
 
-function post(payload: unknown) {
-  return POST(
-    new Request(BASE, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: typeof payload === "string" ? payload : JSON.stringify(payload),
-    }),
-  );
+/** A mutating request carrying a real signed session, unless told otherwise. */
+async function mutate(
+  url: string,
+  method: string,
+  payload?: unknown,
+  cookie: string | null | undefined = undefined,
+) {
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  };
+  const value = cookie === undefined ? await sessionCookie() : cookie;
+  if (value) headers.cookie = value;
+
+  return new Request(url, {
+    method,
+    headers,
+    body:
+      payload === undefined
+        ? undefined
+        : typeof payload === "string"
+          ? payload
+          : JSON.stringify(payload),
+  });
+}
+
+async function post(payload: unknown, cookie?: string | null) {
+  return POST(await mutate(BASE, "POST", payload, cookie));
 }
 
 function params(id: string) {
@@ -44,14 +65,21 @@ beforeEach(async () => {
 
 describe("POST /api/quotes", () => {
   it("creates a quote and returns 201 with the saved record", async () => {
-    const response = await post(body({ addedBy: "יואל" }));
+    const response = await post(body());
     expect(response.status).toBe(201);
 
     const quote: Quote = await response.json();
     expect(quote.id).toMatch(/^[a-f0-9]{24}$/);
     expect(quote.author).toBe("דנה");
-    expect(quote.addedBy).toBe("יואל");
     expect(quote.saidAt).toBe("2026-07-28T00:00:00.000Z");
+  });
+
+  it("attributes the quote to the session, ignoring any addedBy in the body", async () => {
+    const response = await post(body({ addedBy: "מישהו אחר" }));
+
+    const quote: Quote = await response.json();
+    expect(quote.addedBy).toBe(TEST_USER.name);
+    expect(quote.addedById).toBe(TEST_USER.id);
   });
 
   it("rejects invalid input with 422 and per-field Hebrew messages", async () => {
@@ -87,9 +115,10 @@ describe("POST /api/quotes", () => {
 
 describe("GET /api/quotes", () => {
   beforeEach(async () => {
-    await createQuote(body({ author: "דנה" }) as QuoteValues);
+    await createQuote(body({ author: "דנה" }) as QuoteValues, ACTOR);
     await createQuote(
       body({ author: "עומר", text: "בואו נדחה את זה" }) as QuoteValues,
+      ACTOR,
     );
   });
 
@@ -145,7 +174,7 @@ describe("GET /api/quotes", () => {
 
 describe("GET /api/quotes/:id", () => {
   it("returns the quote", async () => {
-    const created = await createQuote(body() as QuoteValues);
+    const created = await createQuote(body() as QuoteValues, ACTOR);
     const response = await GET_ONE(
       new Request(`${BASE}/${created.id}`),
       params(created.id),
@@ -165,20 +194,23 @@ describe("GET /api/quotes/:id", () => {
   });
 });
 
-describe("PUT /api/quotes/:id", () => {
-  function put(id: string, payload: unknown) {
-    return PUT(
-      new Request(`${BASE}/${id}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: typeof payload === "string" ? payload : JSON.stringify(payload),
-      }),
-      params(id),
-    );
-  }
+async function put(id: string, payload: unknown, cookie?: string | null) {
+  return PUT(
+    await mutate(`${BASE}/${id}`, "PUT", payload, cookie),
+    params(id),
+  );
+}
 
+async function del(id: string, cookie?: string | null) {
+  return DELETE(
+    await mutate(`${BASE}/${id}`, "DELETE", undefined, cookie),
+    params(id),
+  );
+}
+
+describe("PUT /api/quotes/:id", () => {
   it("replaces the quote and returns the updated record", async () => {
-    const created = await createQuote(body() as QuoteValues);
+    const created = await createQuote(body() as QuoteValues, ACTOR);
     const response = await put(created.id, body({ text: "ניסוח מתוקן" }));
 
     expect(response.status).toBe(200);
@@ -188,13 +220,13 @@ describe("PUT /api/quotes/:id", () => {
   });
 
   it("returns 422 for invalid input", async () => {
-    const created = await createQuote(body() as QuoteValues);
+    const created = await createQuote(body() as QuoteValues, ACTOR);
     const response = await put(created.id, body({ text: "" }));
     expect(response.status).toBe(422);
   });
 
   it("returns 400 for a malformed body", async () => {
-    const created = await createQuote(body() as QuoteValues);
+    const created = await createQuote(body() as QuoteValues, ACTOR);
     await expect(put(created.id, "{nope")).resolves.toMatchObject({
       status: 400,
     });
@@ -214,18 +246,135 @@ describe("PUT /api/quotes/:id", () => {
 
 describe("DELETE /api/quotes/:id", () => {
   it("returns 204 with an empty body, then 404 on a repeat", async () => {
-    const created = await createQuote(body() as QuoteValues);
+    const created = await createQuote(body() as QuoteValues, ACTOR);
 
-    const first = await DELETE(new Request(BASE), params(created.id));
+    const first = await del(created.id);
     expect(first.status).toBe(204);
     await expect(first.text()).resolves.toBe("");
 
-    const second = await DELETE(new Request(BASE), params(created.id));
+    const second = await del(created.id);
     expect(second.status).toBe(404);
   });
 
   it("returns 404 for a malformed id", async () => {
-    const response = await DELETE(new Request(BASE), params("nope"));
+    const response = await del("nope");
     expect(response.status).toBe(404);
+  });
+});
+
+describe("authentication", () => {
+  const EXPECTED = { error: "צריך להתחבר כדי לשנות את הקיר" };
+
+  it.each([
+    ["no cookie at all", null],
+    ["a garbage cookie", "zitutim_session=not-a-jwt"],
+    ["an unrelated cookie", "theme=light"],
+  ])("rejects POST with %s", async (_label, cookie) => {
+    const response = await post(body(), cookie);
+
+    expect(response.status).toBe(401);
+    await expect(response.json()).resolves.toEqual(EXPECTED);
+
+    const db = await getDb();
+    await expect(db.collection("quotes").countDocuments()).resolves.toBe(0);
+  });
+
+  it("rejects PUT and DELETE without a session", async () => {
+    const created = await createQuote(body() as QuoteValues, ACTOR);
+
+    expect((await put(created.id, body({ text: "חטיפה" }), null)).status).toBe(
+      401,
+    );
+    expect((await del(created.id, null)).status).toBe(401);
+
+    // And nothing happened.
+    await expect(
+      GET_ONE(new Request(`${BASE}/${created.id}`), params(created.id)).then(
+        (r) => r.json(),
+      ),
+    ).resolves.toMatchObject({ text: body().text });
+  });
+
+  it("rejects an expired session", async () => {
+    const { signSession } = await import("@/lib/session");
+    const longAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    const { token } = await signSession(TEST_USER, longAgo);
+
+    const response = await post(body(), `zitutim_session=${token}`);
+    expect(response.status).toBe(401);
+  });
+
+  it("answers 401 before validation, so anonymous callers learn nothing", async () => {
+    // A malformed body with no session must not reveal the validation rules.
+    const response = await post(body({ author: "" }), null);
+    expect(response.status).toBe(401);
+
+    const malformed = await post("{not json", null);
+    expect(malformed.status).toBe(401);
+  });
+
+  it("rejects a cross-origin POST even with a valid session", async () => {
+    // SameSite=Lax already covers most of this; the Origin check is the belt.
+    const response = await POST(
+      new Request(BASE, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          cookie: await sessionCookie(),
+          origin: "https://evil.example",
+        },
+        body: JSON.stringify(body()),
+      }),
+    );
+
+    expect(response.status).toBe(403);
+    const db = await getDb();
+    await expect(db.collection("quotes").countDocuments()).resolves.toBe(0);
+  });
+
+  it("rejects a cross-origin DELETE even with a valid session", async () => {
+    const created = await createQuote(body() as QuoteValues, ACTOR);
+
+    const response = await DELETE(
+      new Request(`${BASE}/${created.id}`, {
+        method: "DELETE",
+        headers: {
+          cookie: await sessionCookie(),
+          origin: "https://evil.example",
+        },
+      }),
+      params(created.id),
+    );
+
+    expect(response.status).toBe(403);
+    const db = await getDb();
+    await expect(db.collection("quotes").countDocuments()).resolves.toBe(1);
+  });
+
+  it("keeps reads public", async () => {
+    // The whole point of "public read, login to write": an anonymous visitor
+    // must still be able to browse the wall.
+    await createQuote(body() as QuoteValues, ACTOR);
+
+    const list = await GET(new Request(BASE));
+    expect(list.status).toBe(200);
+    await expect(list.json()).resolves.toMatchObject({ total: 1 });
+  });
+
+  it("records the editor without changing the original attribution", async () => {
+    const created = await createQuote(body() as QuoteValues, ACTOR);
+    const other = { id: "6b0000000000000000000009", name: "עומר לוי" };
+    const { signSession } = await import("@/lib/session");
+    const { token } = await signSession({ ...other, username: "omer" });
+
+    const response = await put(
+      created.id,
+      body({ text: "עומר עורך" }),
+      `zitutim_session=${token}`,
+    );
+
+    const quote: Quote = await response.json();
+    expect(quote.addedBy).toBe(TEST_USER.name);
+    expect(quote.updatedBy).toBe("עומר לוי");
   });
 });
