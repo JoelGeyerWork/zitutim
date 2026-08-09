@@ -129,10 +129,23 @@
   }
   html {
     @apply bg-background font-sans;
-    /* The palette is white/black/red by design. Pinning the scheme keeps
-       native controls (notably the date picker) from rendering dark. */
+    /* Pinned to the resolved theme rather than left to the OS, so native
+       controls (notably the date picker) follow the site's own choice. */
     color-scheme: light;
   }
+  html.dark {
+    color-scheme: dark;
+  }
+}
+
+/* shadcn's stock scrim is bg-black/10, which over a near-black page is not
+   visible at all — the dialog loses its separation from the content behind it.
+   Overriding here rather than in dialog.tsx/alert-dialog.tsx keeps it from
+   being wiped the next time those generated files are regenerated. Unlayered,
+   so it wins against the utility in the class attribute. */
+.dark [data-slot="dialog-overlay"],
+.dark [data-slot="alert-dialog-overlay"] {
+  background-color: color-mix(in oklab, black 50%, transparent);
 }
 
 /* Oversized decorative quotation mark used on quote cards. */
