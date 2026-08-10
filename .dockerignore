@@ -1,0 +1,31 @@
+node_modules
+.next
+out
+build
+coverage
+
+.git
+.gitignore
+.claude
+.idea
+.vscode
+
+# Never bake local connection strings into an image — compose sets the
+# container's MONGODB_URI instead.
+.env*
+!.env.example
+
+# Not needed to build the app; keeping them out keeps the context small.
+tests
+vitest.config.mts
+Dockerfile
+.dockerignore
+docker-compose.yml
+README.md
+CLAUDE.md
+AGENTS.md
+
+.DS_Store
+*.pem
+npm-debug.log*
+*.tsbuildinfo

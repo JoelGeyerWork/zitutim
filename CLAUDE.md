@@ -24,6 +24,14 @@ npx tsc --noEmit       # there is no typecheck script; build runs tsc too
 `npm run db:seed` creates the indexes without the sample data. `npm run db:down`
 stops Mongo but keeps the `mongo-data` volume.
 
+`npm run app:up` / `app:down` build and run the containerised app alongside
+Mongo. The `app` service sits behind a compose profile precisely so `db:up`
+(plain `docker compose up -d`) keeps meaning "Mongo only" for the dev loop.
+
+Profiles cut the other way on teardown: `db:down` is *also* profile-less, so
+with the stack up it removes Mongo, leaves `zitutim-app` running, and then fails
+to remove the network it's still attached to. Use `app:down` to stop the stack.
+
 Requires `.env.local` (`cp .env.example .env.local`). Both seed scripts read it
 via `node --env-file`, so they fail without it.
 
@@ -79,6 +87,15 @@ only — the server is the authority.
 - **Search escapes regex metacharacters** before building the `RegExp`. `.*` must
   match the literal text, not everything. `Highlighted` in `quote-card.tsx` does
   the same escaping client-side.
+- **`output: "standalone"` in `next.config.ts` is what the Dockerfile runs.**
+  Remove it and the runtime stage has no `server.js` to start. The standalone
+  bundle deliberately excludes `.next/static` *and* `public/`, so each needs its
+  own `COPY` in the runner stage. `.next/static` has one; drop it and the app
+  serves unstyled HTML. There is no `public/` yet — **the first file added there
+  needs a `COPY` too**, or it will work under `dev` and `next start` and 404
+  only inside the container, with nothing in the build output to explain why.
+- **The feed page stays `force-dynamic`.** It's why `next build` needs no
+  `MONGODB_URI`, and therefore why the image builds without a database.
 - **Red/white/black palette** — red is the only chromatic hue, everything else is
   a pure neutral, in both schemes. `next-themes` puts `.dark` on `<html>`
   (`ThemeProvider` in `layout.tsx`, picker in `theme-toggle.tsx`), and

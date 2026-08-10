@@ -51,6 +51,8 @@ the sample data. Seeding demo data is a no-op once the collection is non-empty.
 | `npm run db:down`      | Stop it (the `mongo-data` volume persists)  |
 | `npm run db:seed`      | Create indexes                              |
 | `npm run db:seed:demo` | Indexes + sample quotes, if the DB is empty |
+| `npm run app:up`       | Build and run app + MongoDB in Docker       |
+| `npm run app:down`     | Stop the whole stack                        |
 
 ## Environment
 
@@ -61,6 +63,33 @@ the sample data. Seeding demo data is a no-op once the collection is non-empty.
 
 To point at Atlas instead of Docker, swap `MONGODB_URI` for the Atlas
 connection string — nothing else changes.
+
+## Docker
+
+`Dockerfile` builds a production image from Next.js' `standalone` output — the
+runtime stage is `node:22-alpine` plus `server.js`, the traced subset of
+`node_modules` and the static assets, running as an unprivileged `nextjs` user.
+
+```bash
+npm run app:up     # app on http://localhost:3000, Mongo on :27017
+npm run app:down
+```
+
+The app is a compose profile, so `npm run db:up` still starts Mongo on its own
+for the normal `npm run dev` loop. Tear the stack down with `app:down` rather
+than `db:down` — `db:down` carries no profile either, so it would stop Mongo and
+leave the app container running.
+
+Compose does not read `.env.local`, so the app service sets `MONGODB_URI` and
+`MONGODB_DB` itself: inside the network Mongo is `mongodb://mongo:27017`, not
+the `localhost` the host tooling uses, and the database is always `zitutim`.
+Mongo is still published on `27017`, so `npm run db:seed:demo` seeds what the
+container reads — as long as `MONGODB_DB` in your `.env.local` is the default
+`zitutim`. If you change it there, change it in `docker-compose.yml` too, or the
+two will point at different databases.
+
+The image needs no database at build time — every page that reads Mongo is
+`force-dynamic`.
 
 ## API
 
