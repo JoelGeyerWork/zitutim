@@ -253,13 +253,27 @@ describe("authenticate", () => {
     expect(options.sizeLimit).toBe(2);
   });
 
-  it("excludes disabled accounts in the filter", async () => {
+  it("matches the username against every configured login attribute", async () => {
     await authenticate("dana", "correct-horse");
 
     const options = ldap.service().search.mock.calls[0]![1];
-    expect(options.filter).toContain(
-      "(!(userAccountControl:1.2.840.113556.1.4.803:=2))",
+    expect(options.filter).toBe(
+      "(&(&(objectCategory=person)(objectClass=user))(|(sAMAccountName=dana)(userPrincipalName=dana)))",
     );
+  });
+
+  it("leaves a disabled account to fail at the bind", async () => {
+    // There is deliberately no userAccountControl clause in the filter: AD
+    // refuses to bind a disabled account anyway (sub-code 533), which lands on
+    // the same `credentials` answer, so filtering it out bought nothing and cost
+    // portability to directories without that matching rule.
+    ldap.state.searchEntries = [ENTRY];
+    ldap.state.userBindError = adError("533");
+
+    await expect(authenticate("dana", "correct-horse")).resolves.toEqual({
+      ok: false,
+      reason: "credentials",
+    });
   });
 
   it("fails as bad credentials when the search finds nobody", async () => {
@@ -379,6 +393,84 @@ describe("authenticate", () => {
       url: "ldaps://dc.test.local:636",
       connectTimeout: 5_000,
       timeout: 10_000,
+    });
+  });
+
+  describe("against a non-AD directory", () => {
+    /** OpenLDAP: string entryUUID, uid instead of sAMAccountName, no UPN. */
+    const OPENLDAP_ENTRY = {
+      dn: "uid=dana,ou=people,dc=test,dc=local",
+      entryUUID: "9F8E7D6C-5B4A-3928-1706-A5B4C3D2E1F0",
+      uid: "Dana",
+      cn: "Dana Cohen",
+      mail: "Dana@Test.Local",
+      distinguishedName: "uid=dana,ou=people,dc=test,dc=local",
+    };
+
+    function useOpenLdap() {
+      vi.stubEnv("LDAP_USER_FILTER", "(objectClass=inetOrgPerson)");
+      vi.stubEnv("LDAP_LOGIN_ATTRS", "uid,mail");
+      vi.stubEnv("LDAP_ID_ATTR", "entryUUID");
+    }
+
+    it("authenticates using the configured attributes", async () => {
+      useOpenLdap();
+      ldap.state.searchEntries = [OPENLDAP_ENTRY];
+
+      await expect(authenticate("dana", "correct-horse")).resolves.toEqual({
+        ok: true,
+        user: {
+          // Taken as-is rather than decoded — only objectGUID is binary.
+          directoryId: "9f8e7d6c-5b4a-3928-1706-a5b4c3d2e1f0",
+          username: "dana",
+          upn: null,
+          displayName: "Dana Cohen",
+          mail: "dana@test.local",
+          dn: "uid=dana,ou=people,dc=test,dc=local",
+        },
+      });
+    });
+
+    it("builds the filter from the configured object class and attributes", async () => {
+      useOpenLdap();
+      await authenticate("dana", "correct-horse");
+
+      const options = ldap.service().search.mock.calls[0]![1];
+      expect(options.filter).toBe(
+        "(&(objectClass=inetOrgPerson)(|(uid=dana)(mail=dana)))",
+      );
+    });
+
+    it("does not request a string identifier as a buffer", async () => {
+      // Asking for entryUUID as a buffer hands back its own ASCII bytes, which
+      // would then be read as a 36-byte GUID and rejected.
+      useOpenLdap();
+      await authenticate("dana", "correct-horse");
+
+      const options = ldap.service().search.mock.calls[0]![1];
+      expect(options.explicitBufferAttributes).toEqual([]);
+      expect(options.attributes).toContain("entryUUID");
+      expect(options.attributes).toContain("uid");
+    });
+
+    it("still escapes the username into the configured attributes", async () => {
+      useOpenLdap();
+      await authenticate("admin)(objectClass=*", "correct-horse");
+
+      const options = ldap.service().search.mock.calls[0]![1];
+      expect(options.filter).toContain("(uid=admin\\29\\28objectClass=\\2a)");
+    });
+
+    it("fails cleanly when the id attribute is misconfigured", async () => {
+      // Pointed at objectGUID on a directory that has no such attribute: a
+      // failed login, not a crashed route.
+      vi.stubEnv("LDAP_LOGIN_ATTRS", "uid");
+      ldap.state.searchEntries = [OPENLDAP_ENTRY];
+
+      await expect(authenticate("dana", "correct-horse")).resolves.toEqual({
+        ok: false,
+        reason: "unavailable",
+      });
     });
   });
 

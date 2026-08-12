@@ -34,15 +34,21 @@ export type LdapResult =
   | { ok: true; user: DirectoryUser }
   | { ok: false; reason: LdapFailureReason };
 
-const ATTRIBUTES = [
-  "objectGUID",
-  "sAMAccountName",
-  "userPrincipalName",
+/** Requested from every directory regardless of how it spells identity. */
+const BASE_ATTRIBUTES = [
   "displayName",
   "cn",
   "mail",
+  "userPrincipalName",
   "distinguishedName",
 ];
+
+/**
+ * The only identifier attribute we know to be binary. Everything else — most
+ * usefully `entryUUID`, the RFC 4530 attribute AD does *not* implement — comes
+ * back as a plain string and is used as-is.
+ */
+const BINARY_ID_ATTR = "objectguid";
 
 /**
  * AD reports the specific bind failure as a hex sub-code in the error text.
@@ -74,6 +80,28 @@ interface LdapConfig {
   bindPassword: string;
   startTls: boolean;
   tlsOptions: ConnectionOptions | undefined;
+  /**
+   * Which attributes a typed username may match. Defaults are Active
+   * Directory's; an OpenLDAP directory would use `uid,mail`.
+   */
+  loginAttrs: string[];
+  /**
+   * The immutable per-user identifier. It has to be immutable, not just unique:
+   * everything a user adds hangs off it, and directories reissue usernames.
+   * AD has no `entryUUID`, so this is `objectGUID` there and `entryUUID`
+   * almost everywhere else.
+   */
+  idAttr: string;
+  /** Narrows the search to user objects. AD spells this differently to everyone else. */
+  userFilter: string;
+}
+
+function attrList(value: string | undefined, fallback: string[]): string[] {
+  const parsed = (value ?? "")
+    .split(",")
+    .map((part) => part.trim())
+    .filter(Boolean);
+  return parsed.length > 0 ? parsed : fallback;
 }
 
 /**
@@ -116,7 +144,22 @@ function config(): LdapConfig {
   const caPath = process.env.LDAP_TLS_CA;
   const tlsOptions = caPath ? { ca: readFileSync(caPath) } : undefined;
 
-  return { url, baseDN, bindDN, bindPassword, startTls, tlsOptions };
+  return {
+    url,
+    baseDN,
+    bindDN,
+    bindPassword,
+    startTls,
+    tlsOptions,
+    loginAttrs: attrList(process.env.LDAP_LOGIN_ATTRS, [
+      "sAMAccountName",
+      "userPrincipalName",
+    ]),
+    idAttr: process.env.LDAP_ID_ATTR?.trim() || "objectGUID",
+    userFilter:
+      process.env.LDAP_USER_FILTER?.trim() ||
+      "(&(objectCategory=person)(objectClass=user))",
+  };
 }
 
 const FILTER_ESCAPES: Record<string, string> = {
@@ -184,10 +227,21 @@ function firstString(value: Entry[string] | undefined): string | null {
   return (typeof first === "string" ? first : first.toString("utf8")) || null;
 }
 
-function firstBuffer(value: Entry[string] | undefined): Buffer | null {
-  if (Buffer.isBuffer(value)) return value;
-  if (Array.isArray(value) && Buffer.isBuffer(value[0])) return value[0];
-  return null;
+/**
+ * Read a binary identifier as a canonical GUID string.
+ *
+ * Returns null rather than throwing on anything that isn't 16 bytes: a
+ * misconfigured `LDAP_ID_ATTR` pointing at a string attribute should fail the
+ * login cleanly, not crash the route.
+ */
+function firstBufferAsGuid(value: Entry[string] | undefined): string | null {
+  const buffer = Buffer.isBuffer(value)
+    ? value
+    : Array.isArray(value) && Buffer.isBuffer(value[0])
+      ? value[0]
+      : null;
+
+  return buffer?.length === 16 ? guidToString(buffer) : null;
 }
 
 /**
@@ -266,13 +320,15 @@ export async function authenticate(
     return { ok: false, reason: "unavailable" };
   }
 
+  // Only ever an escaped value inside an equality we build ourselves —
+  // `userFilter` is operator config, never a place user input is substituted.
   const escaped = escapeFilterValue(trimmed);
-  const filter =
-    "(&(objectCategory=person)(objectClass=user)" +
-    // AD's bitwise-AND matching rule on userAccountControl. Excluding
-    // ACCOUNTDISABLE here keeps disabled accounts from being enumerable at all.
-    "(!(userAccountControl:1.2.840.113556.1.4.803:=2))" +
-    `(|(sAMAccountName=${escaped})(userPrincipalName=${escaped})))`;
+  const match = settings.loginAttrs
+    .map((attr) => `(${attr}=${escaped})`)
+    .join("");
+  const filter = `(&${settings.userFilter}(|${match}))`;
+
+  const idIsBinary = settings.idAttr.toLowerCase() === BINARY_ID_ATTR;
 
   let serviceClient: Client | undefined;
   let userClient: Client | undefined;
@@ -292,11 +348,17 @@ export async function authenticate(
       const result = await serviceClient.search(settings.baseDN, {
         scope: "sub",
         filter,
-        attributes: ATTRIBUTES,
-        // Without this, ldapts UTF-8-decodes the 16 raw GUID bytes. That is
-        // lossy — invalid sequences collapse to U+FFFD — so two different
-        // GUIDs can decode to the same string and collide on the unique index.
-        explicitBufferAttributes: ["objectGUID"],
+        attributes: [
+          ...BASE_ATTRIBUTES,
+          settings.idAttr,
+          ...settings.loginAttrs,
+        ],
+        // Only for objectGUID: without this ldapts UTF-8-decodes the 16 raw
+        // bytes, which is lossy — invalid sequences collapse to U+FFFD — so two
+        // different GUIDs can decode alike and collide on the unique index.
+        // A string identifier must NOT be requested this way, or it comes back
+        // as a buffer of its own ASCII.
+        explicitBufferAttributes: idIsBinary ? [settings.idAttr] : [],
         sizeLimit: 2,
         timeLimit: 5,
       });
@@ -317,10 +379,20 @@ export async function authenticate(
     }
 
     const entry = entries[0]!;
-    const guid = firstBuffer(entry.objectGUID);
-    const sam = firstString(entry.sAMAccountName);
-    if (!guid || !sam) {
-      console.error("LDAP entry is missing objectGUID or sAMAccountName");
+
+    const rawId = entry[settings.idAttr];
+    const directoryId = idIsBinary
+      ? firstBufferAsGuid(rawId)
+      : firstString(rawId)?.toLowerCase();
+
+    // The first configured login attribute is the canonical username; the rest
+    // are alternative ways to type it (a UPN, an email) and aren't stored.
+    const username = firstString(entry[settings.loginAttrs[0]!]);
+
+    if (!directoryId || !username) {
+      console.error(
+        `LDAP entry is missing ${settings.idAttr} or ${settings.loginAttrs[0]}`,
+      );
       return { ok: false, reason: "unavailable" };
     }
 
@@ -336,11 +408,11 @@ export async function authenticate(
     return {
       ok: true,
       user: {
-        directoryId: guidToString(guid),
-        username: sam.toLowerCase(),
+        directoryId,
+        username: username.toLowerCase(),
         upn: firstString(entry.userPrincipalName)?.toLowerCase() ?? null,
         displayName:
-          firstString(entry.displayName) ?? firstString(entry.cn) ?? sam,
+          firstString(entry.displayName) ?? firstString(entry.cn) ?? username,
         mail: firstString(entry.mail)?.toLowerCase() ?? null,
         dn,
       },

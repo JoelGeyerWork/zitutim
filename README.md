@@ -71,7 +71,17 @@ the sample data. Seeding demo data is a no-op once the collection is non-empty.
 | `LDAP_BIND_DN`        | —         | Read-only service account, **not** a Domain Admin                        |
 | `LDAP_BIND_PASSWORD`  | —         | Required; an empty value would bind anonymously and break every login    |
 | `LDAP_TLS_CA`         | —         | PEM for the enterprise root CA, if the DC's cert isn't publicly trusted   |
+| `LDAP_USER_FILTER`    | `(&(objectCategory=person)(objectClass=user))` | Narrows the search to user objects |
+| `LDAP_LOGIN_ATTRS`    | `sAMAccountName,userPrincipalName` | Attributes a typed username may match           |
+| `LDAP_ID_ATTR`        | `objectGUID` | The immutable per-user identifier                                     |
 | `LOGIN_TRUSTED_PROXY` | `false`   | Set only behind a proxy that overwrites `X-Forwarded-For`                |
+
+The last three default to Active Directory's spelling and only need changing to
+run against a different directory — an OpenLDAP container for local testing
+would want `(objectClass=inetOrgPerson)`, `uid,mail` and `entryUUID`.
+`LDAP_ID_ATTR` must name something **immutable**: everything a user adds hangs
+off it, and directories reissue usernames. `objectGUID` is the only value read
+as binary; anything else is taken as a string.
 
 To point at Atlas instead of Docker, swap `MONGODB_URI` for the Atlas
 connection string — nothing else changes.

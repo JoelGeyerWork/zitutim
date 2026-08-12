@@ -107,6 +107,19 @@ templating one out of user input — is why no RFC 4514 DN escaping exists
 anywhere here. Two clients rather than a rebind because a failed rebind leaves
 the connection in an undefined bind state.
 
+How the directory spells identity is configuration, not code:
+`LDAP_USER_FILTER`, `LDAP_LOGIN_ATTRS` and `LDAP_ID_ATTR` default to AD's
+`objectClass=user` / `sAMAccountName` / `objectGUID` and can be pointed at
+`inetOrgPerson` / `uid` / `entryUUID` for a plain LDAP server — which is what
+makes local testing possible without an AD. Only `objectGUID` is requested as a
+binary attribute and GUID-decoded; every other identifier is used as a string.
+Note there is **no `userAccountControl` filter clause**: AD refuses to bind a
+disabled account anyway (sub-code `533` → `credentials`), so excluding it from
+the search bought nothing and cost the bitwise matching rule.
+
+The AD error sub-codes degrade on their own — a directory that doesn't emit them
+falls through to the generic `credentials` message.
+
 Sessions are a stateless HS256 JWT (`jose`) in an httpOnly cookie holding only
 `{ sub, name, username }`. A disabled AD account therefore stays valid until it
 expires — `SESSION_TTL_HOURS`, default 8. The cheap escalation, if that ever
