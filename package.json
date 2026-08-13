@@ -7,14 +7,18 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test": "vitest run",
-    "test:watch": "vitest",
+    "test": "vitest run --project server --project ui",
+    "test:watch": "vitest --project server --project ui",
     "test:ui": "vitest run --project ui",
     "test:server": "vitest run --project server",
+    "test:ldap": "vitest run --project ldap",
     "db:up": "docker compose up -d",
     "db:down": "docker compose down",
     "db:seed": "node --env-file=.env.local scripts/seed.mjs",
-    "db:seed:demo": "node --env-file=.env.local scripts/seed.mjs --demo"
+    "db:seed:demo": "node --env-file=.env.local scripts/seed.mjs --demo",
+    "ldap:certs": "node scripts/ldap-certs.mjs",
+    "ldap:up": "npm run ldap:certs && docker compose -f docker-compose.ldap.yml up -d --wait",
+    "ldap:down": "docker compose -f docker-compose.ldap.yml down -v"
   },
   "dependencies": {
     "@base-ui/react": "^1.7.0",

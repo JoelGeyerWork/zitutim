@@ -502,6 +502,31 @@ describe("authenticate", () => {
       expect(ldap.service().startTLS).toHaveBeenCalled();
     });
 
+    it("verifies the certificate by default", async () => {
+      await authenticate("dana", "correct-horse");
+
+      const options = ldap.service().options as {
+        tlsOptions?: { rejectUnauthorized?: boolean };
+      };
+      expect(options.tlsOptions?.rejectUnauthorized).toBeUndefined();
+    });
+
+    it("skips verification only when explicitly told to", async () => {
+      vi.stubEnv("LDAP_TLS_INSECURE", "true");
+      vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      await authenticate("dana", "correct-horse");
+
+      const options = ldap.service().options as {
+        tlsOptions?: { rejectUnauthorized?: boolean };
+      };
+      expect(options.tlsOptions?.rejectUnauthorized).toBe(false);
+      // Loud enough that nobody discovers this from a packet capture.
+      expect(console.warn).toHaveBeenCalledWith(
+        expect.stringContaining("LDAP_TLS_INSECURE"),
+      );
+    });
+
     it("refuses an empty service-account password", async () => {
       // An empty password binds anonymously; the search then returns nothing
       // and every login looks like a wrong password.

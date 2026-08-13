@@ -56,6 +56,9 @@ the sample data. Seeding demo data is a no-op once the collection is non-empty.
 | `npm run db:down`      | Stop it (the `mongo-data` volume persists)  |
 | `npm run db:seed`      | Create indexes                              |
 | `npm run db:seed:demo` | Indexes + sample quotes, if the DB is empty |
+| `npm run ldap:up`      | Start a local OpenLDAP for auth testing     |
+| `npm run ldap:down`    | Stop it and drop its volumes                |
+| `npm run test:ldap`    | Integration tests against that server       |
 
 ## Environment
 
@@ -71,6 +74,7 @@ the sample data. Seeding demo data is a no-op once the collection is non-empty.
 | `LDAP_BIND_DN`        | —         | Read-only service account, **not** a Domain Admin                        |
 | `LDAP_BIND_PASSWORD`  | —         | Required; an empty value would bind anonymously and break every login    |
 | `LDAP_TLS_CA`         | —         | PEM for the enterprise root CA, if the DC's cert isn't publicly trusted   |
+| `LDAP_TLS_INSECURE`   | `false`   | Skip certificate verification (still encrypted; see the note below)      |
 | `LDAP_USER_FILTER`    | `(&(objectCategory=person)(objectClass=user))` | Narrows the search to user objects |
 | `LDAP_LOGIN_ATTRS`    | `sAMAccountName,userPrincipalName` | Attributes a typed username may match           |
 | `LDAP_ID_ATTR`        | `objectGUID` | The immutable per-user identifier                                     |
@@ -89,9 +93,13 @@ connection string — nothing else changes.
 A few things worth knowing before you deploy this:
 
 - **`ldaps://` is not optional.** A simple bind sends the password in cleartext,
-  so plain `ldap://` puts every employee's Windows password on the wire. There is
-  deliberately no "skip certificate verification" switch: point `LDAP_TLS_CA` at
-  your internal root instead (or use `NODE_EXTRA_CA_CERTS`).
+  so plain `ldap://` puts every employee's Windows password on the wire.
+- **`LDAP_TLS_INSECURE=true` skips certificate verification.** The connection is
+  still encrypted, so passive sniffing stays off the table; what it gives up is
+  proving the server is really your DC, which lets an active MITM on the same
+  network harvest domain passwords. It exists because this deployment is
+  air-gapped. On anything routable, point `LDAP_TLS_CA` at your internal root
+  (or use `NODE_EXTRA_CA_CERTS`) rather than reaching for it.
 - **The service account's own password expiring breaks login for everyone.** Give
   it "password never expires", or monitor it.
 - Without a reachable domain controller the app still runs fine — sign-in just
@@ -146,8 +154,37 @@ Vitest, split into two projects (`vitest.config.mts`):
 | `server` | node        | Zod validation, date/Hebrew formatting, the Mongo data layer, sessions, the LDAP client, login throttling, the API route handlers |
 | `ui`     | jsdom       | `QuoteCard`, `QuoteForm`, `QuoteSearch`, `QuoteFeed`, `SiteNav`, `LoginForm`, `AccountMenu` via Testing Library |
 
-The LDAP client is tested against a fake `ldapts` `Client` rather than a real
-directory, so no server or network is involved there either.
+In `npm test` the LDAP client is driven through a fake `ldapts` `Client`, so no
+server or network is involved there either.
+
+### Testing auth against a real directory
+
+There is also a third project, deliberately outside `npm test`:
+
+```bash
+npm run ldap:up     # OpenLDAP on :1636, seeded from ldap/bootstrap/
+npm run test:ldap
+npm run ldap:down
+```
+
+It runs the real `authenticate()` over real LDAPS — real BER encoding, a real
+TLS handshake, a real bind — covering the two-bind flow, RFC 4515 filter
+escaping, the empty-password guard, and identity mapping. With nothing
+listening, every test skips rather than fails.
+
+This is plain OpenLDAP, not Active Directory, so it is configured through the
+same `LDAP_*` variables the app ships with (`inetOrgPerson`, `uid,mail`,
+`entryUUID`). It cannot reproduce `objectGUID` byte order or AD's error
+sub-codes; those stay covered by the unit tests, and by testing against your own
+domain controller before you deploy.
+
+`ldap:up` generates a self-signed certificate into `.ldap/certs/` first. That
+isn't a way around certificate checking — it's the same shape as production,
+where the DC presents an internal-CA certificate and `LDAP_TLS_CA` trusts it.
+Two things about `osixia/openldap:1.5.0` worth knowing if you poke at it
+directly: the certificate baked into the image expired in January 2026, and it
+demands a client certificate unless told otherwise. The compose file handles
+both.
 
 The server suite runs against a real MongoDB — `mongodb-memory-server` starts a
 throwaway instance per run, so `npm test` needs no Docker and touches nothing in

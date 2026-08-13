@@ -104,6 +104,9 @@ function attrList(value: string | undefined, fallback: string[]): string[] {
   return parsed.length > 0 ? parsed : fallback;
 }
 
+/** So the insecure-TLS warning is logged once, not on every login attempt. */
+let warnedInsecure = false;
+
 /**
  * Read lazily, like `getClient()` in mongodb.ts — the test suite sets these
  * after imports have already run.
@@ -136,13 +139,30 @@ function config(): LdapConfig {
     );
   }
 
-  // Deliberately no "skip certificate verification" option. Internal DCs
-  // usually use a private CA and the first instinct is to turn verification
-  // off, which is strictly worse than no TLS: it invites an undetectable MITM
-  // harvesting domain passwords. Point LDAP_TLS_CA at the enterprise root
-  // instead (or use NODE_EXTRA_CA_CERTS).
   const caPath = process.env.LDAP_TLS_CA;
-  const tlsOptions = caPath ? { ca: readFileSync(caPath) } : undefined;
+
+  // Turns off verification of the directory's certificate. The connection is
+  // still encrypted, so passive sniffing is still off the table; what it gives
+  // up is *authenticating* the server, which opens the door to an active MITM
+  // harvesting domain passwords. That is an accepted risk here on the grounds
+  // that the network is air-gapped — it is not a default, and on any routable
+  // network the right fix is LDAP_TLS_CA (or NODE_EXTRA_CA_CERTS) instead.
+  const insecure = process.env.LDAP_TLS_INSECURE === "true";
+
+  const tlsOptions =
+    caPath || insecure
+      ? {
+          ...(caPath ? { ca: readFileSync(caPath) } : {}),
+          ...(insecure ? { rejectUnauthorized: false } : {}),
+        }
+      : undefined;
+
+  if (insecure && !warnedInsecure) {
+    warnedInsecure = true;
+    console.warn(
+      "LDAP_TLS_INSECURE=true — the directory's certificate is not being verified.",
+    );
+  }
 
   return {
     url,

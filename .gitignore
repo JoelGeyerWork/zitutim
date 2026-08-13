@@ -24,6 +24,9 @@
 .DS_Store
 *.pem
 
+# generated certs for the local LDAP container (npm run ldap:certs)
+/.ldap/
+
 # debug
 npm-debug.log*
 yarn-debug.log*

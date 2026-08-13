@@ -50,9 +50,37 @@ npx vitest run --project server tests/server/quotes.test.ts    # one file
 npx vitest run --project ui -t "highlights the search term"    # one test by name
 ```
 
-Tests need **no** Docker and no dev server: `mongodb-memory-server` starts a
-throwaway Mongo per run, and route handlers are called directly with `Request`
-objects. The first run downloads and caches a Mongo binary.
+`npm test` needs **no** Docker and no dev server: `mongodb-memory-server` starts
+a throwaway Mongo per run, and route handlers are called directly with `Request`
+objects. The first run downloads and caches a Mongo binary. Keep it that way —
+`test` names its two projects explicitly so a new project can't silently join it.
+
+```bash
+npm run ldap:up        # OpenLDAP on :1636 from docker-compose.ldap.yml
+npm run test:ldap      # the `ldap` project — skips entirely if nothing is listening
+npm run ldap:down      # stops it and drops the volumes
+```
+
+The `ldap` project drives the real `authenticate()` against a real directory:
+real BER encoding, a real TLS handshake, a real bind. It is **not** AD, so it
+covers the two-bind flow, RFC 4515 escaping, LDAPS, the empty-password guard and
+the identity mapping, but cannot produce objectGUID byte order or the AD error
+sub-codes — `tests/server/ldap.test.ts` still covers those through a fake client.
+
+`ldap:up` generates a self-signed certificate into `.ldap/certs/` first — the one
+baked into `osixia/openldap:1.5.0` expired in January 2026. Three quirks of that
+image are already handled in `docker-compose.ldap.yml`, and all three present as
+the same opaque `ECONNRESET` if you undo them: it demands a client certificate
+unless `LDAP_TLS_VERIFY_CLIENT=never`; it generates DH parameters *after* port
+389 starts answering, so the healthcheck has to probe **LDAPS on 636** or it goes
+green while TLS is still dead; and an anonymous search returns "no such object"
+even for entries that exist, so the healthcheck binds as admin.
+
+`LDAP_TLS_INSECURE=true` skips certificate verification. The connection stays
+encrypted — what it drops is authenticating the server, which allows an active
+MITM to harvest domain passwords. It is set for the local container and accepted
+in production on the grounds that the network is air-gapped; on anything routable
+`LDAP_TLS_CA` is the right answer instead.
 
 ## Architecture
 

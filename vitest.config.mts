@@ -31,6 +31,21 @@ export default defineConfig({
         },
       },
       {
+        // Integration tests against the OpenLDAP container from
+        // docker-compose.ldap.yml. Excluded from `npm test` on purpose — the
+        // rest of the suite needs no Docker — so run it with `npm run test:ldap`
+        // after `npm run ldap:up`.
+        resolve,
+        test: {
+          name: "ldap",
+          environment: "node",
+          include: ["tests/ldap/**/*.test.ts"],
+          setupFiles: ["tests/setup/env.ts"],
+          fileParallelism: false,
+          testTimeout: 20_000,
+        },
+      },
+      {
         // React components against jsdom.
         resolve,
         test: {
