@@ -5,16 +5,22 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { LoginForm } from "@/components/login-form";
 import { makeSessionUser, respondWith } from "./factories";
 
-const router = vi.hoisted(() => ({ refresh: vi.fn(), replace: vi.fn() }));
-vi.mock("next/navigation", () => ({ useRouter: () => router }));
-
 let fetchMock: ReturnType<typeof vi.fn>;
+let assign: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
   fetchMock = vi
     .fn()
     .mockImplementation(respondWith({ user: makeSessionUser() }));
   vi.stubGlobal("fetch", fetchMock);
+
+  // jsdom's location.assign is a no-op that warns; replace it so the navigation
+  // can be asserted.
+  assign = vi.fn();
+  Object.defineProperty(window, "location", {
+    configurable: true,
+    value: { ...window.location, assign },
+  });
 });
 
 async function signIn(
@@ -130,18 +136,16 @@ describe("LoginForm", () => {
     ).toBeInTheDocument();
   });
 
-  it("refreshes before navigating, so the nav shows the new session", async () => {
+  it("does a full page load so the whole tree re-renders signed in", async () => {
+    // Not router.replace(): the client Router Cache is holding renders of
+    // routes visited or prefetched while signed out, and router.refresh() is
+    // fire-and-forget, so a client navigation lands on a stale layout still
+    // showing "כניסה".
     const user = userEvent.setup();
     render(<LoginForm next="/create" />);
     await signIn(user);
 
-    await waitFor(() => expect(router.replace).toHaveBeenCalledWith("/create"));
-    // The nav lives in the root layout, which a client navigation alone would
-    // not re-render.
-    expect(router.refresh).toHaveBeenCalled();
-    expect(router.refresh.mock.invocationCallOrder[0]).toBeLessThan(
-      router.replace.mock.invocationCallOrder[0]!,
-    );
+    await waitFor(() => expect(assign).toHaveBeenCalledWith("/create"));
   });
 
   it.each([
@@ -153,7 +157,7 @@ describe("LoginForm", () => {
     render(<LoginForm next={next} />);
     await signIn(user);
 
-    await waitFor(() => expect(router.replace).toHaveBeenCalledWith("/"));
+    await waitFor(() => expect(assign).toHaveBeenCalledWith("/"));
   });
 
   it("reports the network being down", async () => {

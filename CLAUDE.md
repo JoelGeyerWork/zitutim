@@ -170,6 +170,15 @@ The session reaches client components through `SessionProvider` (read once in th
 root layout). **It is display state, not a security boundary** — hiding the card
 menu is UX, the API's 401 is the enforcement.
 
+**Signing in and out use a full document navigation** (`window.location.assign`
+/ `.reload()`), not `router.replace()` / `router.refresh()`. Auth state is baked
+into the root layout, so every entry already in the client Router Cache — from a
+visit *or* a `<Link>` prefetch — is stale the moment the cookie changes.
+`router.refresh()` does not fix it: it is fire-and-forget, so a navigation on the
+next line consumes the stale entry first and you land signed in looking at a
+"כניסה" button. Reloading is the only thing that reliably re-renders the whole
+tree against the new cookie, and it costs one page load per login.
+
 ### Invariants worth not breaking
 
 - **`saidAt` is stored at UTC midnight and formatted in UTC** (`src/lib/format.ts`).

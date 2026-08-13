@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname } from "next/navigation";
 import { useState } from "react";
 import { LogOutIcon } from "lucide-react";
 import { toast } from "sonner";
@@ -33,7 +33,6 @@ const TONES = [
 export function AccountMenu() {
   const user = useSession();
   const pathname = usePathname();
-  const router = useRouter();
   const [signingOut, setSigningOut] = useState(false);
 
   if (!user) {
@@ -55,9 +54,11 @@ export function AccountMenu() {
     setSigningOut(true);
     try {
       await fetch("/api/auth/logout", { method: "POST" });
-      // The nav lives in the root layout, which a client navigation would not
-      // re-render — refresh is what actually swaps the menu back to "כניסה".
-      router.refresh();
+      // Reload rather than router.refresh(), for the same reason login uses a
+      // full navigation: the Router Cache is holding signed-in renders of every
+      // route already visited. Staying on the current URL is deliberate — if it
+      // needs a session, the server bounces to /login, which is correct.
+      window.location.reload();
     } catch {
       toast.error("אין חיבור לשרת");
     } finally {

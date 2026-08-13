@@ -1,7 +1,6 @@
 "use client";
 
 import { useState } from "react";
-import { useRouter } from "next/navigation";
 import { Loader2Icon } from "lucide-react";
 
 import { Field } from "@/components/field";
@@ -15,7 +14,6 @@ export function LoginForm({ next }: { next?: string }) {
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [failure, setFailure] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
-  const router = useRouter();
 
   async function handleSubmit(event: React.FormEvent) {
     event.preventDefault();
@@ -51,10 +49,16 @@ export function LoginForm({ next }: { next?: string }) {
         return;
       }
 
-      // The nav lives in the root layout, which a client navigation would not
-      // re-render — refresh first, or you land signed in with a "כניסה" button.
-      router.refresh();
-      router.replace(safeNext(next));
+      // A full document navigation, not router.replace().
+      //
+      // Signing in changes what the root layout renders, and the client Router
+      // Cache is already holding entries for routes rendered — or prefetched
+      // from the nav — while signed out. router.refresh() does not help: it is
+      // fire-and-forget, so the navigation in the next line consumes the stale
+      // entry before the refresh lands, and you arrive signed in but looking at
+      // a "כניסה" button. Reloading is the one thing guaranteed to re-render
+      // the whole tree against the new cookie, and it happens once per login.
+      window.location.assign(safeNext(next));
     } catch {
       setFailure("אין חיבור לשרת");
     } finally {
