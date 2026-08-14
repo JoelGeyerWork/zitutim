@@ -6,10 +6,14 @@
  *
  * This is not a workaround for certificate checking — it is the same shape as
  * production, where the DC presents a certificate from an internal CA and
- * LDAP_TLS_CA points at that CA. There is deliberately no way to skip
- * verification, so local development needs a certificate that actually
- * verifies. Self-signed means the certificate is its own CA, hence ca.pem
- * being a copy of cert.pem.
+ * LDAP_TLS_CA points at that CA. Self-signed means the certificate is its own
+ * CA, hence ca.pem being a copy of cert.pem.
+ *
+ * There *is* an escape hatch if a certificate problem blocks you here:
+ * LDAP_TLS_INSECURE=true skips verification entirely. It is accepted only
+ * because the target network is air-gapped — the connection stays encrypted but
+ * the server is no longer authenticated — and LDAP_TLS_CA is the right answer
+ * anywhere else. See the TLS section of CLAUDE.md.
  *
  * Re-running is a no-op unless --force is passed.
  */

@@ -230,6 +230,15 @@ tree against the new cookie, and it costs one page load per login.
   `new URL(request.url)`. Next builds that URL from the server's own bind
   address — `HOSTNAME=0.0.0.0` in the Dockerfile — so comparing against it 403s
   every real client while passing in `next dev` on localhost.
+  `X-Forwarded-Host` wins when present, and is trusted unconditionally: a
+  browser doing a cross-site request cannot forge it, and gating it behind a
+  config flag would only 403 whoever forgot to set the flag.
+  **The comparison includes the port**, so if the app is ever published on a
+  non-default port, the proxy must put it in `X-Forwarded-Host` — many proxies
+  send the bare hostname and carry the port in `X-Forwarded-Port` instead, which
+  is invisible on 80/443 (the browser omits those from `Origin` too) and then
+  403s everything the day the port changes. That is the same symptom as getting
+  the comparison wrong in the first place, so suspect it first.
 - **`safeNext` rejects tab, LF and CR.** The URL parser deletes them before
   parsing, so `/<TAB>/evil.com` resolves to another host without ever starting
   `//`.
