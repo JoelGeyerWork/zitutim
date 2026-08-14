@@ -14,6 +14,23 @@ Public read, login to write: anyone who can reach the app can browse and search,
 but adding, editing and deleting need a session. Sign-in binds against the
 organisation's Active Directory over LDAP.
 
+### It runs on an air-gapped network
+
+Internal-only, and everyone who can reach it is staff. That deliberately lowers
+the priority of hardening aimed at an outside attacker — enumeration, open
+redirects, verifying the DC's certificate — and the trade-offs already accepted
+on those grounds are recorded where they apply: `LDAP_TLS_INSECURE` under TLS,
+the login `429` oracle under the auth invariants.
+
+It excuses neither of these, because neither needs an attacker:
+
+- **The login throttle is not a security control.** Every failed bind increments
+  `badPwdCount` on a real AD account, so it exists to stop a double-submit or a
+  retry loop from locking a colleague out of *Windows*.
+- **Availability bugs are still bugs** — a throttle you can't wait out, a
+  same-origin check that 403s every write, a sign-out that does nothing. All
+  three shipped here before review caught them.
+
 ## Commands
 
 ```bash
