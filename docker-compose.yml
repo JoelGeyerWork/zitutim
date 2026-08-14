@@ -25,9 +25,22 @@ services:
     restart: unless-stopped
     ports:
       - "3000:3000"
+    # SESSION_SECRET and the LDAP_* block, straight from the file the host
+    # tooling already uses. Naming the file here is what makes it work: Compose
+    # only auto-loads `.env`, and only for `${...}` interpolation — `env_file`
+    # is a different mechanism that reads whatever path it is given and hands
+    # the result to the container.
+    #
+    # It also means no secret is written into this file or baked into the image,
+    # and that a missing .env.local fails `app:up` outright instead of building
+    # a container that starts healthy and cannot be logged into. Note that
+    # LDAP_TLS_CA is a *host* path: point it at a mounted one, or leave it unset
+    # and rely on LDAP_TLS_INSECURE.
+    env_file:
+      - .env.local
     environment:
-      # Both are fixed here rather than read from .env.local, which Compose
-      # never loads: its localhost:27017 is wrong inside the network anyway, and
+      # Wins over env_file, deliberately. .env.local's MONGODB_URI is
+      # localhost:27017, which inside the network is the container itself, and
       # an interpolated ${MONGODB_DB} would quietly fall back to the default
       # while the host-side seed scripts wrote somewhere else. To use a
       # different database, change it here as well.

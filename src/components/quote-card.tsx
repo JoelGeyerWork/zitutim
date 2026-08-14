@@ -13,6 +13,7 @@ import { toast } from "sonner";
 
 import { DeleteQuoteDialog } from "@/components/delete-quote-dialog";
 import { EditQuoteDialog } from "@/components/edit-quote-dialog";
+import { useSession } from "@/components/session-provider";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -43,6 +44,7 @@ export function QuoteCard({
   /** Called after an edit or delete so the list can refresh. */
   onChanged?: () => void;
 }) {
+  const user = useSession();
   const [copied, setCopied] = useState(false);
   const [editing, setEditing] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -86,33 +88,37 @@ export function QuoteCard({
           </p>
         </div>
 
-        <DropdownMenu>
-          <DropdownMenuTrigger
-            render={
-              <Button
-                variant="ghost"
-                size="icon"
-                className="text-muted-foreground size-8 shrink-0 opacity-0 transition-opacity focus-visible:opacity-100 group-hover:opacity-100 data-popup-open:opacity-100"
-                aria-label="אפשרויות נוספות"
+        {/* Hidden when signed out because the actions would only 401 — this is
+            presentation, not a permission check. The API is the boundary. */}
+        {user ? (
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              render={
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="text-muted-foreground size-8 shrink-0 opacity-0 transition-opacity focus-visible:opacity-100 group-hover:opacity-100 data-popup-open:opacity-100"
+                  aria-label="אפשרויות נוספות"
+                >
+                  <MoreHorizontalIcon className="size-4" />
+                </Button>
+              }
+            />
+            <DropdownMenuContent align="end" className="min-w-40">
+              <DropdownMenuItem onClick={() => setEditing(true)}>
+                <PencilIcon />
+                עריכה
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                variant="destructive"
+                onClick={() => setDeleting(true)}
               >
-                <MoreHorizontalIcon className="size-4" />
-              </Button>
-            }
-          />
-          <DropdownMenuContent align="end" className="min-w-40">
-            <DropdownMenuItem onClick={() => setEditing(true)}>
-              <PencilIcon />
-              עריכה
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              variant="destructive"
-              onClick={() => setDeleting(true)}
-            >
-              <Trash2Icon />
-              מחיקה
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
+                <Trash2Icon />
+                מחיקה
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        ) : null}
       </header>
 
       <blockquote className="relative mt-4 text-lg leading-relaxed font-medium text-balance whitespace-pre-wrap">

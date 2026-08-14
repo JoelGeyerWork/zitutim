@@ -12,7 +12,16 @@ export interface Quote {
   author: string;
   saidAt: string;
   context: string | null;
+  /**
+   * Display-name snapshot of whoever added the quote, stamped from the session
+   * at create time. Null on quotes that predate authentication.
+   */
   addedBy: string | null;
+  /** `users._id` of the adder. Null on quotes that predate authentication. */
+  addedById: string | null;
+  /** Who last edited it. Any signed-in user may edit any quote, so this is the audit trail. */
+  updatedBy: string | null;
+  updatedById: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -79,7 +88,8 @@ export const quoteInputSchema = z.object({
     .max(120, "השם ארוך מדי"),
   saidAt: dateOnly,
   context: optionalText(400, "ההקשר ארוך מדי"),
-  addedBy: optionalText(120, "השם ארוך מדי"),
+  // No `addedBy`: attribution comes from the session, never from the client.
+  // Anything sent under that key is stripped here rather than honoured.
 });
 
 export type QuoteInput = z.input<typeof quoteInputSchema>;

@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { PlusIcon, QuoteIcon, SearchIcon } from "lucide-react";
 
+import { AccountMenu } from "@/components/account-menu";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { cn } from "@/lib/utils";
 
@@ -29,7 +30,9 @@ export function SiteNav() {
 
           <div className="flex items-center gap-1">
             {/* Desktop nav. On mobile this collapses to the bottom bar below;
-                the theme toggle stays in the header at every size. */}
+                the theme toggle and account menu stay in the header at every
+                size — keeping them out of the bottom bar leaves it at three
+                equal-width items rather than reflowing to five. */}
             <nav className="hidden items-center gap-1 md:flex">
               {LINKS.map(({ href, label, icon: Icon }) => {
                 const active = pathname === href;
@@ -53,6 +56,7 @@ export function SiteNav() {
             </nav>
 
             <ThemeToggle />
+            <AccountMenu />
           </div>
         </div>
       </header>

@@ -23,11 +23,26 @@ export default defineConfig({
           name: "server",
           environment: "node",
           include: ["tests/server/**/*.test.ts"],
-          setupFiles: ["tests/setup/mongo.ts"],
+          setupFiles: ["tests/setup/env.ts", "tests/setup/mongo.ts"],
           // One in-memory Mongo per worker; serialise so files can't collide.
           fileParallelism: false,
           testTimeout: 30_000,
           hookTimeout: 120_000,
+        },
+      },
+      {
+        // Integration tests against the OpenLDAP container from
+        // docker-compose.ldap.yml. Excluded from `npm test` on purpose — the
+        // rest of the suite needs no Docker — so run it with `npm run test:ldap`
+        // after `npm run ldap:up`.
+        resolve,
+        test: {
+          name: "ldap",
+          environment: "node",
+          include: ["tests/ldap/**/*.test.ts"],
+          setupFiles: ["tests/setup/env.ts"],
+          fileParallelism: false,
+          testTimeout: 20_000,
         },
       },
       {

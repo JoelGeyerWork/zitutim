@@ -1,26 +1,25 @@
 "use client";
 
-import { useState, useSyncExternalStore } from "react";
+import { useState } from "react";
+import { useRouter } from "next/navigation";
 import { Loader2Icon } from "lucide-react";
 import { toast } from "sonner";
 
+import { Field } from "@/components/field";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { todayInputValue, toInputValue } from "@/lib/format";
 import type { Quote } from "@/lib/quote-schema";
 import { cn } from "@/lib/utils";
 
-const ADDED_BY_KEY = "zitutim:added-by";
-
+// There is no `addedBy` field any more: attribution comes from the session, so
+// asking the browser to remember a name would just be a way to get it wrong.
 interface Values {
   text: string;
   author: string;
   saidAt: string;
   context: string;
-  /** null = untouched, so the remembered name shows through. */
-  addedBy: string | null;
 }
 
 function emptyValues(): Values {
@@ -29,43 +28,7 @@ function emptyValues(): Values {
     author: "",
     saidAt: todayInputValue(),
     context: "",
-    addedBy: null,
   };
-}
-
-function subscribeToStorage(onChange: () => void) {
-  window.addEventListener("storage", onChange);
-  return () => window.removeEventListener("storage", onChange);
-}
-
-/**
- * Reading localStorage throws outright when storage is blocked (Safari private
- * browsing, embedded contexts). Remembering a name is a nicety, so degrade to
- * "not remembered" rather than taking the whole form down with us.
- */
-function readRememberedName(): string {
-  try {
-    return localStorage.getItem(ADDED_BY_KEY) ?? "";
-  } catch {
-    return "";
-  }
-}
-
-function rememberName(name: string): void {
-  try {
-    localStorage.setItem(ADDED_BY_KEY, name);
-  } catch {
-    /* not worth surfacing — the quote itself saved fine */
-  }
-}
-
-/**
- * Most people add quotes under the same name every time, so the last one is
- * remembered. Read through `useSyncExternalStore` rather than an effect: the
- * server snapshot is empty, and React reconciles the real value on hydration.
- */
-function useRememberedName(): string {
-  return useSyncExternalStore(subscribeToStorage, readRememberedName, () => "");
 }
 
 function valuesFrom(quote: Quote): Values {
@@ -74,7 +37,6 @@ function valuesFrom(quote: Quote): Values {
     author: quote.author,
     saidAt: toInputValue(quote.saidAt),
     context: quote.context ?? "",
-    addedBy: quote.addedBy ?? "",
   };
 }
 
@@ -97,9 +59,7 @@ export function QuoteForm({
   );
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
-
-  const remembered = useRememberedName();
-  const addedBy = values.addedBy ?? remembered;
+  const router = useRouter();
 
   function set<K extends keyof Values>(key: K, value: Values[K]) {
     setValues((current) => ({ ...current, [key]: value }));
@@ -131,19 +91,27 @@ export function QuoteForm({
         {
           method: quote ? "PUT" : "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ ...values, addedBy }),
+          body: JSON.stringify(values),
         },
       );
 
       const payload = await response.json().catch(() => null);
+
+      // The session can lapse while the form is open, so send them somewhere
+      // they can do something about it rather than just reporting failure.
+      if (response.status === 401) {
+        toast.error(payload?.error ?? "פג תוקף החיבור");
+        router.push(
+          `/login?next=${encodeURIComponent(window.location.pathname)}`,
+        );
+        return;
+      }
 
       if (!response.ok) {
         if (payload?.issues) setErrors(payload.issues);
         toast.error(payload?.error ?? "משהו השתבש");
         return;
       }
-
-      if (addedBy.trim()) rememberName(addedBy.trim());
 
       toast.success(quote ? "הציטוט עודכן" : "הציטוט נוסף לקיר");
       if (!quote) setValues(emptyValues());
@@ -218,17 +186,6 @@ export function QuoteForm({
         />
       </Field>
 
-      <Field id="addedBy" label="מי מוסיף?" optional error={errors.addedBy}>
-        <Input
-          id="addedBy"
-          value={addedBy}
-          onChange={(event) => set("addedBy", event.target.value)}
-          maxLength={120}
-          placeholder="השם שלך"
-          autoComplete="off"
-        />
-      </Field>
-
       <div className="flex flex-col-reverse gap-2 pt-1 sm:flex-row sm:justify-end">
         {onCancel ? (
           <Button
@@ -247,51 +204,5 @@ export function QuoteForm({
         </Button>
       </div>
     </form>
-  );
-}
-
-function Field({
-  id,
-  label,
-  optional,
-  hint,
-  error,
-  children,
-}: {
-  id: string;
-  label: string;
-  optional?: boolean;
-  hint?: string;
-  error?: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <div className="space-y-2">
-      <div className="flex items-baseline justify-between gap-2">
-        <Label htmlFor={id} className="text-sm font-semibold">
-          {label}
-          {optional ? (
-            <span className="text-muted-foreground me-1 font-normal">
-              {" "}
-              (לא חובה)
-            </span>
-          ) : (
-            <span className="text-primary" aria-hidden>
-              {" "}
-              *
-            </span>
-          )}
-        </Label>
-        {hint && !error ? (
-          <span className="text-muted-foreground text-xs">{hint}</span>
-        ) : null}
-      </div>
-      {children}
-      {error ? (
-        <p role="alert" className="text-destructive text-xs font-medium">
-          {error}
-        </p>
-      ) : null}
-    </div>
   );
 }

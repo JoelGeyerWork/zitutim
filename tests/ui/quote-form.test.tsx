@@ -11,6 +11,9 @@ vi.mock("sonner", () => ({
   toast: { success: vi.fn(), error: vi.fn() },
 }));
 
+const push = vi.hoisted(() => vi.fn());
+vi.mock("next/navigation", () => ({ useRouter: () => ({ push }) }));
+
 let fetchMock: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
@@ -161,46 +164,37 @@ describe("QuoteForm — creating", () => {
   });
 });
 
-describe("QuoteForm — remembering who is adding", () => {
-  it("pre-fills the submitter from localStorage", () => {
-    localStorage.setItem("zitutim:added-by", "יואל");
-    render(<QuoteForm />);
-    expect(screen.getByLabelText(/מי מוסיף/)).toHaveValue("יואל");
-  });
-
-  it("remembers the name after a successful save", async () => {
-    const user = userEvent.setup();
-    render(<QuoteForm />);
-    await fillRequired(user);
-    await user.type(screen.getByLabelText(/מי מוסיף/), "נועה");
-    await user.click(screen.getByRole("button", { name: "הוספה לקיר" }));
-
-    await waitFor(() =>
-      expect(localStorage.getItem("zitutim:added-by")).toBe("נועה"),
-    );
-  });
-
-  it("keeps the name in the field after the form resets", async () => {
-    localStorage.setItem("zitutim:added-by", "יואל");
-    const user = userEvent.setup();
-    render(<QuoteForm />);
-    await fillRequired(user);
-    await user.click(screen.getByRole("button", { name: "הוספה לקיר" }));
-
-    await waitFor(() =>
-      expect(screen.getByLabelText(/מה נאמר/)).toHaveValue(""),
-    );
-    expect(screen.getByLabelText(/מי מוסיף/)).toHaveValue("יואל");
-  });
-
-  it("does not remember a blank name", async () => {
+describe("QuoteForm — attribution", () => {
+  it("never sends addedBy: the server takes it from the session", async () => {
     const user = userEvent.setup();
     render(<QuoteForm />);
     await fillRequired(user);
     await user.click(screen.getByRole("button", { name: "הוספה לקיר" }));
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalled());
-    expect(localStorage.getItem("zitutim:added-by")).toBeNull();
+    expect(lastRequest().body).not.toHaveProperty("addedBy");
+  });
+
+  it("has no submitter field to fill in", () => {
+    render(<QuoteForm />);
+    expect(screen.queryByLabelText(/מי מוסיף/)).not.toBeInTheDocument();
+  });
+
+  it("sends the user to login when the session has lapsed", async () => {
+    // Sitting on the form for eight hours and then saving must not just say
+    // "failed" — there is something the user can do about it.
+    fetchMock.mockImplementation(
+      respondWith({ error: "צריך להתחבר כדי לשנות את הקיר" }, 401),
+    );
+    const user = userEvent.setup();
+    render(<QuoteForm />);
+    await fillRequired(user);
+    await user.click(screen.getByRole("button", { name: "הוספה לקיר" }));
+
+    await waitFor(() =>
+      expect(push).toHaveBeenCalledWith(expect.stringContaining("/login?next=")),
+    );
+    expect(toast.error).toHaveBeenCalledWith("צריך להתחבר כדי לשנות את הקיר");
   });
 });
 
@@ -214,7 +208,6 @@ describe("QuoteForm — editing", () => {
     expect(screen.getByLabelText(/מי אמר/)).toHaveValue("דנה");
     expect(screen.getByLabelText(/מתי/)).toHaveValue("2026-07-28");
     expect(screen.getByLabelText(/הקשר/)).toHaveValue("לפני הריטרו");
-    expect(screen.getByLabelText(/מי מוסיף/)).toHaveValue("יואל");
   });
 
   it("PUTs to the quote's own endpoint", async () => {

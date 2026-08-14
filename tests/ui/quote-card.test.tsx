@@ -3,11 +3,22 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
 import { QuoteCard } from "@/components/quote-card";
-import { makeQuote } from "./factories";
+import { SessionProvider } from "@/components/session-provider";
+import { makeQuote, makeSessionUser } from "./factories";
 
 vi.mock("sonner", () => ({
   toast: { success: vi.fn(), error: vi.fn() },
 }));
+
+const push = vi.hoisted(() => vi.fn());
+vi.mock("next/navigation", () => ({ useRouter: () => ({ push }) }));
+
+/** The actions menu only exists for a signed-in user. */
+function renderSignedIn(ui: React.ReactElement) {
+  return render(
+    <SessionProvider user={makeSessionUser()}>{ui}</SessionProvider>,
+  );
+}
 
 describe("QuoteCard", () => {
   it("shows the quote, the author and the Hebrew date it was said", () => {
@@ -79,7 +90,7 @@ describe("QuoteCard", () => {
 
   it("opens the edit dialog from the actions menu", async () => {
     const user = userEvent.setup();
-    render(<QuoteCard quote={makeQuote()} />);
+    renderSignedIn(<QuoteCard quote={makeQuote()} />);
 
     await user.click(screen.getByRole("button", { name: "אפשרויות נוספות" }));
     await user.click(await screen.findByRole("menuitem", { name: /עריכה/ }));
@@ -91,7 +102,7 @@ describe("QuoteCard", () => {
 
   it("asks for confirmation before deleting", async () => {
     const user = userEvent.setup();
-    render(<QuoteCard quote={makeQuote()} />);
+    renderSignedIn(<QuoteCard quote={makeQuote()} />);
 
     await user.click(screen.getByRole("button", { name: "אפשרויות נוספות" }));
     await user.click(await screen.findByRole("menuitem", { name: /מחיקה/ }));
@@ -99,5 +110,17 @@ describe("QuoteCard", () => {
     const dialog = await screen.findByRole("alertdialog");
     expect(within(dialog).getByText("למחוק את הציטוט?")).toBeInTheDocument();
     expect(within(dialog).getByText(/דנה/)).toBeInTheDocument();
+  });
+
+  it("hides the actions menu when signed out", () => {
+    // Presentation only — the API's 401 is what actually stops the edit.
+    render(<QuoteCard quote={makeQuote()} />);
+
+    expect(
+      screen.queryByRole("button", { name: "אפשרויות נוספות" }),
+    ).not.toBeInTheDocument();
+    // The rest of the card is still fully readable.
+    expect(screen.getByText("תמיד יש זמן לעוד קפה אחד")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /העתקה/ })).toBeInTheDocument();
   });
 });

@@ -2,6 +2,12 @@ import { NextResponse } from "next/server";
 
 import { fieldErrors } from "@/lib/api";
 import {
+  forbiddenResponse,
+  getSessionFrom,
+  isSameOrigin,
+  unauthorizedResponse,
+} from "@/lib/session";
+import {
   deleteQuote,
   getQuote,
   quoteInputSchema,
@@ -12,6 +18,7 @@ export const dynamic = "force-dynamic";
 
 type Params = { params: Promise<{ id: string }> };
 
+/** Deliberately public, like the collection GET. */
 export async function GET(_request: Request, { params }: Params) {
   const { id } = await params;
   const quote = await getQuote(id);
@@ -23,6 +30,13 @@ export async function GET(_request: Request, { params }: Params) {
 
 export async function PUT(request: Request, { params }: Params) {
   const { id } = await params;
+
+  if (!isSameOrigin(request)) return forbiddenResponse();
+
+  // Ahead of the id lookup as well as the parse, so an anonymous caller can't
+  // use the 404 to learn which ids exist.
+  const session = await getSessionFrom(request);
+  if (!session) return unauthorizedResponse();
 
   let body: unknown;
   try {
@@ -40,7 +54,10 @@ export async function PUT(request: Request, { params }: Params) {
   }
 
   try {
-    const quote = await updateQuote(id, parsed.data);
+    const quote = await updateQuote(id, parsed.data, {
+      id: session.id,
+      name: session.name,
+    });
     if (!quote) {
       return NextResponse.json({ error: "הציטוט לא נמצא" }, { status: 404 });
     }
@@ -54,8 +71,13 @@ export async function PUT(request: Request, { params }: Params) {
   }
 }
 
-export async function DELETE(_request: Request, { params }: Params) {
+export async function DELETE(request: Request, { params }: Params) {
   const { id } = await params;
+
+  if (!isSameOrigin(request)) return forbiddenResponse();
+
+  const session = await getSessionFrom(request);
+  if (!session) return unauthorizedResponse();
 
   try {
     const deleted = await deleteQuote(id);

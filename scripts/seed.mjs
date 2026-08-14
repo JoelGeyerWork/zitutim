@@ -57,14 +57,33 @@ const client = new MongoClient(uri);
 
 try {
   await client.connect();
-  const quotes = client.db(dbName).collection("quotes");
+  const db = client.db(dbName);
+  const quotes = db.collection("quotes");
 
   await quotes.createIndexes([
     { key: { createdAt: -1 } },
     { key: { saidAt: -1 } },
     { key: { author: 1 } },
+    // "quotes I added", and the join comments and likes will want.
+    { key: { addedById: 1 } },
   ]);
-  console.log(`Indexes ready on ${dbName}.quotes`);
+
+  await db.collection("users").createIndexes([
+    { key: { directoryId: 1 }, unique: true },
+    // Deliberately NOT unique: AD recycles sAMAccountNames, so the departed
+    // colleague's document still holds the name. A unique index would reject
+    // the new employee's very first login with a duplicate-key error and no
+    // useful message.
+    { key: { username: 1 } },
+  ]);
+
+  await db.collection("login_attempts").createIndexes([
+    { key: { key: 1 }, unique: true },
+    // Lets Mongo expire stale counters instead of the app sweeping them.
+    { key: { expiresAt: 1 }, expireAfterSeconds: 0 },
+  ]);
+
+  console.log(`Indexes ready on ${dbName}: quotes, users, login_attempts`);
 
   if (process.argv.includes("--demo")) {
     const existing = await quotes.countDocuments();
@@ -76,6 +95,12 @@ try {
         DEMO.map((quote, index) => ({
           ...quote,
           saidAt: new Date(quote.saidAt),
+          // These predate authentication: the display name is all there is, so
+          // there is nobody to attribute them to. Same shape as any quote added
+          // before login existed.
+          addedById: null,
+          updatedBy: null,
+          updatedById: null,
           // Stagger createdAt so the feed order matches the array order.
           createdAt: new Date(now.getTime() + index * 1000),
           updatedAt: new Date(now.getTime() + index * 1000),
