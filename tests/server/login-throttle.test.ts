@@ -13,17 +13,31 @@ import {
 const GUID = "03020100-0504-0706-0809-0a0b0c0d0e0f";
 const KEY = directoryKey(GUID);
 
-async function failures(key: string): Promise<number | undefined> {
+async function attempt(key: string) {
   const db = await getDb();
-  const doc = await db
-    .collection<{ failures: number }>("login_attempts")
+  return db
+    .collection<{ failures: number; expiresAt: Date }>("login_attempts")
     .findOne({ key });
-  return doc?.failures;
 }
+
+async function failures(key: string): Promise<number | undefined> {
+  return (await attempt(key))?.failures;
+}
+
+const T0 = new Date("2026-08-14T10:00:00.000Z");
+const at = (minutes: number) => new Date(T0.getTime() + minutes * 60_000);
 
 beforeEach(async () => {
   const db = await getDb();
   await db.collection("login_attempts").deleteMany({});
+  // The unique index the seed script creates in production. `upsert: true`
+  // under a unique key is the classic place concurrent writers collide with
+  // E11000, so the concurrency test has to run with it present to mean
+  // anything.
+  await db.collection("login_attempts").createIndexes([
+    { key: { key: 1 }, unique: true },
+    { key: { expiresAt: 1 }, expireAfterSeconds: 0 },
+  ]);
   vi.unstubAllEnvs();
 });
 
@@ -107,6 +121,47 @@ describe("consumeAttempt", () => {
     // Document still present, still holding a stale count.
     expect(await failures(KEY)).toBe(3);
     await expect(consumeAttempt(KEY)).resolves.toMatchObject({ allowed: true });
+  });
+
+  it("does not let a blocked attempt extend its own lockout", async () => {
+    // The 429 says "try again in a few minutes". If a rejected attempt renewed
+    // the window, following that instruction would reset the clock every time —
+    // no waiting strategy would ever work, and nothing would explain why.
+    for (let i = 0; i < 3; i += 1) await consumeAttempt(KEY, T0);
+    const locked = (await attempt(KEY))!.expiresAt;
+
+    await consumeAttempt(KEY, at(5));
+    await consumeAttempt(KEY, at(9));
+
+    expect((await attempt(KEY))!.expiresAt).toEqual(locked);
+  });
+
+  it("drains from the last attempt that was actually allowed through", async () => {
+    for (let i = 0; i < 3; i += 1) await consumeAttempt(KEY, T0);
+
+    // Retrying the whole time the message invites you to.
+    for (const minute of [5, 9, 9.5]) {
+      await expect(consumeAttempt(KEY, at(minute))).resolves.toMatchObject({
+        allowed: false,
+      });
+    }
+
+    // Ten minutes after the last attempt that reached the directory, not ten
+    // minutes after the last one that bounced.
+    await expect(consumeAttempt(KEY, at(11))).resolves.toMatchObject({
+      allowed: true,
+    });
+  });
+
+  it("counts retryAfterSeconds down rather than restating the window", async () => {
+    for (let i = 0; i < 3; i += 1) await consumeAttempt(KEY, T0);
+
+    const early = await consumeAttempt(KEY, at(1));
+    const later = await consumeAttempt(KEY, at(8));
+
+    expect(early.retryAfterSeconds).toBeCloseTo(9 * 60, -1);
+    expect(later.retryAfterSeconds).toBeCloseTo(2 * 60, -1);
+    expect(later.retryAfterSeconds).toBeLessThan(early.retryAfterSeconds);
   });
 
   it("throttles each account separately", async () => {

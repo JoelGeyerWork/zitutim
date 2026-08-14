@@ -100,17 +100,21 @@ export async function consumeAttempt(
   now: Date = new Date(),
 ): Promise<ThrottleVerdict> {
   const collection = await attempts();
-  const expiresAt = new Date(now.getTime() + WINDOW_MS);
+  const limit = limitFor(key);
+  const renewed = new Date(now.getTime() + WINDOW_MS);
 
-  // An aggregation-pipeline update so "increment, or start again if the window
-  // already lapsed" is a single atomic step. A plain `$inc` cannot express the
-  // reset, and would keep incrementing a stale document forever: three failures,
-  // wait out the ten minutes, fail once more, and the count reaches four —
-  // throttled again having spent a single attempt.
+  // Two pipeline stages, because the second needs to see the count the first
+  // produced — a single `$set` computes every field against the *input*
+  // document.
   const doc = await collection.findOneAndUpdate(
     { key },
     [
       {
+        // "Increment, or start again if the window already lapsed", atomically.
+        // A plain `$inc` cannot express the reset, and would keep incrementing a
+        // stale document forever: three failures, wait out the ten minutes, fail
+        // once more, and the count reaches four — throttled again having spent a
+        // single attempt.
         $set: {
           failures: {
             $cond: [
@@ -126,7 +130,23 @@ export async function consumeAttempt(
               now,
             ],
           },
-          expiresAt,
+        },
+      },
+      {
+        // The window is only pushed forward by an attempt that was *allowed*.
+        // Renewing it unconditionally means a rejected attempt extends its own
+        // lockout, so it never drains: the 429 tells people to try again in a
+        // few minutes, and doing exactly that resets the clock every time.
+        // There is then no waiting strategy that ever works, and nothing in the
+        // response explaining why.
+        $set: {
+          expiresAt: {
+            $cond: [
+              { $lte: ["$failures", limit] },
+              renewed,
+              { $ifNull: ["$expiresAt", renewed] },
+            ],
+          },
         },
       },
     ],
@@ -134,15 +154,18 @@ export async function consumeAttempt(
   );
 
   const failures = doc?.failures ?? 1;
-  if (failures <= limitFor(key)) {
+  if (failures <= limit) {
     return { allowed: true, retryAfterSeconds: 0 };
   }
 
+  // Measured from the stored expiry, not a freshly computed one, or this is
+  // structurally always the full window and can never count down.
+  const expiresAt = doc?.expiresAt?.getTime() ?? renewed.getTime();
   return {
     allowed: false,
     retryAfterSeconds: Math.max(
       1,
-      Math.ceil((expiresAt.getTime() - now.getTime()) / 1000),
+      Math.ceil((expiresAt - now.getTime()) / 1000),
     ),
   };
 }
