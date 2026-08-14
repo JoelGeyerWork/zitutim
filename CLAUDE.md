@@ -216,6 +216,16 @@ tree against the new cookie, and it costs one page load per login.
 
   Every failure path is also held open to a fixed floor, or response time tells a
   nonexistent username from a wrong password.
+
+  **Accepted, and only accepted because the network is air-gapped:** throttling
+  after the search makes the 429 an account-existence oracle — a real username
+  answers differently on the fourth attempt, an unknown one never does. It is a
+  weaker version of the staff-name enumeration `?q=` already allows. If this app
+  ever leaves the air-gapped network, that and the unmetered service-account
+  searches for usernames that resolve to nothing (capped today only when
+  `LOGIN_TRUSTED_PROXY=true`) fall out together, and a per-typed-string bucket
+  consumed *before* the search closes both without disturbing any of the
+  directory-keyed work.
 - **`isSameOrigin` compares `Origin` to the `Host` header**, never to
   `new URL(request.url)`. Next builds that URL from the server's own bind
   address — `HOSTNAME=0.0.0.0` in the Dockerfile — so comparing against it 403s
