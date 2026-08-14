@@ -231,4 +231,7 @@ A few environment quirks are handled in `tests/setup/`:
   stays valid until the token expires (8 hours by default).
 - **Login is throttled below the AD lockout threshold.** Every failed bind
   increments a real `badPwdCount`, so without a limit in front of it anyone could
-  lock the whole company out of Windows by iterating usernames.
+  lock the whole company out of Windows by iterating usernames. The budget is
+  keyed on the directory id the search resolves to — not on what was typed — so
+  signing in by username and by email share one allowance, and it is spent
+  atomically before the bind so concurrent attempts can't all slip through.

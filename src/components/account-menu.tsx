@@ -53,7 +53,16 @@ export function AccountMenu() {
     if (signingOut) return;
     setSigningOut(true);
     try {
-      await fetch("/api/auth/logout", { method: "POST" });
+      const response = await fetch("/api/auth/logout", { method: "POST" });
+
+      // A non-2xx doesn't reject, so without this the page reloads still signed
+      // in and says nothing — the classic "sign out did nothing", which is the
+      // report that matters most on a shared machine.
+      if (!response.ok) {
+        toast.error("לא הצלחנו לנתק. כדאי לנסות שוב");
+        return;
+      }
+
       // Reload rather than router.refresh(), for the same reason login uses a
       // full navigation: the Router Cache is holding signed-in renders of every
       // route already visited. Staying on the current URL is deliberate — if it

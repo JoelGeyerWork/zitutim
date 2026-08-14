@@ -34,6 +34,15 @@ export type LdapResult =
   | { ok: true; user: DirectoryUser }
   | { ok: false; reason: LdapFailureReason };
 
+/** What the directory search alone can conclude — no password involved. */
+export type FindUserResult =
+  | { ok: true; user: DirectoryUser }
+  | { ok: false; reason: LdapFailureReason };
+
+export type VerifyResult =
+  | { ok: true }
+  | { ok: false; reason: LdapFailureReason };
+
 /** Requested from every directory regardless of how it spells identity. */
 const BASE_ATTRIBUTES = [
   "displayName",
@@ -307,27 +316,24 @@ async function connect(settings: LdapConfig): Promise<Client> {
   return client;
 }
 
-/**
- * Verify a username and password against Active Directory.
- *
- * Two binds: once as the service account to find the user's DN, then again as
- * that DN with their password. Binding against the DN the server handed back —
- * rather than templating one out of the input — is why no RFC 4514 DN escaping
- * is needed anywhere here. Don't "simplify" it into a single templated bind.
- */
-export async function authenticate(
-  username: string,
-  password: string,
-): Promise<LdapResult> {
-  // RFC 4513 defines a bind with a DN and a zero-length password as
-  // *unauthenticated authentication*: AD accepts it, returns success, and
-  // silently downgrades the connection to anonymous. Reading "the bind
-  // resolved" as "the password was correct" would then log anyone in as anyone.
-  // The schema enforces min(1) too; this is the layer that actually matters.
-  if (password.length === 0) return { ok: false, reason: "credentials" };
+function hasNul(value: string): boolean {
+  for (const char of value) if (char.charCodeAt(0) === 0) return true;
+  return false;
+}
 
+/**
+ * Find the directory entry a typed username refers to, using the read-only
+ * service account. No user credentials are involved, so this never touches
+ * `badPwdCount` and is safe to run before any rate limiting.
+ *
+ * Split out from the bind so the caller can throttle on the identity this
+ * resolves to rather than on the string that was typed: `LDAP_LOGIN_ATTRS`
+ * deliberately matches several attributes for one account, and a per-string
+ * budget hands every alias its own allowance against a single directory object.
+ */
+export async function findUser(username: string): Promise<FindUserResult> {
   const trimmed = username.trim();
-  if (!trimmed || trimmed.length > 256 || trimmed.includes("\0")) {
+  if (!trimmed || trimmed.length > 256 || hasNul(trimmed)) {
     return { ok: false, reason: "credentials" };
   }
 
@@ -351,8 +357,6 @@ export async function authenticate(
   const idIsBinary = settings.idAttr.toLowerCase() === BINARY_ID_ATTR;
 
   let serviceClient: Client | undefined;
-  let userClient: Client | undefined;
-
   try {
     serviceClient = await connect(settings);
 
@@ -407,42 +411,105 @@ export async function authenticate(
 
     // The first configured login attribute is the canonical username; the rest
     // are alternative ways to type it (a UPN, an email) and aren't stored.
-    const username = firstString(entry[settings.loginAttrs[0]!]);
+    const resolved = firstString(entry[settings.loginAttrs[0]!]);
 
-    if (!directoryId || !username) {
+    if (!directoryId || !resolved) {
       console.error(
         `LDAP entry is missing ${settings.idAttr} or ${settings.loginAttrs[0]}`,
       );
       return { ok: false, reason: "unavailable" };
     }
 
-    const dn = firstString(entry.distinguishedName) ?? entry.dn;
-
-    userClient = await connect(settings);
-    try {
-      await userClient.bind(dn, password);
-    } catch (error) {
-      return { ok: false, reason: bindFailureReason(error) };
-    }
-
     return {
       ok: true,
       user: {
         directoryId,
-        username: username.toLowerCase(),
+        username: resolved.toLowerCase(),
         upn: firstString(entry.userPrincipalName)?.toLowerCase() ?? null,
         displayName:
-          firstString(entry.displayName) ?? firstString(entry.cn) ?? username,
+          firstString(entry.displayName) ?? firstString(entry.cn) ?? resolved,
         mail: firstString(entry.mail)?.toLowerCase() ?? null,
-        dn,
+        dn: firstString(entry.distinguishedName) ?? entry.dn,
       },
     };
   } catch (error) {
     console.error("LDAP connection failed", error);
     return { ok: false, reason: "unavailable" };
   } finally {
-    // Both clients, always — a leaked connection outlives the request.
     await serviceClient?.unbind().catch(() => {});
-    await userClient?.unbind().catch(() => {});
   }
 }
+
+/**
+ * Bind as the user's own DN to prove they know the password.
+ *
+ * Binding against the DN the directory handed back — rather than templating one
+ * out of the input — is why no RFC 4514 DN escaping is needed anywhere here.
+ * Don't "simplify" the two calls into one templated bind.
+ *
+ * A fresh client rather than re-binding the search connection: a failed rebind
+ * leaves the connection in an undefined bind state, and whatever touches it next
+ * inherits whichever identity stuck.
+ */
+export async function verifyPassword(
+  user: DirectoryUser,
+  password: string,
+): Promise<VerifyResult> {
+  // RFC 4513 defines a bind with a DN and a zero-length password as
+  // *unauthenticated authentication*: AD accepts it, returns success, and
+  // silently downgrades the connection to anonymous. Reading "the bind
+  // resolved" as "the password was correct" would then log anyone in as anyone.
+  // The schema enforces min(1) too; this is the layer that actually matters.
+  if (password.length === 0) return { ok: false, reason: "credentials" };
+
+  let settings: LdapConfig;
+  try {
+    settings = config();
+  } catch (error) {
+    console.error("LDAP configuration error", error);
+    return { ok: false, reason: "unavailable" };
+  }
+
+  let client: Client | undefined;
+  try {
+    client = await connect(settings);
+    try {
+      await client.bind(user.dn, password);
+    } catch (error) {
+      return { ok: false, reason: bindFailureReason(error) };
+    }
+    return { ok: true };
+  } catch (error) {
+    console.error("LDAP connection failed", error);
+    return { ok: false, reason: "unavailable" };
+  } finally {
+    await client?.unbind().catch(() => {});
+  }
+}
+
+/**
+ * Resolve and verify in one call.
+ *
+ * The login route deliberately does **not** use this — it has to spend a
+ * rate-limit budget between the two halves, keyed on the identity the search
+ * resolved to. This is for callers with no such need, and it keeps the whole
+ * flow exercisable in a single assertion.
+ */
+export async function authenticate(
+  username: string,
+  password: string,
+): Promise<LdapResult> {
+  // Checked before the search as well as inside verifyPassword, so an empty
+  // password costs no directory traffic at all. (The login route never gets
+  // here with one — the schema rejects it with a 422.)
+  if (password.length === 0) return { ok: false, reason: "credentials" };
+
+  const found = await findUser(username);
+  if (!found.ok) return found;
+
+  const verified = await verifyPassword(found.user, password);
+  if (!verified.ok) return verified;
+
+  return { ok: true, user: found.user };
+}
+

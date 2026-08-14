@@ -1,14 +1,14 @@
 import { NextResponse } from "next/server";
 
 import { fieldErrors } from "@/lib/api";
-import { authenticate, type LdapFailureReason } from "@/lib/ldap";
+import { findUser, verifyPassword, type LdapFailureReason } from "@/lib/ldap";
 import {
-  checkThrottle,
   clearFailures,
   clientIp,
+  consumeAttempt,
+  directoryKey,
   ipKey,
-  recordFailure,
-  usernameKey,
+  refundAttempt,
 } from "@/lib/login-throttle";
 import {
   SESSION_COOKIE,
@@ -101,49 +101,68 @@ export async function POST(request: Request) {
   }
 
   const { username, password } = parsed.data;
-  const keys = [usernameKey(username)];
   const ip = clientIp(request);
-  if (ip) keys.push(ipKey(ip));
+
+  /** Never log the request body — it contains a domain password. */
+  const fail = async (reason: LdapFailureReason) => {
+    console.warn(`Login failed for ${username}: ${reason}`);
+    await holdFailure(startedAt);
+    const { status, message } = FAILURES[reason];
+    return noStore(NextResponse.json({ error: message }, { status }));
+  };
+
+  const tooMany = (retryAfterSeconds: number) =>
+    noStore(
+      NextResponse.json(
+        { error: "יותר מדי ניסיונות. כדאי לנסות שוב בעוד כמה דקות" },
+        {
+          status: 429,
+          headers: { "Retry-After": String(retryAfterSeconds) },
+        },
+      ),
+    );
 
   try {
-    // Checked before the bind, never after: the entire point is that a failed
-    // attempt here never reaches Active Directory and never increments a real
-    // employee's badPwdCount.
-    for (const key of keys) {
-      const verdict = await checkThrottle(key);
-      if (!verdict.allowed) {
-        return noStore(
-          NextResponse.json(
-            { error: "יותר מדי ניסיונות. כדאי לנסות שוב בעוד כמה דקות" },
-            {
-              status: 429,
-              headers: { "Retry-After": String(verdict.retryAfterSeconds) },
-            },
-          ),
-        );
-      }
+    // Volume damper first, where a client IP is trustworthy. Cheap, and it is
+    // the only limit that applies before we know who is being asked for.
+    if (ip) {
+      const verdict = await consumeAttempt(ipKey(ip));
+      if (!verdict.allowed) return tooMany(verdict.retryAfterSeconds);
     }
 
-    const result = await authenticate(username, password);
+    // Resolve *before* throttling. The search runs as the service account and
+    // never touches badPwdCount, so it is safe to do unmetered — and it is the
+    // only way to learn which directory object the typed string refers to.
+    // Throttling the string instead would give every alias of one account its
+    // own budget: three tries as "dana" plus three as "dana@corp" is six binds
+    // against a single object, past the lockout threshold the cap of 3 exists
+    // to stay under.
+    const found = await findUser(username);
+    if (!found.ok) return fail(found.reason);
 
-    if (!result.ok) {
-      // An outage isn't the user's fault, so it must not spend their budget.
-      if (result.reason !== "unavailable") {
-        await Promise.all(keys.map((key) => recordFailure(key)));
-      }
+    const key = directoryKey(found.user.directoryId);
 
-      // Never log the request body — it contains a domain password. Keep any
-      // future `catch` in this file to the same rule.
-      console.warn(`Login failed for ${username}: ${result.reason}`);
-
-      await holdFailure(startedAt);
-      const { status, message } = FAILURES[result.reason];
-      return noStore(NextResponse.json({ error: message }, { status }));
+    // Spent before the bind, and atomically: counting and deciding in one step
+    // is what stops concurrent requests from all reading the same pre-increment
+    // count and all reaching the directory together.
+    const verdict = await consumeAttempt(key);
+    if (!verdict.allowed) {
+      console.warn(`Login throttled for ${found.user.username}`);
+      return tooMany(verdict.retryAfterSeconds);
     }
 
-    await Promise.all(keys.map((key) => clearFailures(key)));
+    const verified = await verifyPassword(found.user, password);
 
-    const user = await upsertUserFromDirectory(result.user);
+    if (!verified.ok) {
+      // An outage isn't the user's fault, so hand the attempt back.
+      if (verified.reason === "unavailable") await refundAttempt(key);
+      return fail(verified.reason);
+    }
+
+    await clearFailures(key);
+    if (ip) await clearFailures(ipKey(ip));
+
+    const user = await upsertUserFromDirectory(found.user);
     const { token, expires } = await signSession(user);
 
     const response = NextResponse.json({ user });

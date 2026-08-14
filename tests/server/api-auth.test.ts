@@ -3,15 +3,19 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { POST as LOGIN } from "@/app/api/auth/login/route";
 import { POST as LOGOUT } from "@/app/api/auth/logout/route";
 import { getDb } from "@/lib/mongodb";
-import { authenticate, type LdapResult } from "@/lib/ldap";
+import { findUser, verifyPassword, type LdapFailureReason } from "@/lib/ldap";
 import { SESSION_COOKIE, verifySessionToken } from "@/lib/session";
 
 // The two-bind protocol is covered in ldap.test.ts; here the directory is a
 // stub so the route's own ordering and failure mapping are what's under test.
-vi.mock("@/lib/ldap", () => ({ authenticate: vi.fn() }));
+vi.mock("@/lib/ldap", () => ({
+  findUser: vi.fn(),
+  verifyPassword: vi.fn(),
+}));
 
 const LOGIN_URL = "http://localhost:3000/api/auth/login";
 const LOGOUT_URL = "http://localhost:3000/api/auth/logout";
+const HOST = "localhost:3000";
 
 const DIRECTORY_USER = {
   directoryId: "03020100-0504-0706-0809-0a0b0c0d0e0f",
@@ -22,21 +26,37 @@ const DIRECTORY_USER = {
   dn: "CN=Dana Cohen,OU=Users,DC=test,DC=local",
 };
 
-const mockAuthenticate = vi.mocked(authenticate);
+const mockFindUser = vi.mocked(findUser);
+const mockVerifyPassword = vi.mocked(verifyPassword);
 
-function succeeds() {
-  mockAuthenticate.mockResolvedValue({ ok: true, user: DIRECTORY_USER });
+/** The directory resolves the username and accepts the password. */
+function succeeds(user = DIRECTORY_USER) {
+  mockFindUser.mockResolvedValue({ ok: true, user });
+  mockVerifyPassword.mockResolvedValue({ ok: true });
 }
 
-function fails(reason: Exclude<LdapResult & { ok: false }, never>["reason"]) {
-  mockAuthenticate.mockResolvedValue({ ok: false, reason });
+/** The username resolves, but the bind is rejected. */
+function bindFails(reason: LdapFailureReason, user = DIRECTORY_USER) {
+  mockFindUser.mockResolvedValue({ ok: true, user });
+  mockVerifyPassword.mockResolvedValue({ ok: false, reason });
+}
+
+/** The username matches nothing. */
+function notFound() {
+  mockFindUser.mockResolvedValue({ ok: false, reason: "credentials" });
 }
 
 function login(payload: unknown, init: RequestInit = {}) {
   return LOGIN(
     new Request(LOGIN_URL, {
       method: "POST",
-      headers: { "Content-Type": "application/json", ...init.headers },
+      headers: {
+        "Content-Type": "application/json",
+        // Servers see a Host header on every request; `new Request` does not
+        // add one, and the same-origin check compares against it.
+        host: HOST,
+        ...init.headers,
+      },
       body: typeof payload === "string" ? payload : JSON.stringify(payload),
     }),
   );
@@ -94,6 +114,16 @@ describe("POST /api/auth/login", () => {
     });
   });
 
+  it("resolves the user before ever attempting a bind", async () => {
+    // The search runs as the service account and never touches badPwdCount, so
+    // it is what tells us which throttle bucket the attempt belongs to.
+    await login(CREDENTIALS);
+
+    expect(mockFindUser.mock.invocationCallOrder[0]).toBeLessThan(
+      mockVerifyPassword.mock.invocationCallOrder[0]!,
+    );
+  });
+
   it("marks the cookie HttpOnly, Lax and path-wide", async () => {
     const cookie = setCookie(await login(CREDENTIALS))!;
 
@@ -132,8 +162,8 @@ describe("POST /api/auth/login", () => {
       username: "צריך שם משתמש",
       password: "צריך סיסמה",
     });
-    // Validation failing must not have cost a bind.
-    expect(mockAuthenticate).not.toHaveBeenCalled();
+    // Validation failing must not have cost a directory round trip.
+    expect(mockFindUser).not.toHaveBeenCalled();
   });
 
   it("rejects a cross-origin request with 403", async () => {
@@ -142,24 +172,62 @@ describe("POST /api/auth/login", () => {
     });
 
     expect(response.status).toBe(403);
-    expect(mockAuthenticate).not.toHaveBeenCalled();
+    expect(mockFindUser).not.toHaveBeenCalled();
   });
 
   it("allows a same-origin request", async () => {
     const response = await login(CREDENTIALS, {
-      headers: { origin: "http://localhost:3000" },
+      headers: { origin: `http://${HOST}` },
     });
 
     expect(response.status).toBe(200);
   });
 
+  it("allows a request whose Host is not the server's own bind address", async () => {
+    // The production case: Next builds request.url from the server's bind
+    // address (the Dockerfile sets HOSTNAME=0.0.0.0), so comparing Origin
+    // against it 403s every real browser. The Host header is what the client
+    // actually asked for.
+    const response = await LOGIN(
+      new Request("http://0.0.0.0:3000/api/auth/login", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          host: "zitutim.corp",
+          origin: "https://zitutim.corp",
+        },
+        body: JSON.stringify(CREDENTIALS),
+      }),
+    );
+
+    expect(response.status).toBe(200);
+  });
+
+  it("prefers X-Forwarded-Host, which is what a proxy rewrites", async () => {
+    const response = await LOGIN(
+      new Request("http://0.0.0.0:3000/api/auth/login", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          host: "internal-service:3000",
+          "x-forwarded-host": "zitutim.corp",
+          origin: "https://zitutim.corp",
+        },
+        body: JSON.stringify(CREDENTIALS),
+      }),
+    );
+
+    expect(response.status).toBe(200);
+  });
+
   it("gives an identical answer for an unknown user and a wrong password", async () => {
-    // Any difference here is an account-enumeration oracle.
-    fails("credentials");
+    // These now take different code paths — one fails at the search, the other
+    // at the bind — so any difference between them is an enumeration oracle.
+    notFound();
     const unknown = await login({ username: "nobody", password: "x" });
     const unknownBody = await unknown.json();
 
-    fails("credentials");
+    bindFails("credentials");
     const wrong = await login({ username: "dana", password: "wrong" });
     const wrongBody = await wrong.json();
 
@@ -174,7 +242,7 @@ describe("POST /api/auth/login", () => {
     ["locked", 401, "החשבון נעול. כדאי לפנות לתמיכה או לחכות לשחרור הנעילה"],
     ["unavailable", 503, "לא הצלחנו להתחבר לשרת ההזדהות"],
   ] as const)("maps %s to %i", async (reason, status, message) => {
-    fails(reason);
+    bindFails(reason);
 
     const response = await login(CREDENTIALS);
 
@@ -183,11 +251,20 @@ describe("POST /api/auth/login", () => {
     expect(response.headers.get("set-cookie")).toBeNull();
   });
 
+  it("reports a directory that cannot be reached at all as unavailable", async () => {
+    mockFindUser.mockResolvedValue({ ok: false, reason: "unavailable" });
+
+    const response = await login(CREDENTIALS);
+
+    expect(response.status).toBe(503);
+    expect(mockVerifyPassword).not.toHaveBeenCalled();
+  });
+
   it("holds failures open to the configured floor", async () => {
-    // Without this, a nonexistent username fails at the search in ~5ms and a
-    // real one at the bind in ~50ms — a working timing oracle.
+    // Without this, failing at the search is measurably faster than failing at
+    // the bind — a working timing oracle for which usernames exist.
     vi.stubEnv("LOGIN_MIN_RESPONSE_MS", "120");
-    fails("credentials");
+    bindFails("credentials");
 
     const startedAt = Date.now();
     await login(CREDENTIALS);
@@ -196,7 +273,7 @@ describe("POST /api/auth/login", () => {
   });
 
   it("never logs the request body", async () => {
-    fails("credentials");
+    bindFails("credentials");
     await login({ username: "dana", password: "hunter2" });
 
     const logged = [
@@ -212,45 +289,68 @@ describe("POST /api/auth/login", () => {
 });
 
 describe("login throttling", () => {
-  it("stops calling the directory once the username limit is reached", async () => {
+  it("stops binding once the limit is reached", async () => {
     // This is the assertion that keeps the app from locking real employees out
-    // of Windows: after the limit, no further bind reaches AD at all.
-    fails("credentials");
+    // of Windows: after the limit, no further bind reaches the directory.
+    bindFails("credentials");
 
     for (let i = 0; i < 3; i += 1) {
       expect((await login(CREDENTIALS)).status).toBe(401);
     }
-    expect(mockAuthenticate).toHaveBeenCalledTimes(3);
+    expect(mockVerifyPassword).toHaveBeenCalledTimes(3);
 
     const blocked = await login(CREDENTIALS);
 
     expect(blocked.status).toBe(429);
-    expect(mockAuthenticate).toHaveBeenCalledTimes(3);
+    expect(mockVerifyPassword).toHaveBeenCalledTimes(3);
     await expect(blocked.json()).resolves.toEqual({
       error: "יותר מדי ניסיונות. כדאי לנסות שוב בעוד כמה דקות",
     });
     expect(Number(blocked.headers.get("retry-after"))).toBeGreaterThan(0);
   });
 
-  it("throttles per username, not globally", async () => {
-    fails("credentials");
-    for (let i = 0; i < 3; i += 1) await login(CREDENTIALS);
+  it("shares one budget across every alias of the same account", async () => {
+    // LDAP_LOGIN_ATTRS matches several attributes for one object, so a bucket
+    // per typed string would give "dana" and "dana@test.local" three binds
+    // each — six against one account, past the lockout threshold.
+    bindFails("credentials");
 
-    succeeds();
+    for (let i = 0; i < 3; i += 1) {
+      expect((await login(CREDENTIALS)).status).toBe(401);
+    }
+
+    const byUpn = await login({
+      username: "dana@test.local",
+      password: "wrong",
+    });
+
+    expect(byUpn.status).toBe(429);
+    expect(mockVerifyPassword).toHaveBeenCalledTimes(3);
+  });
+
+  it("throttles per account, not globally", async () => {
+    bindFails("credentials");
+    for (let i = 0; i < 4; i += 1) await login(CREDENTIALS);
+
+    succeeds({
+      ...DIRECTORY_USER,
+      directoryId: "ffffffff-0000-1111-2222-333344445555",
+      username: "omer",
+    });
     const other = await login({ username: "omer", password: "x" });
 
     expect(other.status).toBe(200);
   });
 
   it("clears the counter after a successful login", async () => {
-    fails("credentials");
+    bindFails("credentials");
     await login(CREDENTIALS);
     await login(CREDENTIALS);
 
     succeeds();
     expect((await login(CREDENTIALS)).status).toBe(200);
 
-    fails("credentials");
+    bindFails("credentials");
     // Back to a full budget rather than one attempt from a lockout.
     for (let i = 0; i < 3; i += 1) {
       expect((await login(CREDENTIALS)).status).toBe(401);
@@ -260,12 +360,12 @@ describe("login throttling", () => {
   it("does not spend the budget on a directory outage", async () => {
     // The user did nothing wrong; a DC being down must not push them toward a
     // lockout they can't do anything about.
-    fails("unavailable");
+    bindFails("unavailable");
     for (let i = 0; i < 5; i += 1) {
       expect((await login(CREDENTIALS)).status).toBe(503);
     }
 
-    expect(mockAuthenticate).toHaveBeenCalledTimes(5);
+    expect(mockVerifyPassword).toHaveBeenCalledTimes(5);
   });
 });
 
@@ -283,7 +383,7 @@ describe("POST /api/auth/logout", () => {
     const response = await LOGOUT(
       new Request(LOGOUT_URL, {
         method: "POST",
-        headers: { origin: "https://evil.example" },
+        headers: { host: HOST, origin: "https://evil.example" },
       }),
     );
 

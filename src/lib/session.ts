@@ -146,7 +146,17 @@ export function readSessionCookie(request: Request): string | undefined {
     const separator = part.indexOf("=");
     if (separator === -1) continue;
     if (part.slice(0, separator).trim() !== SESSION_COOKIE) continue;
-    return decodeURIComponent(part.slice(separator + 1).trim());
+
+    const value = part.slice(separator + 1).trim();
+    try {
+      return decodeURIComponent(value);
+    } catch {
+      // A malformed escape ("%") makes decodeURIComponent throw, and this sits
+      // above the try/catch in verifySessionToken — unguarded it escapes the
+      // route handler as a 500 with a stack trace instead of the intended 401.
+      // A JWT is base64url and never needs decoding anyway.
+      return value;
+    }
   }
 
   return undefined;
@@ -180,6 +190,18 @@ export function forbiddenResponse(): NextResponse {
  * Cheap CSRF hardening on top of SameSite=Lax. Browsers send `Origin` on every
  * cross-origin fetch, so a mismatch is a cross-site write attempt.
  *
+ * Compared against the `Host` header — the name the *client* asked for — and
+ * not against `new URL(request.url)`, which Next builds from the server's own
+ * bind address. Behind a reverse proxy, or in the container where the Dockerfile
+ * sets `HOSTNAME=0.0.0.0`, that URL is `http://0.0.0.0:3000` and never matches
+ * any real browser's Origin, so every write would 403. This is the same
+ * comparison Next itself makes for Server Actions.
+ *
+ * `X-Forwarded-Host` wins when present because a proxy rewrites `Host`. Neither
+ * header being attacker-controlled matters here: a browser performing a
+ * cross-site request sends its own `Origin` and our `Host`, so they differ and
+ * it is blocked. Anything able to forge both headers is not doing CSRF.
+ *
  * An absent `Origin` is allowed: that means a non-browser client (curl, the
  * test suite), which carries no ambient cookie to abuse in the first place.
  */
@@ -187,8 +209,13 @@ export function isSameOrigin(request: Request): boolean {
   const origin = request.headers.get("origin");
   if (!origin) return true;
 
+  const host =
+    request.headers.get("x-forwarded-host") ?? request.headers.get("host");
+  if (!host) return false;
+
   try {
-    return origin === new URL(request.url).origin;
+    // Host to host, so http/https in front of the proxy doesn't matter.
+    return new URL(origin).host === host;
   } catch {
     return false;
   }

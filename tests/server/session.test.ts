@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   SESSION_COOKIE,
   getSessionFrom,
+  isSameOrigin,
   readSessionCookie,
   resetSessionKeyCache,
   sessionCookieOptions,
@@ -128,6 +129,18 @@ describe("readSessionCookie", () => {
     expect(readSessionCookie(request)).toBe("a+b");
   });
 
+  it("survives a value that is not valid percent-encoding", () => {
+    // decodeURIComponent throws a URIError on a lone "%", and this runs above
+    // the try/catch in verifySessionToken — unguarded it leaves the route as a
+    // 500 with a stack trace instead of the intended 401.
+    const request = new Request("http://localhost:3000/api/quotes", {
+      headers: { cookie: `${SESSION_COOKIE}=%` },
+    });
+
+    expect(() => readSessionCookie(request)).not.toThrow();
+    expect(readSessionCookie(request)).toBe("%");
+  });
+
   it.each([
     ["no cookie header", undefined],
     ["an unrelated cookie", "theme=light"],
@@ -154,6 +167,64 @@ describe("getSessionFrom", () => {
   it("resolves null for an anonymous request", async () => {
     const request = new Request("http://localhost:3000/api/quotes");
     await expect(getSessionFrom(request)).resolves.toBeNull();
+  });
+});
+
+describe("isSameOrigin", () => {
+  function request(headers: Record<string, string>, url = "http://0.0.0.0:3000/api/quotes") {
+    return new Request(url, { method: "POST", headers });
+  }
+
+  it("allows a request with no Origin at all", () => {
+    // curl and the test suite; neither carries an ambient cookie to abuse.
+    expect(isSameOrigin(request({ host: "zitutim.corp" }))).toBe(true);
+  });
+
+  it("compares against Host, not the server's own bind address", () => {
+    // The blocker this replaced: Next builds request.url from where the server
+    // is listening — `HOSTNAME=0.0.0.0` in the Dockerfile — so comparing Origin
+    // to it 403s every browser that ever connects.
+    expect(
+      isSameOrigin(
+        request({ host: "zitutim.corp", origin: "https://zitutim.corp" }),
+      ),
+    ).toBe(true);
+  });
+
+  it("prefers X-Forwarded-Host, which is what a proxy rewrites", () => {
+    expect(
+      isSameOrigin(
+        request({
+          host: "internal-service:3000",
+          "x-forwarded-host": "zitutim.corp",
+          origin: "https://zitutim.corp",
+        }),
+      ),
+    ).toBe(true);
+  });
+
+  it("ignores the scheme, so TLS terminating at the proxy still matches", () => {
+    expect(
+      isSameOrigin(
+        request({ host: "zitutim.corp", origin: "http://zitutim.corp" }),
+      ),
+    ).toBe(true);
+  });
+
+  it.each([
+    ["another host", "https://evil.example"],
+    ["a lookalike subdomain", "https://zitutim.corp.evil.example"],
+    ["the right host on another port", "https://zitutim.corp:8443"],
+    ["garbage", "not-a-url"],
+    ["the null origin of a sandboxed frame", "null"],
+  ])("rejects %s", (_label, origin) => {
+    expect(isSameOrigin(request({ host: "zitutim.corp", origin }))).toBe(false);
+  });
+
+  it("rejects when there is an Origin but no Host to compare it to", () => {
+    expect(isSameOrigin(request({ origin: "https://zitutim.corp" }))).toBe(
+      false,
+    );
   });
 });
 

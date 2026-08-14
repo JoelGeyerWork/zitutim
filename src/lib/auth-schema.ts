@@ -30,6 +30,9 @@ export const loginInputSchema = z.object({
 export type LoginInput = z.input<typeof loginInputSchema>;
 export type LoginValues = z.output<typeof loginInputSchema>;
 
+/** Tab, LF and CR — the characters a URL parser deletes rather than rejects. */
+const URL_STRIPPED_CHARS = new Set([9, 10, 13]);
+
 /**
  * Clamp a `?next=` value to a same-origin path before redirecting to it.
  *
@@ -39,6 +42,16 @@ export type LoginValues = z.output<typeof loginInputSchema>;
  */
 export function safeNext(value: string | null | undefined): string {
   if (!value) return "/";
+
+  // The WHATWG parser *deletes* tab, LF and CR before parsing, so a value that
+  // isn't literally prefixed "//" still resolves to another host: "/\t/evil.com"
+  // becomes "//evil.com" becomes https://evil.com. `?next=/%09/evil.com` decodes
+  // into exactly that, and it would be acted on the instant someone finished
+  // typing their domain password.
+  for (const char of value) {
+    if (URL_STRIPPED_CHARS.has(char.charCodeAt(0))) return "/";
+  }
+
   // "https://evil.com", "javascript:alert(1)", "evil.com"
   if (!value.startsWith("/")) return "/";
   // Protocol-relative: "//evil.com" is a different host.

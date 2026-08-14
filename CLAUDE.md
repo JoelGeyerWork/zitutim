@@ -128,12 +128,19 @@ genuine change in what this codebase is, and it drives most of the rules below:
 HTTPS-only in production, `ldaps://` to the DC, and never logging a request body
 on the login route.
 
-`authenticate()` in `ldap.ts` does a **two-bind** dance: bind as the read-only
-service account, search for the user, then bind a *second, separate* client as
-the DN the server returned. Binding against the returned DN — rather than
-templating one out of user input — is why no RFC 4514 DN escaping exists
-anywhere here. Two clients rather than a rebind because a failed rebind leaves
-the connection in an undefined bind state.
+`ldap.ts` does a **two-bind** dance, split across two exported functions:
+`findUser()` binds as the read-only service account and searches, then
+`verifyPassword()` binds a *second, separate* client as the DN the server
+returned. Binding against the returned DN — rather than templating one out of
+user input — is why no RFC 4514 DN escaping exists anywhere here. Two clients
+rather than a rebind because a failed rebind leaves the connection in an
+undefined bind state.
+
+The split exists so the **login route can throttle between the two halves**. The
+search runs as the service account and never touches `badPwdCount`, so it is
+safe to run unmetered, and it is the only way to learn which directory object a
+typed string refers to. `authenticate()` runs both halves and is for callers
+with no such need — the route does not use it.
 
 How the directory spells identity is configuration, not code:
 `LDAP_USER_FILTER`, `LDAP_LOGIN_ATTRS` and `LDAP_ID_ATTR` default to AD's
@@ -196,11 +203,26 @@ tree against the new cookie, and it costs one page load per login.
   reading "the bind resolved" as "the password was correct" logs anyone in as
   anyone. The same applies to an unset `LDAP_BIND_PASSWORD`, which is why the
   config reader rejects it.
-- **Login throttles per username below the AD lockout threshold** (3 in 10
-  minutes, vs. a typical policy of 5). Without it, an anonymous visitor can lock
-  the whole company out of *Windows* by iterating usernames. Every failure path
-  is also held open to a fixed floor, or response time tells a nonexistent
-  username from a wrong password.
+- **Login throttles below the AD lockout threshold** (3 in 10 minutes, vs. a
+  typical policy of 5). Without it, an anonymous visitor can lock the whole
+  company out of *Windows* by iterating usernames. Three details are load-bearing
+  and each was a bug once:
+  - the bucket is keyed on the **resolved `directoryId`**, not the typed string,
+    or every alias in `LDAP_LOGIN_ATTRS` gets its own budget against one account;
+  - `consumeAttempt` counts and decides in **one atomic step**, before the bind,
+    or concurrent requests all read the same pre-increment count and all bind;
+  - a lapsed window **restarts** the count rather than extending it, or one
+    further mistake after the wait throttles you again immediately.
+
+  Every failure path is also held open to a fixed floor, or response time tells a
+  nonexistent username from a wrong password.
+- **`isSameOrigin` compares `Origin` to the `Host` header**, never to
+  `new URL(request.url)`. Next builds that URL from the server's own bind
+  address — `HOSTNAME=0.0.0.0` in the Dockerfile — so comparing against it 403s
+  every real client while passing in `next dev` on localhost.
+- **`safeNext` rejects tab, LF and CR.** The URL parser deletes them before
+  parsing, so `/<TAB>/evil.com` resolves to another host without ever starting
+  `//`.
 - **`updateQuote` never touches `addedBy`/`addedById`.** Any signed-in user may
   edit any quote, so stamping the editor there would silently transfer
   authorship; the edit is recorded in `updatedBy`/`updatedById` instead.

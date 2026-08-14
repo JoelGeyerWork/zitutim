@@ -61,6 +61,24 @@ describe("safeNext", () => {
   });
 
   it.each([
+    ["tab", 9],
+    ["line feed", 10],
+    ["carriage return", 13],
+  ])("rejects a path containing a %s", (_label, code) => {
+    // The URL parser *deletes* these before parsing, so "/<TAB>/evil.com"
+    // resolves to https://evil.com — and `?next=/%09/evil.com` decodes to
+    // exactly that. Proven here rather than asserted.
+    const value = `/${String.fromCharCode(code)}/evil.com`;
+    expect(new URL(value, "https://app.example.com").host).toBe("evil.com");
+
+    expect(safeNext(value)).toBe("/");
+  });
+
+  it("rejects a control character anywhere in the value", () => {
+    expect(safeNext(`/search?q=a${String.fromCharCode(10)}b`)).toBe("/");
+  });
+
+  it.each([
     // The classic form of the bug: passes a naive startsWith("/") check.
     ["protocol-relative", "//evil.com"],
     // Browsers normalise "\" to "/", so this is the same host swap.

@@ -29,7 +29,7 @@ const MAX_USERNAME_FAILURES = 3;
 const MAX_IP_FAILURES = 20;
 
 interface AttemptDoc {
-  /** "user:dana" or "ip:10.0.0.1". */
+  /** "user:<directoryId>" or "ip:10.0.0.1". */
   key: string;
   failures: number;
   firstAt: Date;
@@ -41,8 +41,17 @@ async function attempts(): Promise<Collection<AttemptDoc>> {
   return db.collection<AttemptDoc>("login_attempts");
 }
 
-export function usernameKey(username: string): string {
-  return `user:${username.trim().toLowerCase()}`;
+/**
+ * Keyed on the directory's own immutable id, not on what was typed.
+ *
+ * `LDAP_LOGIN_ATTRS` matches several attributes for one account, so a bucket
+ * per typed string would hand every alias its own allowance: three attempts as
+ * `dana` plus three as `dana@corp` is six binds against one object, past the
+ * lockout threshold the cap of 3 is specifically chosen to stay under. Every
+ * additional login attribute would multiply the budget again.
+ */
+export function directoryKey(directoryId: string): string {
+  return `user:${directoryId.toLowerCase()}`;
 }
 
 export function ipKey(ip: string): string {
@@ -74,15 +83,58 @@ export interface ThrottleVerdict {
   retryAfterSeconds: number;
 }
 
-export async function checkThrottle(key: string): Promise<ThrottleVerdict> {
+/**
+ * Spend one attempt against `key` and say whether it may proceed.
+ *
+ * Counting and deciding are **one** database round trip, on purpose. A separate
+ * check-then-act — read the count, decide, bind, then record the failure —
+ * leaves the whole bind sitting inside the gap: twenty concurrent requests for
+ * one username all read a count of zero, all pass, and all twenty reach the
+ * directory. That is the anonymous lockout this module exists to prevent, and
+ * it needs nothing more sophisticated than a `for` loop and an ampersand.
+ *
+ * Callers must therefore consume *before* binding, and `refund` on an outage.
+ */
+export async function consumeAttempt(
+  key: string,
+  now: Date = new Date(),
+): Promise<ThrottleVerdict> {
   const collection = await attempts();
-  const doc = await collection.findOne({ key });
+  const expiresAt = new Date(now.getTime() + WINDOW_MS);
 
-  if (!doc || doc.expiresAt.getTime() <= Date.now()) {
-    return { allowed: true, retryAfterSeconds: 0 };
-  }
+  // An aggregation-pipeline update so "increment, or start again if the window
+  // already lapsed" is a single atomic step. A plain `$inc` cannot express the
+  // reset, and would keep incrementing a stale document forever: three failures,
+  // wait out the ten minutes, fail once more, and the count reaches four —
+  // throttled again having spent a single attempt.
+  const doc = await collection.findOneAndUpdate(
+    { key },
+    [
+      {
+        $set: {
+          failures: {
+            $cond: [
+              { $gt: ["$expiresAt", now] },
+              { $add: [{ $ifNull: ["$failures", 0] }, 1] },
+              1,
+            ],
+          },
+          firstAt: {
+            $cond: [
+              { $gt: ["$expiresAt", now] },
+              { $ifNull: ["$firstAt", now] },
+              now,
+            ],
+          },
+          expiresAt,
+        },
+      },
+    ],
+    { upsert: true, returnDocument: "after" },
+  );
 
-  if (doc.failures < limitFor(key)) {
+  const failures = doc?.failures ?? 1;
+  if (failures <= limitFor(key)) {
     return { allowed: true, retryAfterSeconds: 0 };
   }
 
@@ -90,27 +142,20 @@ export async function checkThrottle(key: string): Promise<ThrottleVerdict> {
     allowed: false,
     retryAfterSeconds: Math.max(
       1,
-      Math.ceil((doc.expiresAt.getTime() - Date.now()) / 1000),
+      Math.ceil((expiresAt.getTime() - now.getTime()) / 1000),
     ),
   };
 }
 
-export async function recordFailure(
-  key: string,
-  now: Date = new Date(),
-): Promise<void> {
+/**
+ * Hand an attempt back. A directory outage is not the user's fault, so it must
+ * not push them toward a lockout they can do nothing about.
+ */
+export async function refundAttempt(key: string): Promise<void> {
   const collection = await attempts();
-
-  // `$inc` rather than read-then-write: two concurrent requests reading the
-  // same count would both see themselves as under the limit and both proceed.
   await collection.updateOne(
-    { key },
-    {
-      $inc: { failures: 1 },
-      $set: { expiresAt: new Date(now.getTime() + WINDOW_MS) },
-      $setOnInsert: { firstAt: now },
-    },
-    { upsert: true },
+    { key, failures: { $gt: 0 } },
+    { $inc: { failures: -1 } },
   );
 }
 
