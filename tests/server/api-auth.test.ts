@@ -4,7 +4,11 @@ import { POST as LOGIN } from "@/app/api/auth/login/route";
 import { POST as LOGOUT } from "@/app/api/auth/logout/route";
 import { getDb } from "@/lib/mongodb";
 import { findUser, verifyPassword, type LdapFailureReason } from "@/lib/ldap";
-import { SESSION_COOKIE, verifySessionToken } from "@/lib/session";
+import {
+  SESSION_COOKIE,
+  resetSessionKeyCache,
+  verifySessionToken,
+} from "@/lib/session";
 
 // The two-bind protocol is covered in ldap.test.ts; here the directory is a
 // stub so the route's own ordering and failure mapping are what's under test.
@@ -89,6 +93,9 @@ beforeEach(async () => {
   ]);
   vi.clearAllMocks();
   vi.unstubAllEnvs();
+  // One test empties SESSION_SECRET; without this the cleared cache would carry
+  // into the next case and re-read whatever env it left behind.
+  resetSessionKeyCache();
   vi.spyOn(console, "warn").mockImplementation(() => {});
   vi.spyOn(console, "error").mockImplementation(() => {});
   succeeds();
@@ -241,6 +248,7 @@ describe("POST /api/auth/login", () => {
     ["must-change-password", 401, "צריך להחליף סיסמה בחלונות לפני הכניסה הראשונה"],
     ["locked", 401, "החשבון נעול. כדאי לפנות לתמיכה או לחכות לשחרור הנעילה"],
     ["unavailable", 503, "לא הצלחנו להתחבר לשרת ההזדהות"],
+    ["misconfigured", 500, "הכניסה לא מוגדרת בשרת. כדאי לפנות לתמיכה"],
   ] as const)("maps %s to %i", async (reason, status, message) => {
     bindFails(reason);
 
@@ -258,6 +266,23 @@ describe("POST /api/auth/login", () => {
 
     expect(response.status).toBe(503);
     expect(mockVerifyPassword).not.toHaveBeenCalled();
+  });
+
+  it("does not blame the directory for an unset SESSION_SECRET", async () => {
+    // The sharpest case: this throws on the line *after* the bind succeeded, so
+    // reporting it as 503 "we couldn't reach the directory" tells the one
+    // person whose password definitely worked that the directory is down.
+    succeeds();
+    vi.stubEnv("SESSION_SECRET", "");
+    resetSessionKeyCache();
+
+    const response = await login(CREDENTIALS);
+
+    expect(response.status).toBe(500);
+    await expect(response.json()).resolves.toEqual({
+      error: "הכניסה לא מוגדרת בשרת. כדאי לפנות לתמיכה",
+    });
+    expect(response.headers.get("set-cookie")).toBeNull();
   });
 
   it("holds failures open to the configured floor", async () => {

@@ -6,6 +6,7 @@ import { NextResponse } from "next/server";
 import { SignJWT, jwtVerify } from "jose";
 
 import { type SessionUser } from "@/lib/auth-schema";
+import { ConfigError } from "@/lib/config-error";
 
 export * from "@/lib/auth-schema";
 
@@ -32,13 +33,22 @@ function secret(): Uint8Array {
   // brute-forceable offline from a single captured cookie, and nothing else in
   // the system would ever signal that it had happened.
   if (!value || value.length < 32) {
-    throw new Error(
+    throw new ConfigError(
       "SESSION_SECRET is not set (needs 32+ chars). Generate one: openssl rand -base64 32",
     );
   }
 
   cachedKey = new TextEncoder().encode(value);
   return cachedKey;
+}
+
+/**
+ * Force the lazy read, for `instrumentation.ts`. Reaching this at boot is the
+ * whole point: otherwise an unset secret first surfaces on the line *after* a
+ * successful bind, as a 503 blaming the directory.
+ */
+export function assertSessionConfigured(): void {
+  secret();
 }
 
 /** Only for tests, which swap the secret between cases. */

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { fieldErrors } from "@/lib/api";
+import { ConfigError } from "@/lib/config-error";
 import { findUser, verifyPassword, type LdapFailureReason } from "@/lib/ldap";
 import {
   clearFailures,
@@ -23,6 +24,12 @@ import { upsertUserFromDirectory } from "@/lib/users";
 export const dynamic = "force-dynamic";
 
 const CREDENTIALS_MESSAGE = "שם המשתמש או הסיסמה שגויים";
+
+/**
+ * Deliberately tells the reader it is not their problem. Nothing they can type
+ * will fix an unset environment variable, and "try again later" would be a lie.
+ */
+const MISCONFIGURED_MESSAGE = "הכניסה לא מוגדרת בשרת. כדאי לפנות לתמיכה";
 
 /**
  * `password-expired` and `must-change-password` are safe to name: AD validates
@@ -55,6 +62,11 @@ const FAILURES: Record<
   // controller going down looks like the whole company forgetting their
   // password at the same moment.
   unavailable: { status: 503, message: "לא הצלחנו להתחבר לשרת ההזדהות" },
+  // And distinct from `unavailable` for the same kind of reason one step up:
+  // a missing variable is not a directory outage, and saying it is sends the
+  // investigation to the DC. 500 rather than 503 because nothing about it is
+  // transient — retrying will never help.
+  misconfigured: { status: 500, message: MISCONFIGURED_MESSAGE },
 };
 
 /**
@@ -169,6 +181,16 @@ export async function POST(request: Request) {
     response.cookies.set(SESSION_COOKIE, token, sessionCookieOptions(expires));
     return noStore(response);
   } catch (error) {
+    // signSession() is the one below that can throw a ConfigError, and it runs
+    // *after* the directory has already said yes — so without this branch the
+    // person whose password just worked is told the directory is unreachable.
+    if (error instanceof ConfigError) {
+      console.error("Login is misconfigured", error);
+      return noStore(
+        NextResponse.json({ error: MISCONFIGURED_MESSAGE }, { status: 500 }),
+      );
+    }
+
     console.error("POST /api/auth/login failed", error);
     return noStore(
       NextResponse.json(

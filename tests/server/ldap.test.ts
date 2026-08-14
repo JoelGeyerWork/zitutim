@@ -482,7 +482,9 @@ describe("authenticate", () => {
 
       await expect(authenticate("dana", "correct-horse")).resolves.toEqual({
         ok: false,
-        reason: "unavailable",
+        // Not `unavailable`: the directory is fine, the deployment isn't, and
+        // the two send whoever investigates to opposite places.
+        reason: "misconfigured",
       });
       expect(ldap.clients).toHaveLength(0);
       expect(console.error).toHaveBeenCalledWith(
@@ -534,7 +536,7 @@ describe("authenticate", () => {
 
       await expect(authenticate("dana", "correct-horse")).resolves.toEqual({
         ok: false,
-        reason: "unavailable",
+        reason: "misconfigured",
       });
       expect(ldap.clients).toHaveLength(0);
     });
@@ -546,10 +548,29 @@ describe("authenticate", () => {
 
         await expect(authenticate("dana", "correct-horse")).resolves.toEqual({
           ok: false,
-          reason: "unavailable",
+          reason: "misconfigured",
         });
         expect(ldap.clients).toHaveLength(0);
       },
     );
+
+    it("reports an unreadable LDAP_TLS_CA as configuration, not an outage", async () => {
+      // Inside the container this is the likely one: LDAP_TLS_CA is a host path
+      // unless something mounted it, so it resolves on the developer's machine
+      // and nowhere else.
+      vi.stubEnv("LDAP_TLS_CA", "/nonexistent/ca.pem");
+
+      await expect(authenticate("dana", "correct-horse")).resolves.toEqual({
+        ok: false,
+        reason: "misconfigured",
+      });
+      expect(ldap.clients).toHaveLength(0);
+      expect(console.error).toHaveBeenCalledWith(
+        "LDAP configuration error",
+        expect.objectContaining({
+          message: expect.stringContaining("/nonexistent/ca.pem"),
+        }),
+      );
+    });
   });
 });

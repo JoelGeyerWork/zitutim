@@ -41,6 +41,16 @@ Profiles cut the other way on teardown: `db:down` is *also* profile-less, so
 with the stack up it removes Mongo, leaves `zitutim-app` running, and then fails
 to remove the network it's still attached to. Use `app:down` to stop the stack.
 
+The `app` service takes `SESSION_SECRET` and the `LDAP_*` block through
+`env_file: .env.local`, with `environment:` still overriding the two Mongo
+values. Compose auto-loads only `.env`, and only for `${...}` interpolation —
+`env_file` is a separate mechanism that reads the path it is given, so naming
+the file is what makes this work. Two consequences worth keeping: no secret
+lands in a committed file or in the image, and a missing `.env.local` fails
+`app:up` outright instead of building a container that starts healthy and cannot
+be signed in to. Note `LDAP_TLS_CA` is a *host* path — mount it, or leave it
+unset.
+
 Requires `.env.local` (`cp .env.example .env.local`). Both seed scripts read it
 via `node --env-file`, so they fail without it. Beyond Mongo it needs a
 `SESSION_SECRET` (`openssl rand -base64 32`) and the `LDAP_*` block; without a
@@ -114,6 +124,7 @@ the browser bundle:
 | `src/lib/ldap.ts` | `server-only` | server |
 | `src/lib/users.ts` | `server-only`, re-exports the schema | server |
 | `src/lib/login-throttle.ts` | `server-only` | server |
+| `src/lib/config-error.ts` | none — one `Error` subclass, no deps | anywhere |
 
 ### Data flow
 
@@ -180,6 +191,25 @@ Error contract: `401 { error }` on a mutation without a session, checked **befor
 the body is parsed so validation behaviour isn't an oracle for anonymous probes;
 `403` on an `Origin` mismatch; `429` with `Retry-After` from the login throttle.
 `GET` stays public everywhere.
+
+**A configuration fault is not a directory outage**, and the two are kept apart
+deliberately — they send whoever investigates to opposite places. Anything
+thrown by the lazy config readers is a `ConfigError`: `ldap.ts` turns it into
+the `misconfigured` reason (→ `500`, not the `unavailable` `503`), and the login
+route catches it around `signSession` too, which is the sharp one — an unset
+`SESSION_SECRET` throws on the line *after* the directory said yes, so without
+that branch the one person whose password definitely worked is told the
+directory is unreachable.
+
+`src/instrumentation.ts` runs the same two config readers once at boot, so a
+missing variable surfaces at deploy rather than at the first sign-in — the
+public read path verifies no token and talks to no directory, so a badly
+configured container otherwise starts, reports healthy, and serves the feed
+perfectly for a day. It **logs and keeps going rather than throwing**: throwing
+from `register()` does not stop the process the way it appears to. Next reports
+"Failed to prepare server", holds the port, and serves `500` for *every* route —
+so a mistake in the login config would take the reading down with it, and
+reading is most of what this is for.
 
 The session reaches client components through `SessionProvider` (read once in the
 root layout). **It is display state, not a security boundary** — hiding the card

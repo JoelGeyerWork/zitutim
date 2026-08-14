@@ -5,6 +5,8 @@ import type { ConnectionOptions } from "node:tls";
 
 import { Client, type Entry } from "ldapts";
 
+import { ConfigError } from "@/lib/config-error";
+
 /** What we keep from a directory entry. Everything else is deliberately dropped. */
 export interface DirectoryUser {
   /** objectGUID in canonical string form. Immutable for the object's lifetime. */
@@ -24,7 +26,13 @@ export type LdapFailureReason =
   | "password-expired"
   | "must-change-password"
   | "locked"
-  | "unavailable";
+  | "unavailable"
+  /**
+   * The deployment is wrong, not the directory. Kept apart from `unavailable`
+   * because the two send an investigation to opposite places — see
+   * `ConfigError`.
+   */
+  | "misconfigured";
 
 /**
  * A discriminated union rather than thrown errors, so the route's mapping from
@@ -117,6 +125,23 @@ function attrList(value: string | undefined, fallback: string[]): string[] {
 let warnedInsecure = false;
 
 /**
+ * A path that doesn't resolve is a deployment fault like any other unset
+ * variable — worth saying so, since inside the container `LDAP_TLS_CA` is a
+ * host path unless something mounted it.
+ */
+function readCa(path: string): Buffer {
+  try {
+    return readFileSync(path);
+  } catch (error) {
+    throw new ConfigError(
+      `LDAP_TLS_CA points at ${path}, which cannot be read: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
+}
+
+/**
  * Read lazily, like `getClient()` in mongodb.ts — the test suite sets these
  * after imports have already run.
  */
@@ -128,7 +153,7 @@ function config(): LdapConfig {
   const startTls = process.env.LDAP_STARTTLS === "true";
 
   if (!url || !baseDN || !bindDN) {
-    throw new Error(
+    throw new ConfigError(
       "LDAP_URL, LDAP_BASE_DN and LDAP_BIND_DN must be set. Copy .env.example to .env.local and fill them in.",
     );
   }
@@ -137,13 +162,13 @@ function config(): LdapConfig {
   // than failing: the search then returns nothing and every login looks like a
   // wrong password. Fail loudly here instead.
   if (!bindPassword) {
-    throw new Error(
+    throw new ConfigError(
       "LDAP_BIND_PASSWORD is not set. An empty password binds anonymously, which silently breaks every login.",
     );
   }
 
   if (!url.startsWith("ldaps://") && !startTls) {
-    throw new Error(
+    throw new ConfigError(
       "LDAP_URL must be ldaps:// (a simple bind sends the password in cleartext). Set LDAP_STARTTLS=true to upgrade a plain ldap:// connection instead.",
     );
   }
@@ -161,7 +186,7 @@ function config(): LdapConfig {
   const tlsOptions =
     caPath || insecure
       ? {
-          ...(caPath ? { ca: readFileSync(caPath) } : {}),
+          ...(caPath ? { ca: readCa(caPath) } : {}),
           ...(insecure ? { rejectUnauthorized: false } : {}),
         }
       : undefined;
@@ -189,6 +214,15 @@ function config(): LdapConfig {
       process.env.LDAP_USER_FILTER?.trim() ||
       "(&(objectCategory=person)(objectClass=user))",
   };
+}
+
+/**
+ * Force the lazy read, for `instrumentation.ts`. Nothing here touches the
+ * network — it only proves the variables parse, which is the half of "can
+ * anyone sign in?" that is knowable at boot.
+ */
+export function assertLdapConfigured(): void {
+  config();
 }
 
 const FILTER_ESCAPES: Record<string, string> = {
@@ -341,9 +375,11 @@ export async function findUser(username: string): Promise<FindUserResult> {
   try {
     settings = config();
   } catch (error) {
-    // A misconfiguration is an outage, not a credential problem.
+    // Not a credential problem — and not an outage either. Reporting it as one
+    // points whoever investigates at the domain controller, which is the one
+    // component that is definitely fine.
     console.error("LDAP configuration error", error);
-    return { ok: false, reason: "unavailable" };
+    return { ok: false, reason: "misconfigured" };
   }
 
   // Only ever an escaped value inside an equality we build ourselves —
@@ -467,7 +503,7 @@ export async function verifyPassword(
     settings = config();
   } catch (error) {
     console.error("LDAP configuration error", error);
-    return { ok: false, reason: "unavailable" };
+    return { ok: false, reason: "misconfigured" };
   }
 
   let client: Client | undefined;

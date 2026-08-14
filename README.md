@@ -123,13 +123,20 @@ for the normal `npm run dev` loop. Tear the stack down with `app:down` rather
 than `db:down` — `db:down` carries no profile either, so it would stop Mongo and
 leave the app container running.
 
-Compose does not read `.env.local`, so the app service sets `MONGODB_URI` and
-`MONGODB_DB` itself: inside the network Mongo is `mongodb://mongo:27017`, not
-the `localhost` the host tooling uses, and the database is always `zitutim`.
-Mongo is still published on `27017`, so `npm run db:seed:demo` seeds what the
-container reads — as long as `MONGODB_DB` in your `.env.local` is the default
-`zitutim`. If you change it there, change it in `docker-compose.yml` too, or the
-two will point at different databases.
+The app service sets `MONGODB_URI` and `MONGODB_DB` itself: inside the network
+Mongo is `mongodb://mongo:27017`, not the `localhost` the host tooling uses, and
+the database is always `zitutim`. Mongo is still published on `27017`, so
+`npm run db:seed:demo` seeds what the container reads — as long as `MONGODB_DB`
+in your `.env.local` is the default `zitutim`. If you change it there, change it
+in `docker-compose.yml` too, or the two will point at different databases.
+
+Everything else — `SESSION_SECRET` and the whole `LDAP_*` block — comes from
+`.env.local` via `env_file`, so no secret is written into a committed file or
+baked into the image, and `app:up` fails outright if the file is missing rather
+than starting a container nobody can sign in to. Two things do not survive the
+move into a container: `LDAP_TLS_CA` is a host path unless you mount it, and an
+`LDAP_URL` of `localhost` means the container itself — for a directory running
+on your machine, use `host.docker.internal`.
 
 The image needs no database at build time — every page that reads Mongo is
 `force-dynamic`.
@@ -165,7 +172,14 @@ Error responses are `{ error }` in Hebrew, plus `issues` keyed by field on a 422
 | `404`  | No such quote                                                            |
 | `422`  | Validation failed — `issues` is `{ field: message }`                     |
 | `429`  | Login throttled; `Retry-After` says for how long                         |
+| `500`  | Sign-in isn't configured — a missing `SESSION_SECRET` or `LDAP_*`         |
 | `503`  | The directory is unreachable — deliberately distinct from bad credentials |
+
+The `500` and the `503` are kept apart on purpose: one means fix the deployment,
+the other means fix (or wait for) the domain controller, and reporting a config
+fault as an outage sends the investigation to the one component that is fine.
+`src/instrumentation.ts` also reports the same faults at startup, so they don't
+wait for the first sign-in to become visible.
 
 The `401` is returned **before** the body is parsed, so an anonymous caller can't
 use the validation behaviour to probe the schema.
@@ -180,7 +194,7 @@ Vitest, split into two projects (`vitest.config.mts`):
 
 | Project  | Environment | Covers                                                    |
 | -------- | ----------- | --------------------------------------------------------- |
-| `server` | node        | Zod validation, date/Hebrew formatting, the Mongo data layer, sessions, the LDAP client, login throttling, the API route handlers |
+| `server` | node        | Zod validation, date/Hebrew formatting, the Mongo data layer, sessions, the LDAP client, login throttling, the startup config check, the API route handlers |
 | `ui`     | jsdom       | `QuoteCard`, `QuoteForm`, `QuoteSearch`, `QuoteFeed`, `SiteNav`, `LoginForm`, `AccountMenu` via Testing Library |
 
 In `npm test` the LDAP client is driven through a fake `ldapts` `Client`, so no
