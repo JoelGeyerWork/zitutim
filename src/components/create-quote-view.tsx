@@ -57,7 +57,7 @@ export function CreateQuoteView() {
               נוסף עכשיו ({justAdded.length})
             </h2>
             <Link
-              href="/"
+              href="/quotes"
               className={cn(
                 buttonVariants({ variant: "ghost", size: "sm" }),
                 "gap-1.5",

@@ -16,8 +16,13 @@ const heebo = Heebo({
 });
 
 export const metadata: Metadata = {
-  title: "ציטוטים",
-  description: "קיר הציטוטים של הצוות — מי אמר, מתי, ולמה זה נשאר איתנו",
+  // Pages set only their own name; the template appends the hub's, so a new
+  // section cannot forget the suffix or spell it differently.
+  title: {
+    default: "מרכז הצוות",
+    template: "%s · מרכז הצוות",
+  },
+  description: "הישבצ״ים, קיר הציטוטים, וכל מה שהצוות צריך במקום אחד",
 };
 
 /**
@@ -43,7 +48,9 @@ export default async function RootLayout({ children }: LayoutProps<"/">) {
         <ThemeProvider>
           <SessionProvider user={user}>
             <SiteNav />
-            <main className="flex-1 pb-24 md:pb-10">{children}</main>
+            {/* No bottom bar to clear any more — the section dropdown in the
+                header carries navigation at every size. */}
+            <main className="flex-1 pb-10">{children}</main>
             <Toaster position="top-center" richColors closeButton />
           </SessionProvider>
         </ThemeProvider>

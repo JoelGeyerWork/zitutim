@@ -49,7 +49,7 @@ export const SORT_LABELS: Record<SortOption, string> = {
  * server's timezone. `new Date("2026-08-08")` already does this; the explicit
  * regex just keeps other formats from sneaking through.
  */
-const dateOnly = z
+export const dateOnly = z
   .string()
   .regex(/^\d{4}-\d{2}-\d{2}$/, "צריך תאריך תקין")
   .refine((value) => {

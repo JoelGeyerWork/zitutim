@@ -38,12 +38,12 @@ describe("AccountMenu — signed out", () => {
   });
 
   it("returns you to the page you were on", () => {
-    usePathname.mockReturnValue("/search");
+    usePathname.mockReturnValue("/quotes/search");
     render(<AccountMenu />);
 
     expect(screen.getByRole("link", { name: "כניסה" })).toHaveAttribute(
       "href",
-      "/login?next=%2Fsearch",
+      "/login?next=%2Fquotes%2Fsearch",
     );
   });
 });

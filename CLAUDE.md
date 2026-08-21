@@ -6,13 +6,127 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-A team quote wall — who said something, when, and what led to it. Hebrew-native
-and RTL throughout; all user-facing strings are Hebrew. Four pages: `/` (feed),
-`/search`, `/create`, `/login`.
+A hub for one team, Hebrew-native and RTL throughout; all user-facing strings
+are Hebrew. It is organised as **sections**, and `/` is a landing page that
+links into them rather than being a section itself:
+
+| Route | What |
+|---|---|
+| `/` | the hub — this week's ישב״צ, and a teaser per section |
+| `/quotes`, `/quotes/search`, `/quotes/create` | the quote wall: who said something, when, and what led to it |
+| `/meetups`, `/meetups/themes` | the weekly ישב״צ, the refreshment rotation, and the theme-guessing game |
+| `/login` | — |
+
+Navigation is exactly two levels, both in the header at every screen size: a
+**dropdown picks the section**, and a **tab bar moves around inside it**. There
+is no mobile bottom bar — the dropdown replaced it, which is what lets a section
+grow a fourth page without the nav being redesigned again. Below `sm` the tabs
+wrap to their own row rather than being squeezed into a strip too narrow to show
+one whole pill.
+
+### `src/lib/navigation.ts` is the single source of truth
+
+`SECTIONS` drives the dropdown, the tab bars **and** the hub's cards. **Adding a
+section is one entry there plus its route folder** — it then appears everywhere
+on its own. Optionally: register a richer hub card in the `teasers` map in
+`src/app/page.tsx` (without one the card falls back to the section's
+`description`), and give the page a `metadata.title` — the root layout's
+`title.template` appends `· מרכז הצוות`, so no page spells the suffix itself.
+
+Pages use `PageShell` + `PageHeader` (`src/components/page-shell.tsx`) rather
+than repeating the container and heading markup, so a new section inherits the
+measure and rhythm.
+
+Four things that bit here:
+
+- **Base UI radio items default to `closeOnClick: false`.** Right for the theme
+  picker, wrong for the section links: navigation is client-side, so without
+  the explicit prop the menu is left hanging over the page it just moved you to.
+- **A section owns its subtree, but `/` is a prefix of everything.** `sectionFor`
+  special-cases the root to an exact match; a naive `startsWith` lights up every
+  section at once. It also checks the `/` boundary, so a future `/quoteshub`
+  isn't swallowed by `/quotes`. Tabs match exactly, since each is one page.
+- **The tab bar is drawn only for `tabs.length > 1`.** A lone tab is a label for
+  the page you are already on.
+- **`HUB` is kept out of `SECTIONS`.** It is in the picker like a section but
+  owns no content, so the hub page maps `SECTIONS` without having to filter
+  itself out of its own card list.
 
 Public read, login to write: anyone who can reach the app can browse and search,
 but adding, editing and deleting need a session. Sign-in binds against the
 organisation's Active Directory over LDAP.
+
+### The rotation is still hard-coded — the themes are not
+
+The **theme-guessing game is persisted** (`themes` collection, its REST API,
+server-computed standings — see the quotes-shaped data layer below). What is
+still hard-coded is the **rotation**: whose turn it is, and the roster it turns
+through. These three modules stay client-safe on purpose (no `server-only`) so
+the roulette can spin and the rotation can be edited locally, and there is no
+collection or API behind them yet:
+
+| Module | Stands in for |
+|---|---|
+| `src/lib/team.ts` | the meetup slot, the date arithmetic, and `TEAM` |
+| `src/lib/directory.ts` | Active Directory — objectGUID, displayName, title |
+| `src/lib/roster.ts` | who is in the refreshment rotation, and in what order |
+
+The split between the last two is the design being tried out, not an artefact of
+mocking: **the directory owns identity, the app owns membership.** A rotation
+entry is a directory person — name, title and immutable id all read from there —
+plus the three things AD has no concept of: turn order, grammatical gender, and
+whether they are still in the rotation. Adding someone is *picking them out of
+the directory*, never typing a name, so they arrive carrying the objectGUID that
+`upsertUserFromDirectory` already keys `users` on. In Mongo this is a `roster`
+sub-document on the existing `users` row, not a second collection — splitting it
+out forks the same person into two ids the moment a rotation member signs in.
+Nobody is ever deleted, only deactivated: their name is on the themes they
+brought.
+
+Editing lives behind the pencil beside the wheel (`RotationEditor`), not on a
+page of its own — it changes the wheel, and it is not a team-management screen.
+Order is set by dragging the rows.
+
+Four things that bit here:
+
+- **The rotation is anchored to a date, not a stored cursor.** `ROTATION_ANCHOR`
+  plus the number of weeks elapsed gives whose turn it is, so every viewer sees
+  the same schedule and a week nobody opened the app doesn't desynchronise it.
+  The cost is that the turn is `weeksElapsed % rotationSize`, so **adding or
+  removing anyone moves everyone's upcoming turn** — visible immediately in the
+  editor. Past turns are safe; a theme records who actually brought it.
+- **"Now" is fixed by the server page and passed in as `nowIso`.** A
+  `new Date()` on both sides of hydration disagrees across a midnight or a week
+  boundary, and the roulette would hydrate onto a different person than it
+  rendered.
+- **The editor hands back the whole visible order, and `reorder` stores it.**
+  The list is drawn from whoever is up this week, so the row below you is not
+  the next entry of the stored order — at the wrap it is the first one. Turning
+  the displayed cycle back by the same offset is exact in a way that
+  translating an individual move is not.
+- **The drag is tracked on `window`, and moves nothing in the DOM.** The held
+  row is lifted and translated to follow the pointer while its neighbours step
+  aside by one row; the list only re-orders on drop. The whole row is the
+  handle, so `[data-no-drag]` marks the controls that keep their own gestures,
+  and the row itself is focusable and answers the arrow keys — there is no grip
+  to tab to. **On touch it takes a hold first** (`HOLD_MS`, cancelled by
+  movement past `HOLD_SLOP`): a row that grabbed on contact would take the
+  dialog's scroll with it, and refusing that scroll afterwards needs the
+  non-passive `touchmove` listener the drag effect adds.
+- **The wheel alternates two tones, which fails at an odd count** — the first
+  and last slice meet, and the rotation is editable, so odd is not an edge case.
+  `toneOf` gives the closing slice a third, neutral tone.
+
+`TEAM` has not gone away: `memberOn` and the themes data layer still read it, so
+there are currently two lists of the same people. Whichever of the two survives,
+they should be one. **The themes FK papers over the gap by matching a `TEAM`
+member to a `directory.ts` person by display name** (`ROSTER_BRIDGE` in
+`themes.ts`, the same map the demo seed hard-codes), to recover the objectGUID
+its `users` row is keyed on. That match is exact and offline, and it means a
+roster member who later signs in through LDAP lands on the *same* `users` row a
+theme already references rather than forking — but it only holds because both
+lists still describe the same eight people. Collapsing the two lists is what
+finally removes the bridge.
 
 ### It runs on an air-gapped network
 
@@ -131,6 +245,14 @@ in production on the grounds that the network is air-gapped; on anything routabl
 the one import. Pulling `@/lib/quotes` into a `"use client"` file drags the Mongo
 driver into the browser bundle.
 
+Themes are the same pattern: `src/lib/theme-schema.ts` is client-safe (`Theme`,
+`ThemePage`, `Standing`, `ThemeMember`, `themeInputSchema`, `placeOf`, and it
+reuses `dateOnly` from `quote-schema.ts`), and `src/lib/themes.ts` is the
+`server-only` Mongo layer that re-exports it. Standings are computed *there*,
+across every theme via aggregation — `getStandings`/`getThemeStats`, not a
+reduction over the loaded page, which would silently rank only what the client
+holds once the list paginates.
+
 Auth mirrors the same split, with the same consequence — `ldapts` and `jose` in
 the browser bundle:
 
@@ -244,7 +366,12 @@ tree against the new cookie, and it costs one page load per login.
 ### Invariants worth not breaking
 
 - **`saidAt` is stored at UTC midnight and formatted in UTC** (`src/lib/format.ts`).
-  Formatting it in local time shifts the day backwards west of Greenwich.
+  Formatting it in local time shifts the day backwards west of Greenwich. Meetup
+  dates follow the same rule — `currentMeetup` does its weekday arithmetic in
+  UTC because `formatMeetupDate` renders in UTC.
+- **The meetup on meetup day is still "this week's".** Rolling the rotation over
+  at midnight tells whoever is bringing the refreshments that their turn is
+  eight days away, on the morning they are meant to bring them.
 - **Every entry in `sortSpecs` ends in `_id`.** Without a total order, offset
   pagination shows a quote twice or skips it when sort keys tie.
 - **Search escapes regex metacharacters** before building the `RegExp`. `.*` must

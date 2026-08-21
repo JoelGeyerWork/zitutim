@@ -13,6 +13,7 @@ import { toast } from "sonner";
 
 import { DeleteQuoteDialog } from "@/components/delete-quote-dialog";
 import { EditQuoteDialog } from "@/components/edit-quote-dialog";
+import { toneFor } from "@/components/person-avatar";
 import { useSession } from "@/components/session-provider";
 import { Button } from "@/components/ui/button";
 import {
@@ -21,17 +22,9 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { authorTone, formatRelative, formatSaidAt, initial } from "@/lib/format";
+import { formatRelative, formatSaidAt, initial } from "@/lib/format";
 import type { Quote } from "@/lib/quote-schema";
 import { cn } from "@/lib/utils";
-
-const TONES = [
-  "bg-primary/10 text-primary",
-  "bg-foreground/10 text-foreground",
-  "bg-primary/20 text-primary",
-  "bg-foreground/[0.06] text-muted-foreground",
-  "bg-primary/[0.07] text-primary",
-] as const;
 
 export function QuoteCard({
   quote,
@@ -67,7 +60,7 @@ export function QuoteCard({
         <span
           className={cn(
             "flex size-11 shrink-0 items-center justify-center rounded-full text-lg font-bold",
-            TONES[authorTone(quote.author)],
+            toneFor(quote.author),
           )}
           aria-hidden
         >

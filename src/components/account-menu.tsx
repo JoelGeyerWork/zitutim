@@ -6,6 +6,7 @@ import { useState } from "react";
 import { LogOutIcon } from "lucide-react";
 import { toast } from "sonner";
 
+import { toneFor } from "@/components/person-avatar";
 import { useSession } from "@/components/session-provider";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button, buttonVariants } from "@/components/ui/button";
@@ -18,17 +19,8 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { authorTone, initial } from "@/lib/format";
+import { initial } from "@/lib/format";
 import { cn } from "@/lib/utils";
-
-/** Same tints the quote cards use, so the account avatar matches the wall. */
-const TONES = [
-  "bg-primary/10 text-primary",
-  "bg-foreground/10 text-foreground",
-  "bg-primary/20 text-primary",
-  "bg-foreground/[0.06] text-muted-foreground",
-  "bg-primary/[0.07] text-primary",
-] as const;
 
 export function AccountMenu() {
   const user = useSession();
@@ -86,7 +78,7 @@ export function AccountMenu() {
             aria-label="החשבון שלי"
           >
             <Avatar size="sm">
-              <AvatarFallback className={TONES[authorTone(user.name)]}>
+              <AvatarFallback className={toneFor(user.name)}>
                 {initial(user.name)}
               </AvatarFallback>
             </Avatar>

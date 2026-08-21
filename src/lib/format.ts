@@ -18,8 +18,20 @@ const shortDate = new Intl.DateTimeFormat(LOCALE, {
   timeZone: "UTC",
 });
 
+/** "יום שלישי, 18 באוגוסט" — a meetup is found by weekday, not by year. */
+const meetupDate = new Intl.DateTimeFormat(LOCALE, {
+  weekday: "long",
+  day: "numeric",
+  month: "long",
+  timeZone: "UTC",
+});
+
 export function formatSaidAt(iso: string): string {
   return fullDate.format(new Date(iso));
+}
+
+export function formatMeetupDate(iso: string): string {
+  return meetupDate.format(new Date(iso));
 }
 
 export function formatSaidAtShort(iso: string): string {

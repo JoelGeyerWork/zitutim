@@ -1,4 +1,9 @@
 import type { Quote } from "@/lib/quote-schema";
+import type {
+  Standing,
+  Theme,
+  ThemeMember,
+} from "@/lib/theme-schema";
 import type { SessionUser } from "@/lib/auth-schema";
 
 export function makeQuote(overrides: Partial<Quote> = {}): Quote {
@@ -25,6 +30,49 @@ export function makeSessionUser(
     id: "6b0000000000000000000001",
     name: "דנה כהן",
     username: "dana",
+    ...overrides,
+  };
+}
+
+export function makeTheme(overrides: Partial<Theme> = {}): Theme {
+  return {
+    id: "7a0000000000000000000001",
+    date: "2026-08-18T00:00:00.000Z",
+    broughtById: "6b0000000000000000000001",
+    broughtBy: "נועה ברקת",
+    theme: "הכול עגול",
+    snacks: ["בייגלה", "דונאטס"],
+    guessedById: null,
+    guessedBy: null,
+    addedBy: null,
+    addedById: null,
+    updatedBy: null,
+    updatedById: null,
+    createdAt: "2026-08-18T09:00:00.000Z",
+    updatedAt: "2026-08-18T09:00:00.000Z",
+    ...overrides,
+  };
+}
+
+export function makeThemeMember(
+  overrides: Partial<ThemeMember> = {},
+): ThemeMember {
+  return {
+    id: "6b0000000000000000000001",
+    name: "נועה ברקת",
+    role: "ראשת צוות",
+    gender: "f",
+    ...overrides,
+  };
+}
+
+export function makeStanding(overrides: Partial<Standing> = {}): Standing {
+  return {
+    id: "6b0000000000000000000001",
+    name: "נועה ברקת",
+    role: "ראשת צוות",
+    guesses: 0,
+    lastGuess: null,
     ...overrides,
   };
 }
