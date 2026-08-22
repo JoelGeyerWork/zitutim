@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 
 import { PageHeader, PageShell } from "@/components/page-shell";
 import { ThemesView } from "@/components/themes-view";
-import { lastMeetup, memberOn } from "@/lib/team";
+import { lastMeetup, rotationIndex } from "@/lib/team";
 import {
   getStandings,
   getThemeRoster,
@@ -33,11 +33,11 @@ export default async function ThemesPage() {
     getThemeRoster(),
   ]);
 
-  // The rotation names a `team.ts` member; map it to the real `users._id` the
-  // picker posts. Falls back to the first member if that person has no row yet.
-  const rotationName = memberOn(lastMeetup(now)).name;
+  // `members` is the rotation in stored order, so whose turn it was is a direct
+  // index — no name round-trip. Falls back to the first member, then to empty on
+  // an unseeded database.
   const defaultBroughtById =
-    members.find((member) => member.name === rotationName)?.id ??
+    members[rotationIndex(lastMeetup(now), members.length)]?.id ??
     members[0]?.id ??
     "";
 

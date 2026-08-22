@@ -1,9 +1,12 @@
 /**
- * The team and the weekly ישב״צ, hard-coded for now.
+ * The weekly ישב״צ: pure meetup date-math plus rotation math over a roster the
+ * caller supplies.
  *
- * Everything here is client-safe on purpose — no `server-only`, no database.
- * When this moves to Mongo the shapes below become the collection documents
- * and `buildRotation` becomes a query; the components should not have to care.
+ * The roster no longer lives here. Identity and order are the `rotation`
+ * collection (see `rotation.ts`); `rotationIndex`, `rotate` and `buildRotation`
+ * are given the members and their count as arguments and hold no list of their
+ * own. That is what keeps this module client-safe — no `server-only`, no
+ * database — while the source of truth stays server-side.
  */
 
 export type Member = {
@@ -14,17 +17,6 @@ export type Member = {
   gender: "m" | "f";
 };
 
-export const TEAM: Member[] = [
-  { id: "noa", name: "נועה ברקת", role: "ראשת צוות", gender: "f" },
-  { id: "itay", name: "איתי שרון", role: "שרת", gender: "m" },
-  { id: "shira", name: "שירה לוי", role: "לקוח", gender: "f" },
-  { id: "daniel", name: "דניאל עמר", role: "תשתיות", gender: "m" },
-  { id: "tamar", name: "תמר רוזן", role: "בדיקות", gender: "f" },
-  { id: "yonatan", name: "יונתן כץ", role: "שרת", gender: "m" },
-  { id: "maya", name: "מאיה גלעד", role: "עיצוב מוצר", gender: "f" },
-  { id: "ori", name: "אורי בן־חיים", role: "דאטה", gender: "m" },
-];
-
 export const MEETUP = {
   /** 0 = Sunday. The week starts on Sunday here, so 2 is Tuesday. */
   weekday: 2,
@@ -33,10 +25,10 @@ export const MEETUP = {
 } as const;
 
 /**
- * The meetup at which `TEAM[0]` brought the refreshments — a Tuesday. Anchoring
- * the rotation to a date rather than storing "whose turn is it" means the
- * schedule is the same for everyone who loads the page, and stays right through
- * any week nobody opened the app.
+ * The meetup at which the member at rotation index 0 brought the refreshments —
+ * a Tuesday. Anchoring the rotation to a date rather than storing "whose turn is
+ * it" means the schedule is the same for everyone who loads the page, and stays
+ * right through any week nobody opened the app.
  */
 const ROTATION_ANCHOR = Date.UTC(2026, 0, 6);
 
@@ -75,40 +67,28 @@ export function lastMeetup(now: Date): Date {
   return next.getTime() === today ? next : new Date(next.getTime() - WEEK_MS);
 }
 
-export function memberById(id: string): Member | undefined {
-  return TEAM.find((member) => member.id === id);
-}
-
-/** Whose turn the rotation says it was — or will be — on a given meetup date. */
-export function memberOn(date: Date): Member {
-  return TEAM[rotationIndex(date)];
-}
-
 /**
  * Whose turn it is at `date`, as an index into a rotation of `size` people.
- * `size` is a parameter because the roster is editable: the number of people in
- * the rotation is not a constant of the app the way `TEAM.length` was.
+ * `size` is required because the roster is editable and lives in the database:
+ * the caller reads the rotation and passes its length, since the count is no
+ * longer a constant of the app.
  */
-export function rotationIndex(date: Date, size: number = TEAM.length): number {
+export function rotationIndex(date: Date, size: number): number {
   if (size <= 0) return 0;
   const weeks = Math.round((date.getTime() - ROTATION_ANCHOR) / WEEK_MS);
   return ((weeks % size) + size) % size;
 }
 
-/** The team in turn order for `now` — whoever is up this week leads it. */
-export function currentQueue(now: Date): Member[] {
-  return rotate(TEAM, rotationIndex(currentMeetup(now)));
-}
-
 /**
  * The next `count` meetups, this week's first. `queue` is the turn order, its
  * head on deck — the roulette passes its own after a spin, where the queue
- * behind the winner keeps its cyclic order rather than being reshuffled.
+ * behind the winner keeps its cyclic order rather than being reshuffled. The
+ * caller supplies it because the roster is server-side; there is no default.
  */
 export function buildRotation(
   now: Date,
   count: number,
-  queue: Member[] = currentQueue(now),
+  queue: Member[],
 ): MeetupSlot[] {
   const first = currentMeetup(now);
 

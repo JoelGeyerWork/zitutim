@@ -6,7 +6,9 @@ import { PersonAvatar } from "@/components/person-avatar";
 import { Badge } from "@/components/ui/badge";
 import { formatMeetupDate, plural } from "@/lib/format";
 import { HUB, SECTIONS, type Section } from "@/lib/navigation";
-import { buildRotation, conjugate, daysUntil, MEETUP } from "@/lib/team";
+import { type RosterMember } from "@/lib/roster";
+import { getRotation } from "@/lib/rotation";
+import { conjugate, currentMeetup, daysUntil, MEETUP, rotationIndex } from "@/lib/team";
 import { getSession } from "@/lib/session";
 import { getStats, listQuotes } from "@/lib/quotes";
 import { cn } from "@/lib/utils";
@@ -16,11 +18,23 @@ export const dynamic = "force-dynamic";
 export default async function HubPage() {
   const now = new Date();
 
-  const [user, stats, latest] = await Promise.all([
+  const [user, stats, latest, roster] = await Promise.all([
     getSession(),
     getStats(),
     listQuotes({ limit: 1 }),
+    getRotation(),
   ]);
+
+  // This week's slot straight off the DB-backed rotation, in stored order — the
+  // same anchored index the roulette uses. Empty on an unseeded database, where
+  // the card falls back to the section description rather than crashing.
+  const thisWeek =
+    roster.length > 0
+      ? {
+          member: roster[rotationIndex(currentMeetup(now), roster.length)],
+          date: currentMeetup(now).toISOString(),
+        }
+      : null;
 
   /**
    * What each section shows on its card. A section with nothing registered
@@ -28,11 +42,13 @@ export default async function HubPage() {
    * `SECTIONS` is enough to make it appear here, and a teaser can follow later.
    */
   const teasers: Record<string, Teaser> = {
-    "/meetups": {
-      // The meetup leads the hub: it is the one thing here that expires.
-      className: "bg-accent text-accent-foreground border-transparent",
-      content: <MeetupTeaser now={now} />,
-    },
+    "/meetups": thisWeek
+      ? {
+          // The meetup leads the hub: it is the one thing here that expires.
+          className: "bg-accent text-accent-foreground border-transparent",
+          content: <MeetupTeaser member={thisWeek.member} date={thisWeek.date} now={now} />,
+        }
+      : {},
     "/quotes": { content: <QuoteTeaser stats={stats} quote={latest.quotes[0]} /> },
   };
 
@@ -59,7 +75,10 @@ export default async function HubPage() {
   );
 }
 
-type Teaser = { className?: string; content: React.ReactNode };
+// `content` is optional: an empty rotation registers a `/meetups` teaser with
+// neither field, so the card falls back to the section description like any
+// section with nothing registered.
+type Teaser = { className?: string; content?: React.ReactNode };
 
 /** A whole section as one click target — the hub is a list of front doors. */
 function SectionCard({
@@ -101,24 +120,32 @@ function SectionCard({
   );
 }
 
-function MeetupTeaser({ now }: { now: Date }) {
-  const [thisWeek] = buildRotation(now, 1);
-
+function MeetupTeaser({
+  member,
+  date,
+  now,
+}: {
+  // The whole slot is computed on the server page from `getRotation()`; the
+  // teaser only renders it, so it stays a plain display component.
+  member: RosterMember;
+  date: string;
+  now: Date;
+}) {
   return (
     <>
       <div className="mt-3 flex items-center gap-3">
-        <PersonAvatar name={thisWeek.member.name} className="size-12 text-lg" />
+        <PersonAvatar name={member.name} className="size-12 text-lg" />
         <div className="min-w-0">
-          <p className="truncate font-semibold">{thisWeek.member.name}</p>
+          <p className="truncate font-semibold">{member.name}</p>
           <p className="text-sm opacity-80">
-            {conjugate(thisWeek.member, "מביא", "מביאה")} את הכיבוד ·{" "}
-            {daysUntil(thisWeek.date, now)}
+            {conjugate(member, "מביא", "מביאה")} את הכיבוד ·{" "}
+            {daysUntil(date, now)}
           </p>
         </div>
       </div>
 
       <p className="mt-3 border-t border-current/10 pt-3 text-sm opacity-80">
-        {formatMeetupDate(thisWeek.date)}, {MEETUP.time} · {MEETUP.place}
+        {formatMeetupDate(date)}, {MEETUP.time} · {MEETUP.place}
       </p>
     </>
   );
