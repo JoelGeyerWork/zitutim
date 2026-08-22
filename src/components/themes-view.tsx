@@ -54,9 +54,6 @@ export function ThemesView({
     setHasMore(initial.hasMore);
   }
 
-  const genderById = (id: string | null) =>
-    (id && members.find((member) => member.id === id)?.gender) || "m";
-
   const loadMore = useCallback(async () => {
     if (loading || !hasMore) return;
     setLoading(true);
@@ -103,11 +100,7 @@ export function ThemesView({
           ההיסטוריה
         </h2>
         {themes.map((theme) => (
-          <ThemeCard
-            key={theme.id}
-            theme={theme}
-            guesserGender={genderById(theme.guessedById)}
-          />
+          <ThemeCard key={theme.id} theme={theme} />
         ))}
 
         {hasMore ? (
@@ -192,14 +185,7 @@ function Leaderboard({ board }: { board: Standing[] }) {
   );
 }
 
-function ThemeCard({
-  theme,
-  guesserGender,
-}: {
-  theme: Theme;
-  /** Grammatical only — the guesser's *name* comes from the snapshot. */
-  guesserGender: "m" | "f";
-}) {
+function ThemeCard({ theme }: { theme: Theme }) {
   return (
     <article className="bg-card rounded-2xl border p-5 shadow-sm">
       <header className="flex items-center gap-3">
@@ -233,9 +219,12 @@ function ThemeCard({
         {theme.guessedBy ? (
           <span className="flex items-center gap-2">
             <PersonAvatar name={theme.guessedBy} className="size-6 text-xs" />
+            {/* Passive "was guessed by" agrees with the theme, never the
+                guesser — so a guesser who has left the rotation (and whose
+                gender we no longer hold) still reads correctly. */}
             <span>
-              <span className="font-medium">{theme.guessedBy}</span>{" "}
-              {guesserGender === "f" ? "ניחשה" : "ניחש"}
+              נוחש על ידי{" "}
+              <span className="font-medium">{theme.guessedBy}</span>
             </span>
           </span>
         ) : (

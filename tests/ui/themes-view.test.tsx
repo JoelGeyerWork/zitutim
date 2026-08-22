@@ -78,19 +78,21 @@ describe("ThemesView", () => {
     expect(screen.getByText("5")).toBeInTheDocument();
   });
 
-  it("conjugates the guesser by the roster gender while showing the snapshot name", () => {
+  it("names the guesser from the snapshot with a gender-neutral verb", () => {
+    // The guesser is not in the current roster, which used to force a masculine
+    // fallback on the card. "נוחש על ידי" agrees with the theme, not the person,
+    // so a departed guesser of any gender reads right — no roster lookup at all.
     const themes = [
       makeTheme({
         id: "1",
-        guessedById: "m2",
-        guessedBy: "אורי בן־חיים",
+        guessedById: "gone",
+        guessedBy: "דנה כהן",
       }),
     ];
     render(view({ initial: page(themes) }));
 
-    // Snapshot name from the theme, masculine verb from the member's gender.
-    expect(screen.getByText("אורי בן־חיים")).toBeInTheDocument();
-    expect(screen.getByText("ניחש")).toBeInTheDocument();
+    expect(screen.getByText("דנה כהן")).toBeInTheDocument();
+    expect(screen.getByText(/נוחש על ידי/)).toBeInTheDocument();
   });
 
   it("re-seeds the history when a fresh initial prop arrives", () => {
