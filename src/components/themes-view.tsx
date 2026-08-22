@@ -84,7 +84,8 @@ export function ThemesView({
     <div className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <p className="text-muted-foreground text-sm">
-          {plural(stats.total, "נושא אחד", "נושאים")} · {stats.solved} נוחשו
+          {plural(stats.total, "נושא אחד", "נושאים")} ·{" "}
+          {plural(stats.solved, "אחד נוחש", "נוחשו")}
         </p>
         {/* Gated on the session for UX only — the API's 401 is the enforcement. */}
         {user ? (

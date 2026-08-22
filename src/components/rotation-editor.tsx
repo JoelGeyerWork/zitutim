@@ -660,7 +660,8 @@ function Confirm({
 
       <p className="text-muted-foreground text-xs text-balance">
         {person.displayName} {gender === "f" ? "תיכנס" : "ייכנס"} לסוף הסבב, שבו
-        יהיו מעכשיו {rotationSize + 1} אנשים — כך שהתור של כולם זז בשבוע.
+        יהיו מעכשיו {plural(rotationSize + 1, "אדם אחד", "אנשים")} — כך שהתור של
+        כולם זז בשבוע.
       </p>
 
       <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">

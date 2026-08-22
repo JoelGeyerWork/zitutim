@@ -94,6 +94,44 @@ describe("addMember", () => {
     expect(roster).toHaveLength(1);
   });
 
+  it("rejects a concurrent duplicate add — a double-click never pushes twice", async () => {
+    const userId = await upsertRosterUser(PEOPLE[0]);
+
+    // Both requests race before either has committed; the atomic `$ne` guard
+    // lets exactly one through and reports the other as already-in.
+    const outcomes = await Promise.all([
+      addMember(userId, "f"),
+      addMember(userId, "m"),
+    ]);
+    expect(outcomes.filter((o) => o.ok)).toHaveLength(1);
+    expect(outcomes.filter((o) => !o.ok)).toEqual([
+      { ok: false, reason: "already-in" },
+    ]);
+
+    const roster = await getRotation();
+    expect(roster).toHaveLength(1);
+  });
+
+  it("adds two different people concurrently onto a fresh rotation — neither is lost", async () => {
+    // The document does not exist yet, so both adds race to create it. Ensuring
+    // the singleton before the conditional push keeps this from turning one add
+    // into a false already-in.
+    const [first, second] = [
+      await upsertRosterUser(PEOPLE[0]),
+      await upsertRosterUser(PEOPLE[1]),
+    ];
+    const outcomes = await Promise.all([
+      addMember(first, "f"),
+      addMember(second, "m"),
+    ]);
+    expect(outcomes).toEqual([{ ok: true }, { ok: true }]);
+
+    const roster = await getRotation();
+    expect(roster.map((member) => member.id).sort()).toEqual(
+      [first, second].sort(),
+    );
+  });
+
   it("re-adding a removed person reuses their users._id, so their themes still resolve", async () => {
     // Add, then remove — forgetting keeps only the users row and its history.
     const [firstId, otherId] = await seed([PEOPLE[0], PEOPLE[1]]);
@@ -153,6 +191,19 @@ describe("removeMember", () => {
     await seed([PEOPLE[0]]);
     expect(await removeMember(new ObjectId().toHexString())).toBe("not-found");
     expect(await removeMember("nope")).toBe("not-found");
+  });
+
+  it("two concurrent removes on a two-person rotation never empty it", async () => {
+    const [a, b] = await seed([PEOPLE[0], PEOPLE[1]]);
+
+    // Both pass the old `length === 1` check separately and both pull, leaving
+    // nobody. The atomic size guard lets only the first through; the second sees
+    // a lone member left and is refused with "last".
+    const outcomes = await Promise.all([removeMember(a), removeMember(b)]);
+    expect(outcomes.sort()).toEqual(["last", "removed"]);
+
+    const roster = await getRotation();
+    expect(roster).toHaveLength(1);
   });
 });
 

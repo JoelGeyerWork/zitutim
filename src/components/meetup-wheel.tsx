@@ -96,17 +96,33 @@ export function MeetupWheel({
           const upright = ((centre % 360) + 360) % 360 <= 180;
           const labelX = C + R * LABEL_R;
           const tone = toneOf(index, members.length);
+          // A rotation of one is legal (and editable down to it), but
+          // `sliceAngle(1)` is 360°, which makes the arc endpoints identical and
+          // collapses the slice to a fill-less line. The lone member fills the
+          // whole disc instead.
+          const single = members.length === 1;
 
           return (
             <g key={member.id}>
-              <path
-                d={`M ${C} ${C} L ${x0} ${y0} A ${R} ${R} 0 ${
-                  slice > 180 ? 1 : 0
-                } 1 ${x1} ${y1} Z`}
-                fill={FILL[tone]}
-                stroke="var(--border)"
-                strokeWidth="0.5"
-              />
+              {single ? (
+                <circle
+                  cx={C}
+                  cy={C}
+                  r={R}
+                  fill={FILL[tone]}
+                  stroke="var(--border)"
+                  strokeWidth="0.5"
+                />
+              ) : (
+                <path
+                  d={`M ${C} ${C} L ${x0} ${y0} A ${R} ${R} 0 ${
+                    slice > 180 ? 1 : 0
+                  } 1 ${x1} ${y1} Z`}
+                  fill={FILL[tone]}
+                  stroke="var(--border)"
+                  strokeWidth="0.5"
+                />
+              )}
 
               <g transform={`rotate(${centre - 90} ${C} ${C})`}>
                 <text
