@@ -32,15 +32,19 @@ Browsing, search and all public `GET`s work anonymously; only writes need a sess
 
 ### Optional: local OpenLDAP for real login / `npm run test:ldap`
 
-Docker is preinstalled and the `osixia/openldap:1.5.0` image is cached in the base
-snapshot, but there is **no systemd**, so the daemon is not running at boot. Per session:
+`npm run ldap:up` needs Docker, which the base VM does **not** have running. This is a
+nested VM (no systemd; the kernel lacks full overlay2 + nftables support), so Docker needs
+the `fuse-overlayfs` storage driver and legacy iptables. Set it up on demand:
 
-1. Start the daemon once (the `ubuntu` user is in the `docker` group):
-   `sudo dockerd > /tmp/dockerd.log 2>&1 &` — it uses the `fuse-overlayfs` storage driver
-   (kernel here lacks full overlay2 + nftables support; that is already configured in
-   `/etc/docker/daemon.json` and via `iptables-legacy`).
-2. `npm run ldap:up` (OpenLDAP on `:1636`) then `npm run test:ldap`.
-3. To sign in through the UI against it, point the `LDAP_*` block in `.env.local` at the
+1. Install Docker once (idempotent). Follow the "Docker in Cloud Agent VM" recipe: install
+   `docker-ce`/`docker-compose-plugin` + `fuse-overlayfs`, write
+   `/etc/docker/daemon.json` with `{"storage-driver":"fuse-overlayfs"}`, and
+   `update-alternatives --set iptables /usr/sbin/iptables-legacy` (same for `ip6tables`).
+   Then `sudo usermod -aG docker ubuntu`.
+2. Start the daemon (no systemd): `sudo dockerd > /tmp/dockerd.log 2>&1 &`. If the socket
+   isn't group-readable yet in this shell, `sudo chmod 666 /var/run/docker.sock`.
+3. `npm run ldap:up` (OpenLDAP on `:1636`) then `npm run test:ldap`.
+4. To sign in through the UI against it, point the `LDAP_*` block in `.env.local` at the
    container — `LDAP_URL=ldaps://localhost:1636`, `LDAP_BASE_DN=dc=test,dc=local`,
    `LDAP_BIND_DN=cn=admin,dc=test,dc=local`, `LDAP_BIND_PASSWORD=admin-password`,
    `LDAP_TLS_INSECURE=true`, `LDAP_USER_FILTER=(objectClass=inetOrgPerson)`,
