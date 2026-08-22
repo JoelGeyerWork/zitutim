@@ -6,13 +6,155 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-A team quote wall — who said something, when, and what led to it. Hebrew-native
-and RTL throughout; all user-facing strings are Hebrew. Four pages: `/` (feed),
-`/search`, `/create`, `/login`.
+A hub for one team, Hebrew-native and RTL throughout; all user-facing strings
+are Hebrew. It is organised as **sections**, and `/` is a landing page that
+links into them rather than being a section itself:
+
+| Route | What |
+|---|---|
+| `/` | the hub — this week's ישב״צ, and a teaser per section |
+| `/quotes`, `/quotes/search`, `/quotes/create` | the quote wall: who said something, when, and what led to it |
+| `/meetups`, `/meetups/themes` | the weekly ישב״צ, the refreshment rotation, and the theme-guessing game |
+| `/login` | — |
+
+Navigation is exactly two levels, both in the header at every screen size: a
+**dropdown picks the section**, and a **tab bar moves around inside it**. There
+is no mobile bottom bar — the dropdown replaced it, which is what lets a section
+grow a fourth page without the nav being redesigned again. Below `sm` the tabs
+wrap to their own row rather than being squeezed into a strip too narrow to show
+one whole pill.
+
+### `src/lib/navigation.ts` is the single source of truth
+
+`SECTIONS` drives the dropdown, the tab bars **and** the hub's cards. **Adding a
+section is one entry there plus its route folder** — it then appears everywhere
+on its own. Optionally: register a richer hub card in the `teasers` map in
+`src/app/page.tsx` (without one the card falls back to the section's
+`description`), and give the page a `metadata.title` — the root layout's
+`title.template` appends `· מרכז הצוות`, so no page spells the suffix itself.
+
+Pages use `PageShell` + `PageHeader` (`src/components/page-shell.tsx`) rather
+than repeating the container and heading markup, so a new section inherits the
+measure and rhythm.
+
+Four things that bit here:
+
+- **Base UI radio items default to `closeOnClick: false`.** Right for the theme
+  picker, wrong for the section links: navigation is client-side, so without
+  the explicit prop the menu is left hanging over the page it just moved you to.
+- **A section owns its subtree, but `/` is a prefix of everything.** `sectionFor`
+  special-cases the root to an exact match; a naive `startsWith` lights up every
+  section at once. It also checks the `/` boundary, so a future `/quoteshub`
+  isn't swallowed by `/quotes`. Tabs match exactly, since each is one page.
+- **The tab bar is drawn only for `tabs.length > 1`.** A lone tab is a label for
+  the page you are already on.
+- **`HUB` is kept out of `SECTIONS`.** It is in the picker like a section but
+  owns no content, so the hub page maps `SECTIONS` without having to filter
+  itself out of its own card list.
 
 Public read, login to write: anyone who can reach the app can browse and search,
 but adding, editing and deleting need a session. Sign-in binds against the
-organisation's Active Directory over LDAP.
+organisation's Active Directory over LDAP. **The one read that still needs a
+session is `GET /api/directory`** — it is a window onto the whole staff
+directory, not app content, so it does not answer anonymously. The air-gapped
+posture accepts the `?q=` enumeration quotes already allow; that is not a licence
+to add a new, better one.
+
+### The rotation is persisted, keyed to the directory
+
+The **rotation is a single document.** The `rotation` collection holds exactly
+one row, `_id: "current"`, with an ordered `members: [{ userId, gender }]` array.
+Order *is* array position, so a reorder is one atomic `$set` and last-write-wins
+needs no conflict machinery — the later save simply winning is acceptable on a
+team this size. It is addressed only via `findOneAndUpdate({ _id: "current" }, …,
+{ upsert: true })`: a fresh database has no document, the first write creates it,
+and every read tolerates its absence and returns an empty rotation.
+
+The document owns **sequence and gender, nothing else.** Identity — name, title,
+`directoryId`, and the themes that FK against it — lives on the `users` row
+`members[i].userId` names, the same `_id` a theme references, so there is nothing
+to reconcile between the two. `getRotation` resolves the members to their rows;
+`GET /api/rotation` is a public read, like the wheel it feeds.
+
+| Module | Role |
+|---|---|
+| `src/lib/team.ts` | the meetup slot, the date arithmetic, `TEAM`, and the rotation math (`rotationIndex`, `rotate`, `buildRotation`) — client-safe |
+| `src/lib/roster.ts` | client-safe still: the `RosterMember` shape and the pure `moveItem`/`reorder` order helpers the drag depends on |
+| `src/lib/rotation.ts` | `server-only` Mongo layer: the singleton, `getRotation`, and the add/remove/reorder/set-gender mutations plus their Zod schemas |
+| `src/lib/directory-schema.ts` | client-safe `DirectoryPerson` — the four fields (`directoryId`, `displayName`, `title`, `username`) safe for the browser |
+
+**The directory search is real now.** `ldap.ts` grew `findPeople(query)` — a
+service-account substring search that escapes with `escapeFilterValue` *before*
+adding the `*` wildcards, refuses under two characters, and never opens a second
+bind or touches `badPwdCount` — and `findPersonById(directoryId)`, which encodes
+an objectGUID as `\xx` raw bytes in AD's mixed-endian order (`guidToBytes`, the
+tested inverse of `guidToString`; a string `entryUUID` is escaped plainly). Both
+throw on a directory fault and let a `ConfigError` propagate, so the route maps
+them to 503 vs 500 exactly like login. The **mock `src/lib/directory.ts` is
+deleted.**
+
+**The directory owns identity, the app owns membership.** Adding someone is
+*picking them out of the directory*, never typing a name: the client posts a
+`directoryId`, the route re-resolves the person with `findPersonById` and
+`upsertRosterUser` writes the row — so nothing a client typed lands in
+`users.displayName`, and they arrive carrying the objectGUID `users` is keyed on.
+Re-adding a removed member re-resolves to their **existing** row by `directoryId`
+rather than forking, so their `_id`, and every theme that references it, is
+unchanged.
+
+**Removing is forgetting.** A member spliced out of `members` is not remembered
+anywhere in this collection — no inactive flag, no "return to rotation" list, and
+the editor's "לא בסבב" / former-members section is gone. Their `users` row and
+every theme they brought survive untouched, so re-adding them via directory
+search restores their identity and history; only their gender is re-asked.
+Removing the **last** member is refused (409) — an empty rotation has nobody to
+bring the refreshments and no slot to render.
+
+Editing lives behind the pencil beside the wheel (`RotationEditor`), not on a
+page of its own — it changes the wheel, and it is not a team-management screen.
+Order is set by dragging the rows. Each action calls the REST API and then
+`router.refresh()`; the list stays optimistic so a drag doesn't wait on a round
+trip.
+
+Four things that bit here:
+
+- **The rotation is anchored to a date, not a stored cursor.** `ROTATION_ANCHOR`
+  plus the number of weeks elapsed gives whose turn it is, so every viewer sees
+  the same schedule and a week nobody opened the app doesn't desynchronise it.
+  The cost is that the turn is `weeksElapsed % rotationSize`, so **adding or
+  removing anyone moves everyone's upcoming turn** — visible immediately in the
+  editor. Past turns are safe; a theme records who actually brought it.
+- **"Now" is fixed by the server page and passed in as `nowIso`.** A
+  `new Date()` on both sides of hydration disagrees across a midnight or a week
+  boundary, and the roulette would hydrate onto a different person than it
+  rendered.
+- **The editor hands back the whole visible order, and `reorder` stores it.**
+  The list is drawn from whoever is up this week, so the row below you is not
+  the next entry of the stored order — at the wrap it is the first one. Turning
+  the displayed cycle back by the same offset is exact in a way that
+  translating an individual move is not.
+- **The drag is tracked on `window`, and moves nothing in the DOM.** The held
+  row is lifted and translated to follow the pointer while its neighbours step
+  aside by one row; the list only re-orders on drop. The whole row is the
+  handle, so `[data-no-drag]` marks the controls that keep their own gestures,
+  and the row itself is focusable and answers the arrow keys — there is no grip
+  to tab to. **On touch it takes a hold first** (`HOLD_MS`, cancelled by
+  movement past `HOLD_SLOP`): a row that grabbed on contact would take the
+  dialog's scroll with it, and refusing that scroll afterwards needs the
+  non-passive `touchmove` listener the drag effect adds.
+- **The wheel alternates two tones, which fails at an odd count** — the first
+  and last slice meet, and the rotation is editable, so odd is not an edge case.
+  `toneOf` gives the closing slice a third, neutral tone.
+
+**`getThemeRoster` reads the rotation now**, resolved to `users` rows — so the
+theme picker and the standings come from the same list the wheel does. That
+retired the `ROSTER_BRIDGE` display-name match and the empty-picker-on-unseeded-
+prod caveat both: the FK target and the picker are one source, the seed writes
+the singleton, and the editor fills it. One seam is left — `memberOn` (the
+themes-page "whose turn was it" header) still reads the hard-coded `TEAM`, so it
+can drift from the DB rotation if the two lists of the same eight ever diverge.
+It is a smaller seam than two rosters, and collapsing `TEAM` into the rotation is
+what finally closes it.
 
 ### It runs on an air-gapped network
 
@@ -131,6 +273,21 @@ in production on the grounds that the network is air-gapped; on anything routabl
 the one import. Pulling `@/lib/quotes` into a `"use client"` file drags the Mongo
 driver into the browser bundle.
 
+Themes are the same pattern: `src/lib/theme-schema.ts` is client-safe (`Theme`,
+`ThemePage`, `Standing`, `ThemeMember`, `themeInputSchema`, `placeOf`, and it
+reuses `dateOnly` from `quote-schema.ts`), and `src/lib/themes.ts` is the
+`server-only` Mongo layer that re-exports it. Standings are computed *there*,
+across every theme via aggregation — `getStandings`/`getThemeStats`, not a
+reduction over the loaded page, which would silently rank only what the client
+holds once the list paginates.
+
+The rotation splits the same way: `src/lib/roster.ts` is client-safe
+(`RosterMember`, `moveItem`, `reorder`) and `src/lib/directory-schema.ts` holds
+the client-safe `DirectoryPerson`, while `src/lib/rotation.ts` is the
+`server-only` Mongo layer (and re-exports `roster.ts`). The editor imports
+`DirectoryPerson` from `directory-schema.ts`, never from `ldap.ts` — pulling
+`ldap.ts` into a `"use client"` file would drag `ldapts` into the browser bundle.
+
 Auth mirrors the same split, with the same consequence — `ldapts` and `jose` in
 the browser bundle:
 
@@ -244,7 +401,12 @@ tree against the new cookie, and it costs one page load per login.
 ### Invariants worth not breaking
 
 - **`saidAt` is stored at UTC midnight and formatted in UTC** (`src/lib/format.ts`).
-  Formatting it in local time shifts the day backwards west of Greenwich.
+  Formatting it in local time shifts the day backwards west of Greenwich. Meetup
+  dates follow the same rule — `currentMeetup` does its weekday arithmetic in
+  UTC because `formatMeetupDate` renders in UTC.
+- **The meetup on meetup day is still "this week's".** Rolling the rotation over
+  at midnight tells whoever is bringing the refreshments that their turn is
+  eight days away, on the morning they are meant to bring them.
 - **Every entry in `sortSpecs` ends in `_id`.** Without a total order, offset
   pagination shows a quote twice or skips it when sort keys tie.
 - **Search escapes regex metacharacters** before building the `RegExp`. `.*` must

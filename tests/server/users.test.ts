@@ -9,6 +9,7 @@ const DANA: DirectoryUser = {
   username: "dana",
   upn: "dana@test.local",
   displayName: "דנה כהן",
+  title: "מפתחת",
   mail: "dana@test.local",
   dn: "CN=Dana Cohen,OU=Users,DC=test,DC=local",
 };
@@ -118,6 +119,7 @@ describe("upsertUserFromDirectory", () => {
       "dn",
       "lastLoginAt",
       "mail",
+      "title",
       "updatedAt",
       "upn",
       "username",

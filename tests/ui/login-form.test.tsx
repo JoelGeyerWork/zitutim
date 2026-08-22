@@ -142,10 +142,10 @@ describe("LoginForm", () => {
     // fire-and-forget, so a client navigation lands on a stale layout still
     // showing "כניסה".
     const user = userEvent.setup();
-    render(<LoginForm next="/create" />);
+    render(<LoginForm next="/quotes/create" />);
     await signIn(user);
 
-    await waitFor(() => expect(assign).toHaveBeenCalledWith("/create"));
+    await waitFor(() => expect(assign).toHaveBeenCalledWith("/quotes/create"));
   });
 
   it.each([

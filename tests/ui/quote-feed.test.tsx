@@ -41,7 +41,7 @@ describe("QuoteFeed", () => {
     expect(screen.getByText("הקיר עוד ריק")).toBeInTheDocument();
     expect(
       screen.getByRole("link", { name: /הוספת הציטוט הראשון/ }),
-    ).toHaveAttribute("href", "/create");
+    ).toHaveAttribute("href", "/quotes/create");
   });
 
   it("marks the end of a complete feed with a Hebrew count", () => {

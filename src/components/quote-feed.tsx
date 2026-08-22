@@ -121,7 +121,7 @@ function EmptyFeed() {
       {/* Styled as a button but left as a real link, so it keeps link
           semantics for assistive tech and open-in-new-tab. */}
       <Link
-        href="/create"
+        href="/quotes/create"
         className={cn(buttonVariants({ size: "lg" }), "mt-6 gap-2")}
       >
         <PlusIcon className="size-4" />

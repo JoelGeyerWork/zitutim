@@ -12,67 +12,62 @@ vi.mock("next/navigation", () => ({
   useRouter: () => ({ refresh }),
 }));
 
-/** The nav renders twice (desktop bar + mobile bar); scope to the desktop one. */
-function desktopNav() {
-  return within(screen.getByRole("banner"));
-}
-
 afterEach(() => {
   // next-themes writes on the real <html>, which persists between tests.
   document.documentElement.className = "";
 });
 
 describe("SiteNav", () => {
-  it("links to all three pages", () => {
-    render(<SiteNav />);
-    const nav = desktopNav();
-
-    expect(nav.getByRole("link", { name: /פיד/ })).toHaveAttribute("href", "/");
-    expect(nav.getByRole("link", { name: /חיפוש/ })).toHaveAttribute(
-      "href",
-      "/search",
-    );
-    expect(nav.getByRole("link", { name: /ציטוט חדש/ })).toHaveAttribute(
-      "href",
-      "/create",
-    );
-  });
-
-  it.each([
-    ["/", "פיד"],
-    ["/search", "חיפוש"],
-    ["/create", "ציטוט חדש"],
-  ])("marks %s as the current page", (pathname, label) => {
-    usePathname.mockReturnValue(pathname);
-    render(<SiteNav />);
-
-    const current = desktopNav().getByRole("link", {
-      name: new RegExp(label),
-    });
-    expect(current).toHaveAttribute("aria-current", "page");
-  });
-
-  it("marks only one page as current at a time", () => {
-    usePathname.mockReturnValue("/search");
-    render(<SiteNav />);
-
-    const currents = screen
-      .getAllByRole("link")
-      .filter((link) => link.getAttribute("aria-current") === "page");
-    // One in the desktop bar, one in the mobile bar — same destination.
-    expect(currents).toHaveLength(2);
-    expect(new Set(currents.map((link) => link.getAttribute("href")))).toEqual(
-      new Set(["/search"]),
-    );
-  });
-
   it("always links the wordmark home", () => {
-    usePathname.mockReturnValue("/create");
+    usePathname.mockReturnValue("/quotes/create");
     render(<SiteNav />);
-    expect(desktopNav().getByRole("link", { name: /ציטוטים/ })).toHaveAttribute(
+
+    expect(screen.getByRole("link", { name: "מרכז הצוות" })).toHaveAttribute(
       "href",
       "/",
     );
+  });
+
+  it("shows the section's own tabs, with the current one marked", () => {
+    usePathname.mockReturnValue("/meetups/themes");
+    render(<SiteNav />);
+
+    const tabs = within(screen.getByRole("navigation", { name: "ישבצ״ים" }));
+    expect(tabs.getByRole("link", { name: "התור" })).toHaveAttribute(
+      "href",
+      "/meetups",
+    );
+
+    const current = tabs.getByRole("link", { name: "נושאי הכיבוד" });
+    expect(current).toHaveAttribute("aria-current", "page");
+    expect(
+      tabs
+        .getAllByRole("link")
+        .filter((tab) => tab.getAttribute("aria-current") === "page"),
+    ).toHaveLength(1);
+  });
+
+  it("leaves the hub without a tab bar", () => {
+    usePathname.mockReturnValue("/");
+    render(<SiteNav />);
+
+    expect(screen.queryByRole("navigation")).toBeNull();
+  });
+
+  // Base UI radio items do not close the menu on click, so the section links
+  // pass closeOnClick. Without it the menu is left hanging over the page it
+  // just navigated to — invisible in a render test, hence the explicit check.
+  it("closes the section menu when a section is chosen", async () => {
+    const user = userEvent.setup();
+    usePathname.mockReturnValue("/quotes");
+    render(<SiteNav />);
+
+    await user.click(screen.getByRole("button", { name: /ציטוטים/ }));
+    const item = await screen.findByRole("menuitemradio", { name: "ישבצ״ים" });
+    expect(item).toHaveAttribute("href", "/meetups");
+
+    await user.click(item);
+    expect(screen.queryByRole("menuitemradio")).toBeNull();
   });
 
   // next-themes' useTheme() falls back to an inert no-op setter when there is

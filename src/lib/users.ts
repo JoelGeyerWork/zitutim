@@ -4,6 +4,7 @@ import { ObjectId, type Collection } from "mongodb";
 
 import { getDb } from "@/lib/mongodb";
 import { type DirectoryUser } from "@/lib/ldap";
+import { type DirectoryPerson } from "@/lib/directory-schema";
 import { type SessionUser } from "@/lib/auth-schema";
 
 export * from "@/lib/auth-schema";
@@ -29,6 +30,8 @@ export interface UserDoc {
   upn: string | null;
   /** The source of the `addedBy` snapshot written onto a quote. */
   displayName: string;
+  /** Job title, rendered beside the name wherever a roster member is shown. */
+  title: string | null;
   mail: string | null;
   /** Last-seen distinguishedName. Changes when the object moves OU. */
   dn: string;
@@ -68,6 +71,7 @@ export async function upsertUserFromDirectory(
       username: profile.username,
       upn: profile.upn,
       displayName: profile.displayName,
+      title: profile.title,
       mail: profile.mail,
       dn: profile.dn,
       updatedAt: now,
@@ -109,4 +113,67 @@ export async function getUser(id: string): Promise<SessionUser | null> {
   const collection = await users();
   const doc = await collection.findOne({ _id: new ObjectId(id) });
   return doc ? toSessionUser(doc) : null;
+}
+
+/**
+ * Upsert the `users` row for someone being added to the rotation, keyed on the
+ * same `directoryId`. Returns their `users._id` — the value a rotation member
+ * and a theme both point at.
+ *
+ * Deliberately *not* `upsertUserFromDirectory`: adding someone to the rotation
+ * is not a login, so it must neither advance `lastLoginAt` nor overwrite the
+ * `upn`/`mail`/`dn` a real sign-in already filled in. It only refreshes the
+ * three fields the directory search actually returns, and seeds the rest on
+ * first insert. Reusing the existing row by `directoryId` is the whole point:
+ * re-adding a removed member lands on their original `_id`, so their past
+ * themes still attribute to them.
+ */
+export async function upsertRosterUser(
+  person: DirectoryPerson,
+  now: Date = new Date(),
+): Promise<string> {
+  const collection = await users();
+
+  const update = {
+    $set: {
+      username: person.username,
+      displayName: person.displayName,
+      title: person.title,
+      updatedAt: now,
+    },
+    $setOnInsert: {
+      directoryId: person.directoryId,
+      upn: null,
+      mail: null,
+      // Filled in for real the first time this person signs in; a roster member
+      // who never logs in never needs to bind, and themes reference `_id`.
+      dn: "",
+      createdAt: now,
+      lastLoginAt: now,
+    },
+  };
+
+  try {
+    const doc = await collection.findOneAndUpdate(
+      { directoryId: person.directoryId },
+      update,
+      { upsert: true, returnDocument: "after" },
+    );
+    return doc!._id.toHexString();
+  } catch (error) {
+    // The same racing-insert collision `upsertUserFromDirectory` guards against.
+    if (
+      error &&
+      typeof error === "object" &&
+      (error as { code?: number }).code === 11000
+    ) {
+      const doc = await collection.findOneAndUpdate(
+        { directoryId: person.directoryId },
+        update,
+        { upsert: true, returnDocument: "after" },
+      );
+      return doc!._id.toHexString();
+    }
+    throw error;
+  }
 }
