@@ -2,6 +2,7 @@ import { ObjectId } from "mongodb";
 import { beforeEach, describe, expect, it } from "vitest";
 
 import { getDb } from "@/lib/mongodb";
+import { type RotationDoc } from "@/lib/rotation";
 import {
   createTheme,
   deleteTheme,
@@ -41,7 +42,12 @@ const OFF_ROSTER = {
   displayName: "רועי אשכנזי",
 };
 
-/** Seed users and return a name → users._id (hex) map for the fixtures. */
+/**
+ * Seed users, put the eight ROSTER members in the rotation document (the roster
+ * `getThemeRoster` now reads), and return a name → users._id (hex) map. The
+ * off-roster person is deliberately left out of the rotation — they only appear
+ * in the standings through a theme snapshot, the way a departed guesser does.
+ */
 async function seedUsers(): Promise<Record<string, string>> {
   const db = await getDb();
   const now = new Date();
@@ -52,6 +58,7 @@ async function seedUsers(): Promise<Record<string, string>> {
       username: member.displayName,
       upn: null,
       displayName: member.displayName,
+      title: "חבר צוות",
       mail: null,
       dn: `CN=${member.directoryId}`,
       createdAt: now,
@@ -60,6 +67,16 @@ async function seedUsers(): Promise<Record<string, string>> {
     });
     ids[member.displayName] = result.insertedId.toHexString();
   }
+
+  await db.collection<RotationDoc>("rotation").insertOne({
+    _id: "current",
+    members: ROSTER.map((member) => ({
+      userId: new ObjectId(ids[member.displayName]),
+      gender: "f" as const,
+    })),
+    updatedAt: now,
+  });
+
   return ids;
 }
 
@@ -88,6 +105,7 @@ beforeEach(async () => {
   const db = await getDb();
   await db.collection("themes").deleteMany({});
   await db.collection("users").deleteMany({});
+  await db.collection("rotation").deleteMany({});
   // The memory-server never runs the seed, so indexes are whatever a prior test
   // created. Reset to none (bar `_id`) so the unique-date index is a per-test
   // opt-in — the tie-pagination test deliberately needs same-date rows.

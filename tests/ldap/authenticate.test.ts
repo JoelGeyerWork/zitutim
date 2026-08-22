@@ -64,6 +64,8 @@ describe.skipIf(!up)("authenticate against a real directory", () => {
         username: "dana",
         upn: null,
         displayName: "דנה כהן",
+        // No title attribute on the seeded entry.
+        title: null,
         mail: "dana@test.local",
         dn: "uid=dana,ou=people,dc=test,dc=local",
       },

@@ -1,11 +1,8 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import {
-  MoreHorizontalIcon,
-  SearchIcon,
-  UserPlusIcon,
-} from "lucide-react";
+import { usePathname, useRouter } from "next/navigation";
+import { MoreHorizontalIcon, SearchIcon, UserPlusIcon } from "lucide-react";
 import { toast } from "sonner";
 
 import { PersonAvatar } from "@/components/person-avatar";
@@ -26,66 +23,153 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { formatMeetupDate, plural } from "@/lib/format";
-import { searchDirectory, type DirectoryPerson } from "@/lib/directory";
-import { fromDirectory, moveItem, type RosterMember } from "@/lib/roster";
-import { type MeetupSlot, type Member } from "@/lib/team";
+import { type DirectoryPerson } from "@/lib/directory-schema";
+import { moveItem, reorder, type RosterMember } from "@/lib/roster";
+import { rotate, type MeetupSlot } from "@/lib/team";
 import { cn } from "@/lib/utils";
+
+type Gender = "m" | "f";
+
+const JSON_HEADERS = { "Content-Type": "application/json" };
 
 /**
  * Editing the refreshment rotation: who is on the wheel, and in what order.
  *
  * Not a team-management screen. Nobody is created or deleted here — a person
  * exists in the organisation's directory whether or not they bring snacks, and
- * all this decides is which of them the wheel turns through.
+ * all this decides is which of them the wheel turns through. Removing is
+ * *forgetting*: there is no inactive state, no "return to rotation" list. To
+ * bring someone back you find them in the directory again; the add lands on
+ * their existing `users` row, so their past themes still attribute to them.
  *
- * Everything one dialog rather than a nested one, so adding somebody is a step
- * inside the list it changes rather than a second window over it.
+ * Every action calls the API and then `router.refresh()`. The list stays
+ * optimistic so a drag or a gender flip feels instant — a spinner between each
+ * would be worse than a stale row for a beat.
  */
 export function RotationEditor({
   open,
   onOpenChange,
   roster,
-  queue,
   slots,
-  onChange,
-  onReorder,
+  offset,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  /** The stored rotation, resolved off the server page. Stable across renders. */
   roster: RosterMember[];
-  /** The rotation from whoever is up this week — the order people think in. */
-  queue: RosterMember[];
-  /** `queue[i]`'s next turn. Computed by the caller, which owns "now". */
+  /** The next turn per *displayed* row. Computed by the caller, which owns "now". */
   slots: MeetupSlot[];
-  onChange: (roster: RosterMember[]) => void;
-  /** Hands back the whole visible order; the caller stores it. */
-  onReorder: (queue: RosterMember[]) => void;
+  /** Turns the displayed cycle back into the stored order for a reorder. */
+  offset: number;
 }) {
+  const router = useRouter();
+  const pathname = usePathname();
+  const loginHref = `/login?next=${encodeURIComponent(pathname)}`;
+
   const [adding, setAdding] = useState(false);
   const [picked, setPicked] = useState<DirectoryPerson | null>(null);
 
-  function add(person: DirectoryPerson, gender: Member["gender"]) {
-    onChange([...roster, fromDirectory(person, gender)]);
-    toast.success(`${person.displayName} נוספו לסבב`);
-    close();
+  // A local optimistic copy of the displayed order — whoever is up this week
+  // first — re-seeded whenever the server hands down a fresh `roster` (after a
+  // `router.refresh()`). Seed-compared on the stable `roster` identity, like
+  // `QuoteFeed`, adjusted during render rather than in an effect.
+  const [order, setOrder] = useState(() => rotate(roster, offset));
+  const [seed, setSeed] = useState(roster);
+  if (seed !== roster) {
+    setSeed(roster);
+    setOrder(rotate(roster, offset));
   }
 
-  function setActive(id: string, value: boolean) {
-    onChange(
-      roster.map((member) =>
-        member.id === id ? { ...member, active: value } : member,
-      ),
-    );
-    toast.success(value ? "חזרו לסבב" : "הוצאו מהסבב");
-    if (value) close();
+  /** 401 means the session lapsed; the API is the enforcement, so go sign in. */
+  function guard(status: number): boolean {
+    if (status === 401) {
+      router.push(loginHref);
+      return false;
+    }
+    return true;
   }
 
-  function setGender(id: string, gender: Member["gender"]) {
-    onChange(
-      roster.map((member) =>
+  async function reorderTo(next: RosterMember[]) {
+    setOrder(next); // optimistic — the drag has to feel immediate
+    const ids = reorder(next, offset).map((member) => member.id);
+    try {
+      const response = await fetch("/api/rotation/order", {
+        method: "PUT",
+        headers: JSON_HEADERS,
+        body: JSON.stringify({ ids }),
+      });
+      if (!guard(response.status)) return;
+      if (!response.ok) toast.error("לא הצלחנו לשמור את הסדר");
+      router.refresh();
+    } catch {
+      toast.error("לא הצלחנו לשמור את הסדר");
+      router.refresh();
+    }
+  }
+
+  async function changeGender(id: string, gender: Gender) {
+    setOrder((current) =>
+      current.map((member) =>
         member.id === id ? { ...member, gender } : member,
       ),
     );
+    try {
+      const response = await fetch(`/api/rotation/${id}`, {
+        method: "PATCH",
+        headers: JSON_HEADERS,
+        body: JSON.stringify({ gender }),
+      });
+      if (!guard(response.status)) return;
+      if (!response.ok) toast.error("לא הצלחנו לעדכן");
+      router.refresh();
+    } catch {
+      toast.error("לא הצלחנו לעדכן");
+      router.refresh();
+    }
+  }
+
+  async function remove(id: string) {
+    try {
+      const response = await fetch(`/api/rotation/${id}`, {
+        method: "DELETE",
+        headers: JSON_HEADERS,
+      });
+      if (!guard(response.status)) return;
+      if (response.status === 409) {
+        toast.error("צריך שיישאר לפחות אדם אחד בסבב");
+      } else if (!response.ok) {
+        toast.error("לא הצלחנו להוציא מהסבב");
+      } else {
+        toast.success("הוצאו מהסבב");
+      }
+      router.refresh();
+    } catch {
+      toast.error("לא הצלחנו להוציא מהסבב");
+      router.refresh();
+    }
+  }
+
+  async function add(person: DirectoryPerson, gender: Gender) {
+    try {
+      const response = await fetch("/api/rotation", {
+        method: "POST",
+        headers: JSON_HEADERS,
+        body: JSON.stringify({ directoryId: person.directoryId, gender }),
+      });
+      if (!guard(response.status)) return;
+      if (response.status === 409) {
+        toast.error(`${person.displayName} כבר בסבב`);
+      } else if (!response.ok) {
+        toast.error("לא הצלחנו להוסיף לסבב");
+      } else {
+        toast.success(`${person.displayName} נוספו לסבב`);
+      }
+      router.refresh();
+    } catch {
+      toast.error("לא הצלחנו להוסיף לסבב");
+      router.refresh();
+    }
+    close();
   }
 
   function close() {
@@ -114,21 +198,17 @@ export function RotationEditor({
         {picked ? (
           <Confirm
             person={picked}
-            rotationSize={queue.length}
+            rotationSize={order.length}
             onBack={() => setPicked(null)}
             onConfirm={(gender) => add(picked, gender)}
           />
         ) : adding ? (
-          <Search
-            roster={roster}
-            onPick={setPicked}
-            onRestore={(id) => setActive(id, true)}
-          />
+          <Search members={order} loginHref={loginHref} onPick={setPicked} />
         ) : (
           <div className="min-w-0 space-y-4">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <p className="text-muted-foreground text-sm">
-                {plural(queue.length, "אדם אחד", "אנשים")} בסבב
+                {plural(order.length, "אדם אחד", "אנשים")} בסבב
               </p>
               <Button
                 size="sm"
@@ -141,19 +221,16 @@ export function RotationEditor({
             </div>
 
             <Sortable
-              queue={queue}
+              queue={order}
               slots={slots}
-              onReorder={onReorder}
-              onGender={setGender}
-              onRemove={(id) => setActive(id, false)}
+              onReorder={reorderTo}
+              onGender={changeGender}
+              onRemove={remove}
             />
 
-            <Former roster={roster} onRestore={(id) => setActive(id, true)} />
-
             <p className="text-muted-foreground text-xs text-balance">
-              השם והתפקיד מגיעים מספריית הארגון ומתעדכנים משם. הסדר, לשון
-              הפנייה וההשתתפות בסבב נקבעים כאן — ומי שיוצא מהסבב נשאר רשום על
-              נושאי הכיבוד שהביא.
+              השם והתפקיד מגיעים מספריית הארגון ומתעדכנים משם. הסדר ולשון הפנייה
+              נקבעים כאן — ומי שיוצא מהסבב נשאר רשום על נושאי הכיבוד שהביא.
             </p>
           </div>
         )}
@@ -187,7 +264,7 @@ function Sortable({
   queue: RosterMember[];
   slots: MeetupSlot[];
   onReorder: (queue: RosterMember[]) => void;
-  onGender: (id: string, gender: Member["gender"]) => void;
+  onGender: (id: string, gender: Gender) => void;
   onRemove: (id: string) => void;
 }) {
   const list = useRef<HTMLOListElement>(null);
@@ -332,7 +409,7 @@ function Sortable({
             className={cn(
               "relative flex flex-wrap items-center gap-3 px-3 py-3 sm:flex-nowrap sm:px-4",
               "cursor-grab touch-pan-y outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary/40",
-              turn.weeksAway === 0 && "bg-accent/60",
+              turn?.weeksAway === 0 && "bg-accent/60",
               held
                 ? // Lifted out of the list and tracking the pointer directly,
                   // so it gets no transition of its own. The ring is inset
@@ -347,12 +424,12 @@ function Sortable({
               <p className="truncate text-sm font-medium">{member.name}</p>
               <p className="text-muted-foreground truncate text-xs">
                 {member.role}
-                {" · "}
-                {turn.weeksAway === 0 ? (
+                {member.role && turn ? " · " : null}
+                {turn?.weeksAway === 0 ? (
                   <span className="text-foreground font-medium">השבוע</span>
-                ) : (
+                ) : turn ? (
                   formatMeetupDate(turn.date)
-                )}
+                ) : null}
               </p>
             </div>
 
@@ -396,63 +473,72 @@ function Sortable({
   );
 }
 
-function Former({
-  roster,
-  onRestore,
-}: {
-  roster: RosterMember[];
-  onRestore: (id: string) => void;
-}) {
-  const former = roster.filter((member) => !member.active);
-  if (former.length === 0) return null;
-
-  return (
-    <details className="rounded-xl border px-3 py-2.5 sm:px-4">
-      <summary className="text-muted-foreground cursor-pointer text-xs font-semibold">
-        לא בסבב ({former.length})
-      </summary>
-      <ul className="mt-2 divide-y">
-        {former.map((member) => (
-          <li key={member.id} className="flex items-center gap-3 py-2.5">
-            <PersonAvatar name={member.name} className="size-9 text-sm" />
-            <div className="min-w-0 flex-1">
-              <p className="truncate text-sm">{member.name}</p>
-              <p className="text-muted-foreground truncate text-xs">
-                {member.role}
-              </p>
-            </div>
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={() => onRestore(member.id)}
-            >
-              החזרה לסבב
-            </Button>
-          </li>
-        ))}
-      </ul>
-    </details>
-  );
-}
-
 /**
  * Adding somebody is picking them out of the directory, never typing a name —
  * so they arrive with their real objectGUID, and the rotation entry and the row
  * their next sign-in touches are the same row.
  */
 function Search({
-  roster,
+  members,
+  loginHref,
   onPick,
-  onRestore,
 }: {
-  roster: RosterMember[];
+  members: RosterMember[];
+  loginHref: string;
   onPick: (person: DirectoryPerson) => void;
-  onRestore: (id: string) => void;
 }) {
+  const router = useRouter();
   const [query, setQuery] = useState("");
+  const [results, setResults] = useState<DirectoryPerson[]>([]);
+  // Which trimmed query `results`/`errored` describe. "loading" is then a render
+  // derivation rather than a synchronous setState in the effect — an error in
+  // this config, the same rule `QuoteFeed` works around.
+  const [resolvedFor, setResolvedFor] = useState("");
+  const [errored, setErrored] = useState(false);
 
-  const results = searchDirectory(query);
-  const known = new Map(roster.map((member) => [member.directoryId, member]));
+  const trimmed = query.trim();
+
+  useEffect(() => {
+    const q = query.trim();
+    if (q.length < 2) return;
+
+    // Debounced, so a fast typist issues one request rather than one a keystroke
+    // — the two-character floor is also the server's rule. Every setState is
+    // inside the async callback; the effect body itself sets none.
+    const handle = setTimeout(async () => {
+      try {
+        const response = await fetch(
+          `/api/directory?q=${encodeURIComponent(q)}`,
+        );
+        if (response.status === 401) {
+          router.push(loginHref);
+          return;
+        }
+        if (!response.ok) {
+          setResults([]);
+          setErrored(true);
+          setResolvedFor(q);
+          return;
+        }
+        const data: { people: DirectoryPerson[] } = await response.json();
+        setResults(data.people);
+        setErrored(false);
+        setResolvedFor(q);
+      } catch {
+        setResults([]);
+        setErrored(true);
+        setResolvedFor(q);
+      }
+    }, 300);
+
+    return () => clearTimeout(handle);
+  }, [query, loginHref, router]);
+
+  const known = new Set(members.map((member) => member.directoryId));
+  const short = trimmed.length < 2;
+  // Results and the error flag apply only once they are for the query on screen;
+  // until then the search is still in flight.
+  const loading = !short && resolvedFor !== trimmed;
 
   return (
     <div className="min-w-0 space-y-4">
@@ -468,9 +554,17 @@ function Search({
         />
       </div>
 
-      {query.trim().length < 2 ? (
+      {short ? (
         <p className="text-muted-foreground py-6 text-center text-sm">
           לפחות שתי אותיות.
+        </p>
+      ) : loading ? (
+        <p className="text-muted-foreground py-6 text-center text-sm">
+          מחפשים…
+        </p>
+      ) : errored ? (
+        <p className="text-muted-foreground py-6 text-center text-sm">
+          לא הצלחנו לחפש בספרייה.
         </p>
       ) : results.length === 0 ? (
         <p className="text-muted-foreground py-6 text-center text-sm">
@@ -479,14 +573,14 @@ function Search({
       ) : (
         <ul className="divide-y rounded-xl border">
           {results.map((person) => {
-            const member = known.get(person.directoryId);
+            const inRotation = known.has(person.directoryId);
 
             return (
               <li
                 key={person.directoryId}
                 className={cn(
                   "flex items-center gap-3 px-3 py-3 sm:px-4",
-                  member?.active && "opacity-55",
+                  inRotation && "opacity-55",
                 )}
               >
                 <PersonAvatar name={person.displayName} className="size-10" />
@@ -496,28 +590,17 @@ function Search({
                     {person.displayName}
                   </p>
                   <p className="text-muted-foreground truncate text-xs">
-                    {person.title}
-                    {" · "}
+                    {person.title ? `${person.title} · ` : null}
                     <span dir="ltr" className="font-mono">
                       {person.username}
                     </span>
                   </p>
                 </div>
 
-                {member?.active ? (
+                {inRotation ? (
                   <Badge variant="secondary" className="shrink-0 font-normal">
                     כבר בסבב
                   </Badge>
-                ) : member ? (
-                  // Same person, already on file. Restoring keeps the id their
-                  // past themes point at; a second entry would strand them.
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => onRestore(member.id)}
-                  >
-                    החזרה לסבב
-                  </Button>
                 ) : (
                   <Button size="sm" onClick={() => onPick(person)}>
                     הוספה
@@ -546,9 +629,9 @@ function Confirm({
   person: DirectoryPerson;
   rotationSize: number;
   onBack: () => void;
-  onConfirm: (gender: Member["gender"]) => void;
+  onConfirm: (gender: Gender) => void;
 }) {
-  const [gender, setGender] = useState<Member["gender"]>("f");
+  const [gender, setGender] = useState<Gender>("f");
 
   return (
     <div className="min-w-0 space-y-5">
@@ -557,8 +640,7 @@ function Confirm({
         <div className="min-w-0">
           <p className="truncate text-sm font-medium">{person.displayName}</p>
           <p className="text-muted-foreground truncate text-xs">
-            {person.title}
-            {" · "}
+            {person.title ? `${person.title} · ` : null}
             <span dir="ltr" className="font-mono">
               {person.username}
             </span>
@@ -599,8 +681,8 @@ function GenderChoice({
   onChange,
   className,
 }: {
-  value: Member["gender"];
-  onChange: (gender: Member["gender"]) => void;
+  value: Gender;
+  onChange: (gender: Gender) => void;
   className?: string;
 }) {
   return (

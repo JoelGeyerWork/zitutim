@@ -6,6 +6,9 @@ import type { ConnectionOptions } from "node:tls";
 import { Client, type Entry } from "ldapts";
 
 import { ConfigError } from "@/lib/config-error";
+import { type DirectoryPerson } from "@/lib/directory-schema";
+
+export { type DirectoryPerson } from "@/lib/directory-schema";
 
 /** What we keep from a directory entry. Everything else is deliberately dropped. */
 export interface DirectoryUser {
@@ -16,6 +19,8 @@ export interface DirectoryUser {
   /** userPrincipalName, lowercased. */
   upn: string | null;
   displayName: string;
+  /** Job title, shown beside the name on the wheel and the roster editor. */
+  title: string | null;
   mail: string | null;
   /** distinguishedName as the server returned it. Changes when the object moves. */
   dn: string;
@@ -55,6 +60,7 @@ export type VerifyResult =
 const BASE_ATTRIBUTES = [
   "displayName",
   "cn",
+  "title",
   "mail",
   "userPrincipalName",
   "distinguishedName",
@@ -279,6 +285,55 @@ export function guidToString(buffer: Buffer): string {
   ].join("-");
 }
 
+/**
+ * The exact inverse of `guidToString`: canonical dashed string back to the 16
+ * raw bytes AD stores. Needed because a filter matching objectGUID must carry
+ * those raw bytes — the dashed string matches nothing. The first three fields
+ * were read little-endian and the last two big-endian, so the same three fields
+ * get their byte order reversed on the way back. Tested as a round-trip against
+ * `guidToString` rather than one hand-copied constant, since the two only agree
+ * if they invert the same permutation.
+ */
+export function guidToBytes(guid: string): Buffer {
+  const hex = guid.replace(/-/g, "");
+  if (!/^[0-9a-f]{32}$/i.test(hex)) {
+    throw new Error(`not a canonical GUID string: ${guid}`);
+  }
+
+  // Bytes as they appear in the *string*, before undoing the endianness.
+  const s = Buffer.from(hex, "hex");
+  const out = Buffer.alloc(16);
+
+  // field 1 (string bytes 0-3) was little-endian; reverse it.
+  out[0] = s[3]!;
+  out[1] = s[2]!;
+  out[2] = s[1]!;
+  out[3] = s[0]!;
+  // field 2 (4-5) little-endian.
+  out[4] = s[5]!;
+  out[5] = s[4]!;
+  // field 3 (6-7) little-endian.
+  out[6] = s[7]!;
+  out[7] = s[6]!;
+  // fields 4-5 (8-15) were big-endian, i.e. as-is.
+  s.copy(out, 8, 8, 16);
+
+  return out;
+}
+
+/**
+ * A GUID as an LDAP filter assertion value: the 16 raw bytes, each as a `\xx`
+ * escape. RFC 4515 §3 already treats these pairs as the literal byte, so no
+ * further escaping is applied — the bytes are the value.
+ */
+export function guidFilterValue(guid: string): string {
+  let out = "";
+  for (const byte of guidToBytes(guid)) {
+    out += "\\" + byte.toString(16).padStart(2, "0");
+  }
+  return out;
+}
+
 /** Entry values arrive as string, string[], Buffer or Buffer[] depending on the attribute. */
 function firstString(value: Entry[string] | undefined): string | null {
   if (value === undefined) return null;
@@ -464,6 +519,7 @@ export async function findUser(username: string): Promise<FindUserResult> {
         upn: firstString(entry.userPrincipalName)?.toLowerCase() ?? null,
         displayName:
           firstString(entry.displayName) ?? firstString(entry.cn) ?? resolved,
+        title: firstString(entry.title),
         mail: firstString(entry.mail)?.toLowerCase() ?? null,
         dn: firstString(entry.distinguishedName) ?? entry.dn,
       },
@@ -547,5 +603,149 @@ export async function authenticate(
   if (!verified.ok) return verified;
 
   return { ok: true, user: found.user };
+}
+
+/** A search entry mapped to the four client-safe `DirectoryPerson` fields. */
+function toDirectoryPerson(
+  entry: Entry,
+  settings: LdapConfig,
+): DirectoryPerson | null {
+  const idIsBinary = settings.idAttr.toLowerCase() === BINARY_ID_ATTR;
+  const rawId = entry[settings.idAttr];
+  const directoryId = idIsBinary
+    ? firstBufferAsGuid(rawId)
+    : firstString(rawId)?.toLowerCase();
+
+  const username = firstString(entry[settings.loginAttrs[0]!]);
+  if (!directoryId || !username) return null;
+
+  return {
+    directoryId,
+    displayName:
+      firstString(entry.displayName) ?? firstString(entry.cn) ?? username,
+    title: firstString(entry.title),
+    username: username.toLowerCase(),
+  };
+}
+
+/**
+ * One read on the service-account bind. Shared by both directory lookups below,
+ * and deliberately the *same* read-only bind `findUser` uses: it authenticates
+ * as nobody's account, so it can never touch a colleague's `badPwdCount`. There
+ * is no second bind here — resolving a person for the roster never needs their
+ * password.
+ */
+async function searchAsService(
+  settings: LdapConfig,
+  filter: string,
+  sizeLimit: number,
+): Promise<Entry[]> {
+  const idIsBinary = settings.idAttr.toLowerCase() === BINARY_ID_ATTR;
+
+  let client: Client | undefined;
+  try {
+    client = await connect(settings);
+    await client.bind(settings.bindDN, settings.bindPassword);
+    const result = await client.search(settings.baseDN, {
+      scope: "sub",
+      filter,
+      attributes: [...BASE_ATTRIBUTES, settings.idAttr, ...settings.loginAttrs],
+      // Same reasoning as findUser: only objectGUID is asked for as raw bytes.
+      explicitBufferAttributes: idIsBinary ? [settings.idAttr] : [],
+      sizeLimit,
+      timeLimit: 5,
+    });
+    return result.searchEntries;
+  } finally {
+    await client?.unbind().catch(() => {});
+  }
+}
+
+/**
+ * Substring search of the directory for the roster editor.
+ *
+ * A `ConfigError` from the lazy config reader propagates (the route maps it to
+ * `misconfigured` → 500); a directory failure is logged and rethrown as a
+ * generic error (→ `unavailable` → 503). Success is a plain array — `[]` on no
+ * match.
+ */
+export async function findPeople(query: string): Promise<DirectoryPerson[]> {
+  const trimmed = query.trim();
+  // A one-character substring matches most of the company; refuse before opening
+  // a connection, which is also the route's own rule (§7.1).
+  if (trimmed.length < 2) return [];
+
+  const settings = config();
+
+  // Escape the value *before* wrapping it in the `*` wildcards, never after —
+  // the invariant `escapeRegex` has for search. Unescaped, `admin)(objectClass=*`
+  // restructures the `(|...)` into a match on the first user in the directory.
+  const escaped = escapeFilterValue(trimmed);
+  const attrs = [...new Set(["displayName", ...settings.loginAttrs])];
+  const clauses = attrs.map((attr) => `(${attr}=*${escaped}*)`).join("");
+  const filter = `(&${settings.userFilter}(|${clauses}))`;
+
+  let entries: Entry[];
+  try {
+    entries = await searchAsService(settings, filter, 25);
+  } catch (error) {
+    console.error("LDAP people search failed", error);
+    throw new Error("directory unavailable");
+  }
+
+  const people: DirectoryPerson[] = [];
+  for (const entry of entries) {
+    const person = toDirectoryPerson(entry, settings);
+    if (person) people.push(person);
+  }
+  return people;
+}
+
+/**
+ * Re-resolve one person by their immutable id, so the server writes the roster
+ * row's fields itself rather than trusting anything the client typed.
+ *
+ * With a string id (`entryUUID`) the value is an ordinary escaped equality. With
+ * `objectGUID` it has to be the 16 raw bytes as `\xx` pairs in AD's mixed-endian
+ * order — see `guidFilterValue`. Chosen over re-reading by `dn` with
+ * `scope: "base"` so the id, not a transient DN, stays the key everything hangs
+ * off. Returns null when nobody (or more than one) matches.
+ */
+export async function findPersonById(
+  directoryId: string,
+): Promise<DirectoryPerson | null> {
+  const trimmed = directoryId.trim();
+  if (!trimmed) return null;
+
+  const settings = config();
+  const idIsBinary = settings.idAttr.toLowerCase() === BINARY_ID_ATTR;
+
+  let value: string;
+  if (idIsBinary) {
+    try {
+      value = guidFilterValue(trimmed);
+    } catch {
+      // Not a canonical GUID string — it can match nobody, and that is the
+      // caller's "unknown id", not a fault.
+      return null;
+    }
+  } else {
+    value = escapeFilterValue(trimmed);
+  }
+
+  const filter = `(&${settings.userFilter}(${settings.idAttr}=${value}))`;
+
+  let entries: Entry[];
+  try {
+    entries = await searchAsService(settings, filter, 2);
+  } catch (error) {
+    console.error("LDAP id lookup failed", error);
+    throw new Error("directory unavailable");
+  }
+
+  // Exactly one, or nobody: an id colliding is a directory bug we refuse to
+  // guess through, the same stance findUser takes.
+  if (entries.length !== 1) return null;
+  return toDirectoryPerson(entries[0]!, settings);
 }
 

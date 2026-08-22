@@ -3,8 +3,7 @@ import "server-only";
 import { ObjectId, type Collection } from "mongodb";
 
 import { getDb } from "@/lib/mongodb";
-import { DIRECTORY } from "@/lib/directory";
-import { TEAM, type Member } from "@/lib/team";
+import { getRotation } from "@/lib/rotation";
 import { type UserDoc } from "@/lib/users";
 import {
   THEME_PAGE_SIZE,
@@ -75,31 +74,6 @@ async function usersCollection(): Promise<Collection<UserDoc>> {
   const db = await getDb();
   return db.collection<UserDoc>("users");
 }
-
-/**
- * The roster whose people a theme can name. This is the *minimum* the FK forces
- * (see the spec): the hard-coded `TEAM` bridged to the directory GUID each
- * member is keyed on in `users`, so `broughtById`/`guessedById` point at a real
- * document. The directory owns identity; matching by display name is exact and
- * offline, and reuses the same GUIDs `roster.ts` and the seed use — so a roster
- * member who later signs in through LDAP lands on the very same `users` row.
- *
- * Rotation *order*, membership editing and the LDAP roster search stay out —
- * they are the separate roster spec.
- */
-const directoryIdByName = new Map(
-  DIRECTORY.map((person) => [person.displayName, person.directoryId]),
-);
-
-const ROSTER_BRIDGE: { member: Member; directoryId: string }[] = TEAM.map(
-  (member) => {
-    const directoryId = directoryIdByName.get(member.name);
-    if (!directoryId) {
-      throw new Error(`No directory entry for team member ${member.name}`);
-    }
-    return { member, directoryId };
-  },
-);
 
 /**
  * Every spec ends in `_id`: without a total order, offset pagination shows a
@@ -259,28 +233,23 @@ export async function deleteTheme(id: string): Promise<boolean> {
 }
 
 /**
- * The roster enriched with real `users._id`s, for the picker and the default
- * selection. Reads the seeded rows directly — no directory hit. A roster person
- * with no `users` row yet (nobody seeded them, they never signed in) is left
- * out, since a theme could not reference them anyway.
+ * The people a theme can name, for the picker and the default selection.
+ *
+ * Now the rotation *is* the roster: this reads the single `rotation` document
+ * (resolved to `users` rows), so who the picker offers and who leaves the
+ * standings both follow membership edits with no second list to keep in step.
+ * Past guessers who have since left still appear in `getStandings` through their
+ * snapshot, so nothing historical is lost. Empty on an unseeded database, which
+ * the seed and the editor both fill.
  */
 export async function getThemeRoster(): Promise<ThemeMember[]> {
-  const collection = await usersCollection();
-  const rows = await collection
-    .find({ directoryId: { $in: ROSTER_BRIDGE.map((r) => r.directoryId) } })
-    .toArray();
-  const idByDirectory = new Map(
-    rows.map((row) => [row.directoryId, row._id.toHexString()]),
-  );
-
-  const out: ThemeMember[] = [];
-  for (const { member, directoryId } of ROSTER_BRIDGE) {
-    const id = idByDirectory.get(directoryId);
-    if (id) {
-      out.push({ id, name: member.name, role: member.role, gender: member.gender });
-    }
-  }
-  return out;
+  const roster = await getRotation();
+  return roster.map((member) => ({
+    id: member.id,
+    name: member.name,
+    role: member.role,
+    gender: member.gender,
+  }));
 }
 
 interface GuessGroup {

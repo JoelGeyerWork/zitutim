@@ -9,7 +9,7 @@ import { RotationEditor } from "@/components/rotation-editor";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { formatMeetupDate } from "@/lib/format";
-import { reorder, type RosterMember } from "@/lib/roster";
+import { type RosterMember } from "@/lib/roster";
 import {
   buildRotation,
   conjugate,
@@ -29,19 +29,13 @@ export function MeetupRoulette({
   initialRoster,
   nowIso,
 }: {
-  /** Who is in the rotation, in stored order. Editable from the wheel. */
+  /** Who is in the rotation, in stored order, resolved off the server page. */
   initialRoster: RosterMember[];
   /** "Now" is fixed by the server so the first client render matches it. */
   nowIso: string;
 }) {
   const now = new Date(nowIso);
 
-  const [roster, setRoster] = useState(initialRoster);
-  /**
-   * The wheel's faces never move — `queue` is its fixed layout. What changes is
-   * which slice is under the pointer, so the winner is an index into it and the
-   * schedule is the queue re-seated to start there.
-   */
   const [winner, setWinner] = useState(0);
   const [rotation, setRotation] = useState(0);
   const [duration, setDuration] = useState(0);
@@ -51,33 +45,35 @@ export function MeetupRoulette({
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => () => clearTimeout(timer.current ?? undefined), []);
 
-  const active = roster.filter((member) => member.active);
-  // The rotation as the anchored schedule has it, whoever is up this week
-  // first. The editor never has to know how that is worked out — it hands back
-  // the order it displayed, and `reorder` turns the cycle back by the offset.
-  const offset = rotationIndex(currentMeetup(now), active.length);
-  const queue = rotate(active, offset);
-  const slice = sliceAngle(queue.length);
-
-  // One full lap, so everyone can see when their own turn comes round.
-  const slots = buildRotation(now, queue.length, rotate(queue, winner));
-  const [thisWeek, ...upcoming] = slots;
-
-  function editRoster(next: RosterMember[]) {
-    setRoster(next);
-
-    // `winner` and `rotation` are positions on a wheel that just changed shape,
-    // so they no longer mean anything. Snapping back to the real schedule is
-    // both the honest answer and the one that needs no animation.
+  // The editor mutates through the API and then `router.refresh()`, which
+  // re-runs the server page and hands down a fresh `initialRoster`. Reconciling
+  // during render (not an effect — `react-hooks/set-state-in-effect` is an error
+  // here) is the `editRoster` reset the spin state needs: `winner` and
+  // `rotation` are positions on a wheel that just changed shape, so they no
+  // longer mean anything and must not outlive the list they index into.
+  const [seed, setSeed] = useState(initialRoster);
+  if (seed !== initialRoster) {
+    setSeed(initialRoster);
     setWinner(0);
-    setDuration(0);
     setRotation(0);
+    setDuration(0);
+    setSpinning(false);
   }
 
-  function spin() {
-    if (spinning) return;
+  const roster = initialRoster;
 
-    const next = Math.floor(Math.random() * queue.length);
+  // The rotation as the anchored schedule has it, whoever is up this week first.
+  // The editor gets the stable `roster` prop and derives this itself, so its
+  // optimistic order re-seeds only when the server hands down a new list — not
+  // on every render, which a fresh `rotate(...)` identity each pass would cause.
+  const offset = rotationIndex(currentMeetup(now), roster.length);
+  const queue = rotate(roster, offset);
+
+  function spin() {
+    if (spinning || queue.length === 0) return;
+
+    const next = randomSlice(queue.length);
+    const slice = sliceAngle(queue.length);
 
     // Landing angle for a slice is just its negated centre. Rotation only ever
     // grows, so add whole turns until the target is ahead of where we are.
@@ -97,8 +93,30 @@ export function MeetupRoulette({
     }, spinMs);
   }
 
+  // One full lap, so everyone can see when their own turn comes round. Empty
+  // only on an unseeded database — where there is no wheel to draw yet, just a
+  // way in to add the first people.
+  const slots =
+    queue.length > 0
+      ? buildRotation(now, queue.length, rotate(queue, winner))
+      : [];
+  const thisWeek = slots[0];
+  const upcoming = slots.slice(1);
+
   return (
     <div className="space-y-4">
+      {!thisWeek ? (
+        <div className="bg-card rounded-2xl border p-8 text-center shadow-sm">
+          <CoffeeIcon className="text-muted-foreground mx-auto size-8" />
+          <p className="text-muted-foreground mt-3 text-sm text-balance">
+            עדיין אין אף אחד בסבב הכיבוד.
+          </p>
+          <Button className="mt-4" onClick={() => setEditing(true)}>
+            הוספת אנשים לסבב
+          </Button>
+        </div>
+      ) : (
+        <>
       <div className="bg-card overflow-hidden rounded-2xl border shadow-sm">
         {/* This week, above the wheel — the answer people came for. */}
         <div className="bg-accent text-accent-foreground relative border-b p-5 ps-6">
@@ -227,11 +245,8 @@ export function MeetupRoulette({
           ))}
         </ol>
       </section>
-
-      <p className="text-muted-foreground flex items-center gap-1.5 text-xs">
-        <CoffeeIcon className="size-3.5 shrink-0" />
-        כרגע הכול נתונים מקומיים — רענון הדף מחזיר את התור למקומו.
-      </p>
+        </>
+      )}
 
       {/* Mounted only while open, so each visit starts from the list itself. */}
       {editing ? (
@@ -239,14 +254,21 @@ export function MeetupRoulette({
           open
           onOpenChange={setEditing}
           roster={roster}
-          queue={queue}
           slots={buildRotation(now, queue.length, queue)}
-          onChange={editRoster}
-          onReorder={(next) => editRoster(reorder(roster, next, offset))}
+          offset={offset}
         />
       ) : null}
     </div>
   );
+}
+
+/**
+ * A uniform slice index. Kept at module scope, like `prefersReducedMotion`
+ * below, so the RNG is not read as render-time impurity — the spin is an event
+ * handler, and the compiler only sees a plain call here.
+ */
+function randomSlice(size: number): number {
+  return Math.floor(Math.random() * size);
 }
 
 /** Someone who asked the OS for less motion should get the result, not the ride. */

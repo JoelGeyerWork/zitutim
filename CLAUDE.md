@@ -54,38 +54,67 @@ Four things that bit here:
 
 Public read, login to write: anyone who can reach the app can browse and search,
 but adding, editing and deleting need a session. Sign-in binds against the
-organisation's Active Directory over LDAP.
+organisation's Active Directory over LDAP. **The one read that still needs a
+session is `GET /api/directory`** — it is a window onto the whole staff
+directory, not app content, so it does not answer anonymously. The air-gapped
+posture accepts the `?q=` enumeration quotes already allow; that is not a licence
+to add a new, better one.
 
-### The rotation is still hard-coded — the themes are not
+### The rotation is persisted, keyed to the directory
 
-The **theme-guessing game is persisted** (`themes` collection, its REST API,
-server-computed standings — see the quotes-shaped data layer below). What is
-still hard-coded is the **rotation**: whose turn it is, and the roster it turns
-through. These three modules stay client-safe on purpose (no `server-only`) so
-the roulette can spin and the rotation can be edited locally, and there is no
-collection or API behind them yet:
+The **rotation is a single document.** The `rotation` collection holds exactly
+one row, `_id: "current"`, with an ordered `members: [{ userId, gender }]` array.
+Order *is* array position, so a reorder is one atomic `$set` and last-write-wins
+needs no conflict machinery — the later save simply winning is acceptable on a
+team this size. It is addressed only via `findOneAndUpdate({ _id: "current" }, …,
+{ upsert: true })`: a fresh database has no document, the first write creates it,
+and every read tolerates its absence and returns an empty rotation.
 
-| Module | Stands in for |
+The document owns **sequence and gender, nothing else.** Identity — name, title,
+`directoryId`, and the themes that FK against it — lives on the `users` row
+`members[i].userId` names, the same `_id` a theme references, so there is nothing
+to reconcile between the two. `getRotation` resolves the members to their rows;
+`GET /api/rotation` is a public read, like the wheel it feeds.
+
+| Module | Role |
 |---|---|
-| `src/lib/team.ts` | the meetup slot, the date arithmetic, and `TEAM` |
-| `src/lib/directory.ts` | Active Directory — objectGUID, displayName, title |
-| `src/lib/roster.ts` | who is in the refreshment rotation, and in what order |
+| `src/lib/team.ts` | the meetup slot, the date arithmetic, `TEAM`, and the rotation math (`rotationIndex`, `rotate`, `buildRotation`) — client-safe |
+| `src/lib/roster.ts` | client-safe still: the `RosterMember` shape and the pure `moveItem`/`reorder` order helpers the drag depends on |
+| `src/lib/rotation.ts` | `server-only` Mongo layer: the singleton, `getRotation`, and the add/remove/reorder/set-gender mutations plus their Zod schemas |
+| `src/lib/directory-schema.ts` | client-safe `DirectoryPerson` — the four fields (`directoryId`, `displayName`, `title`, `username`) safe for the browser |
 
-The split between the last two is the design being tried out, not an artefact of
-mocking: **the directory owns identity, the app owns membership.** A rotation
-entry is a directory person — name, title and immutable id all read from there —
-plus the three things AD has no concept of: turn order, grammatical gender, and
-whether they are still in the rotation. Adding someone is *picking them out of
-the directory*, never typing a name, so they arrive carrying the objectGUID that
-`upsertUserFromDirectory` already keys `users` on. In Mongo this is a `roster`
-sub-document on the existing `users` row, not a second collection — splitting it
-out forks the same person into two ids the moment a rotation member signs in.
-Nobody is ever deleted, only deactivated: their name is on the themes they
-brought.
+**The directory search is real now.** `ldap.ts` grew `findPeople(query)` — a
+service-account substring search that escapes with `escapeFilterValue` *before*
+adding the `*` wildcards, refuses under two characters, and never opens a second
+bind or touches `badPwdCount` — and `findPersonById(directoryId)`, which encodes
+an objectGUID as `\xx` raw bytes in AD's mixed-endian order (`guidToBytes`, the
+tested inverse of `guidToString`; a string `entryUUID` is escaped plainly). Both
+throw on a directory fault and let a `ConfigError` propagate, so the route maps
+them to 503 vs 500 exactly like login. The **mock `src/lib/directory.ts` is
+deleted.**
+
+**The directory owns identity, the app owns membership.** Adding someone is
+*picking them out of the directory*, never typing a name: the client posts a
+`directoryId`, the route re-resolves the person with `findPersonById` and
+`upsertRosterUser` writes the row — so nothing a client typed lands in
+`users.displayName`, and they arrive carrying the objectGUID `users` is keyed on.
+Re-adding a removed member re-resolves to their **existing** row by `directoryId`
+rather than forking, so their `_id`, and every theme that references it, is
+unchanged.
+
+**Removing is forgetting.** A member spliced out of `members` is not remembered
+anywhere in this collection — no inactive flag, no "return to rotation" list, and
+the editor's "לא בסבב" / former-members section is gone. Their `users` row and
+every theme they brought survive untouched, so re-adding them via directory
+search restores their identity and history; only their gender is re-asked.
+Removing the **last** member is refused (409) — an empty rotation has nobody to
+bring the refreshments and no slot to render.
 
 Editing lives behind the pencil beside the wheel (`RotationEditor`), not on a
 page of its own — it changes the wheel, and it is not a team-management screen.
-Order is set by dragging the rows.
+Order is set by dragging the rows. Each action calls the REST API and then
+`router.refresh()`; the list stays optimistic so a drag doesn't wait on a round
+trip.
 
 Four things that bit here:
 
@@ -117,16 +146,15 @@ Four things that bit here:
   and last slice meet, and the rotation is editable, so odd is not an edge case.
   `toneOf` gives the closing slice a third, neutral tone.
 
-`TEAM` has not gone away: `memberOn` and the themes data layer still read it, so
-there are currently two lists of the same people. Whichever of the two survives,
-they should be one. **The themes FK papers over the gap by matching a `TEAM`
-member to a `directory.ts` person by display name** (`ROSTER_BRIDGE` in
-`themes.ts`, the same map the demo seed hard-codes), to recover the objectGUID
-its `users` row is keyed on. That match is exact and offline, and it means a
-roster member who later signs in through LDAP lands on the *same* `users` row a
-theme already references rather than forking — but it only holds because both
-lists still describe the same eight people. Collapsing the two lists is what
-finally removes the bridge.
+**`getThemeRoster` reads the rotation now**, resolved to `users` rows — so the
+theme picker and the standings come from the same list the wheel does. That
+retired the `ROSTER_BRIDGE` display-name match and the empty-picker-on-unseeded-
+prod caveat both: the FK target and the picker are one source, the seed writes
+the singleton, and the editor fills it. One seam is left — `memberOn` (the
+themes-page "whose turn was it" header) still reads the hard-coded `TEAM`, so it
+can drift from the DB rotation if the two lists of the same eight ever diverge.
+It is a smaller seam than two rosters, and collapsing `TEAM` into the rotation is
+what finally closes it.
 
 ### It runs on an air-gapped network
 
@@ -252,6 +280,13 @@ reuses `dateOnly` from `quote-schema.ts`), and `src/lib/themes.ts` is the
 across every theme via aggregation — `getStandings`/`getThemeStats`, not a
 reduction over the loaded page, which would silently rank only what the client
 holds once the list paginates.
+
+The rotation splits the same way: `src/lib/roster.ts` is client-safe
+(`RosterMember`, `moveItem`, `reorder`) and `src/lib/directory-schema.ts` holds
+the client-safe `DirectoryPerson`, while `src/lib/rotation.ts` is the
+`server-only` Mongo layer (and re-exports `roster.ts`). The editor imports
+`DirectoryPerson` from `directory-schema.ts`, never from `ldap.ts` — pulling
+`ldap.ts` into a `"use client"` file would drag `ldapts` into the browser bundle.
 
 Auth mirrors the same split, with the same consequence — `ldapts` and `jose` in
 the browser bundle:
