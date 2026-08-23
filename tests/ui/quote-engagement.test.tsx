@@ -145,7 +145,8 @@ describe("QuoteEngagement", () => {
     const added = makeComment({ id: "2", text: "תגובה חדשה" });
     fetchMock
       .mockResolvedValueOnce(jsonResponse({ comments: [old] }))
-      .mockResolvedValueOnce(jsonResponse(added, 201));
+      .mockResolvedValueOnce(jsonResponse(added, 201))
+      .mockResolvedValueOnce(jsonResponse({ comments: [old, added] }));
     const user = userEvent.setup();
 
     renderSignedIn(
@@ -240,7 +241,9 @@ describe("QuoteEngagement", () => {
     fetchMock
       .mockResolvedValueOnce(jsonResponse({ comments: [own, other] }))
       .mockResolvedValueOnce(jsonResponse(edited))
-      .mockResolvedValueOnce(jsonResponse(null, 204));
+      .mockResolvedValueOnce(jsonResponse({ comments: [edited, other] }))
+      .mockResolvedValueOnce(jsonResponse(null, 204))
+      .mockResolvedValueOnce(jsonResponse({ comments: [other] }));
     const user = userEvent.setup();
 
     renderSignedIn(
