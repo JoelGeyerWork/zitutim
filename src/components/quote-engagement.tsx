@@ -509,10 +509,13 @@ export function QuoteEngagement({ quote }: { quote: Quote }) {
           )}
 
           {user ? (
-            <form onSubmit={addComment} className="space-y-2 pt-1">
+            <form
+              onSubmit={addComment}
+              className="bg-muted/60 flex flex-col gap-3 rounded-xl p-4"
+            >
               <label
                 htmlFor={`new-comment-${quote.id}`}
-                className="text-sm font-medium"
+                className="block text-sm font-medium"
               >
                 הוספת תגובה
               </label>
@@ -526,7 +529,7 @@ export function QuoteEngagement({ quote }: { quote: Quote }) {
                 placeholder="מה רצית לומר?"
                 maxLength={COMMENT_MAX_LENGTH}
                 aria-invalid={!!newError}
-                className="min-h-20"
+                className="min-h-20 bg-background px-3 py-2.5 dark:bg-background"
               />
               {newError ? (
                 <p className="text-destructive text-xs" role="alert">
