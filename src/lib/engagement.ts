@@ -263,6 +263,8 @@ export async function updateComment(
 
   const quoteObjectId = new ObjectId(quoteId);
   const commentObjectId = new ObjectId(commentId);
+  if (!(await quoteExists(quoteObjectId))) return { status: "not_found" };
+
   const collection = await comments();
   const existing = await collection.findOne({
     _id: commentObjectId,
@@ -270,7 +272,11 @@ export async function updateComment(
   });
 
   if (!existing) return { status: "not_found" };
-  if (!existing.authorId.equals(actorId)) return { status: "forbidden" };
+  if (!existing.authorId.equals(actorId)) {
+    return (await quoteExists(quoteObjectId))
+      ? { status: "forbidden" }
+      : { status: "not_found" };
+  }
 
   const updated = await collection.findOneAndUpdate(
     {
@@ -281,6 +287,17 @@ export async function updateComment(
     { $set: { text: input.text, updatedAt: new Date() } },
   );
   if (!updated) return { status: "not_found" };
+
+  // As with creation, quote deletion can land between the first existence
+  // check and this write. Never report success for an orphan, and clean up if
+  // the quote deletion's non-transactional engagement cleanup missed it.
+  if (!(await quoteExists(quoteObjectId))) {
+    await collection.deleteOne({
+      _id: commentObjectId,
+      quoteId: quoteObjectId,
+    });
+    return { status: "not_found" };
+  }
 
   const comment = await resolvedComment(quoteObjectId, commentObjectId);
   return comment ? { status: "ok", comment } : { status: "not_found" };
@@ -299,22 +316,30 @@ export async function deleteComment(
     return { status: "not_found" };
   }
 
+  const quoteObjectId = new ObjectId(quoteId);
+  if (!(await quoteExists(quoteObjectId))) return { status: "not_found" };
+
   const collection = await comments();
   const filter = {
     _id: new ObjectId(commentId),
-    quoteId: new ObjectId(quoteId),
+    quoteId: quoteObjectId,
   };
   const existing = await collection.findOne(filter);
   if (!existing) return { status: "not_found" };
-  if (!existing.authorId.equals(actorId)) return { status: "forbidden" };
+  if (!existing.authorId.equals(actorId)) {
+    return (await quoteExists(quoteObjectId))
+      ? { status: "forbidden" }
+      : { status: "not_found" };
+  }
 
   const result = await collection.deleteOne({
     ...filter,
     authorId: new ObjectId(actorId),
   });
-  return result.deletedCount === 1
-    ? { status: "ok" }
-    : { status: "not_found" };
+  if (result.deletedCount !== 1 || !(await quoteExists(quoteObjectId))) {
+    return { status: "not_found" };
+  }
+  return { status: "ok" };
 }
 
 /**

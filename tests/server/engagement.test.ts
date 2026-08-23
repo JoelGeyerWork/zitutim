@@ -1,5 +1,5 @@
-import { ObjectId } from "mongodb";
-import { beforeEach, describe, expect, it } from "vitest";
+import { Collection, ObjectId } from "mongodb";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   createComment,
@@ -61,6 +61,10 @@ beforeEach(async () => {
     db.collection("users").deleteMany({}),
   ]);
   await Promise.all([insertUser(DANA), insertUser(NOA)]);
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
 });
 
 describe("quote likes", () => {
@@ -206,6 +210,93 @@ describe("quote comments", () => {
     await expect(
       createComment("0".repeat(24), { text: "טקסט" }, DANA.id),
     ).resolves.toBeNull();
+  });
+
+  it("does not edit or delete orphaned comments after their quote is gone", async () => {
+    const quote = await createQuote(QUOTE_INPUT, DANA);
+    const comment = await createComment(
+      quote.id,
+      { text: "תגובה מקורית" },
+      DANA.id,
+    );
+    const db = await getDb();
+    await db.collection("quotes").deleteOne({ _id: new ObjectId(quote.id) });
+
+    await expect(
+      updateComment(
+        quote.id,
+        comment!.id,
+        { text: "תגובה שלא אמורה להישמר" },
+        DANA.id,
+      ),
+    ).resolves.toEqual({ status: "not_found" });
+    await expect(
+      deleteComment(quote.id, comment!.id, DANA.id),
+    ).resolves.toEqual({ status: "not_found" });
+
+    await expect(
+      db.collection("quote_comments").findOne({
+        _id: new ObjectId(comment!.id),
+      }),
+    ).resolves.toMatchObject({ text: "תגובה מקורית" });
+  });
+
+  it("does not report a successful edit when the quote is deleted during the write", async () => {
+    const quote = await createQuote(QUOTE_INPUT, DANA);
+    const comment = await createComment(
+      quote.id,
+      { text: "תגובה מקורית" },
+      DANA.id,
+    );
+    const db = await getDb();
+    const original = Collection.prototype.findOneAndUpdate;
+    vi.spyOn(Collection.prototype, "findOneAndUpdate").mockImplementationOnce(
+      async function (filter, update) {
+        const result = await original.call(this, filter, update);
+        await db.collection("quotes").deleteOne({
+          _id: new ObjectId(quote.id),
+        });
+        return result;
+      },
+    );
+
+    await expect(
+      updateComment(
+        quote.id,
+        comment!.id,
+        { text: "תגובה מתוקנת" },
+        DANA.id,
+      ),
+    ).resolves.toEqual({ status: "not_found" });
+    await expect(
+      db.collection("quote_comments").countDocuments({
+        _id: new ObjectId(comment!.id),
+      }),
+    ).resolves.toBe(0);
+  });
+
+  it("does not report a successful delete when the quote is deleted concurrently", async () => {
+    const quote = await createQuote(QUOTE_INPUT, DANA);
+    const comment = await createComment(
+      quote.id,
+      { text: "תגובה מקורית" },
+      DANA.id,
+    );
+    const db = await getDb();
+    const original = Collection.prototype.deleteOne;
+    vi.spyOn(Collection.prototype, "deleteOne").mockImplementationOnce(
+      async function (filter, options) {
+        const result = await original.call(this, filter, options);
+        await db.collection("quotes").deleteMany({
+          _id: new ObjectId(quote.id),
+        });
+        return result;
+      },
+    );
+
+    await expect(
+      deleteComment(quote.id, comment!.id, DANA.id),
+    ).resolves.toEqual({ status: "not_found" });
   });
 
   it("previews only the latest two, in chronological order with id ties", async () => {
