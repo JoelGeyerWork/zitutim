@@ -42,7 +42,28 @@ describe("QuoteCard", () => {
 
   it("credits whoever added it, when known", () => {
     render(<QuoteCard quote={makeQuote({ addedBy: "יואל" })} />);
-    expect(screen.getByText("נוסף על ידי יואל")).toBeInTheDocument();
+
+    const credit = screen.getByText("נוסף על ידי יואל");
+    const saidAt = screen.getByText(/28 ביולי 2026/);
+    expect(credit.closest("p")).toBe(saidAt.closest("p"));
+    expect(credit.closest("article")?.querySelector("footer")).not.toBeInTheDocument();
+  });
+
+  it("places an accessible copy action in the card header", () => {
+    renderSignedIn(<QuoteCard quote={makeQuote()} />);
+
+    const copyButton = screen.getByRole("button", {
+      name: "העתקת הציטוט",
+    });
+    const header = copyButton.closest("header");
+
+    expect(copyButton).toHaveAttribute("title", "העתקת הציטוט");
+    expect(header).toBeInTheDocument();
+    expect(header?.lastElementChild?.lastElementChild).toBe(copyButton);
+    expect(
+      within(header!).getByRole("button", { name: "אפשרויות נוספות" }),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("העתקה")).not.toBeInTheDocument();
   });
 
   it("copies the quote and attribution to the clipboard", async () => {
@@ -53,7 +74,9 @@ describe("QuoteCard", () => {
       .mockResolvedValue(undefined);
 
     render(<QuoteCard quote={makeQuote()} />);
-    await user.click(screen.getByRole("button", { name: /העתקה/ }));
+    await user.click(
+      screen.getByRole("button", { name: "העתקת הציטוט" }),
+    );
 
     expect(writeText).toHaveBeenCalledOnce();
     const copied = writeText.mock.calls[0][0] as string;
@@ -61,7 +84,9 @@ describe("QuoteCard", () => {
     expect(copied).toContain("דנה");
     expect(copied).toContain("28 ביולי 2026");
 
-    expect(await screen.findByText("הועתק")).toBeInTheDocument();
+    expect(
+      await screen.findByRole("button", { name: "הציטוט הועתק" }),
+    ).toHaveAttribute("title", "הציטוט הועתק");
   });
 
   it("highlights the search term without dropping any text", () => {
@@ -124,6 +149,8 @@ describe("QuoteCard", () => {
     ).not.toBeInTheDocument();
     // The rest of the card is still fully readable.
     expect(screen.getByText("תמיד יש זמן לעוד קפה אחד")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /העתקה/ })).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "העתקת הציטוט" }),
+    ).toBeInTheDocument();
   });
 });

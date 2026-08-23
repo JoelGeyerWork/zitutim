@@ -55,6 +55,8 @@ export function QuoteCard({
     }
   }
 
+  const copyLabel = copied ? "הציטוט הועתק" : "העתקת הציטוט";
+
   return (
     <article className="bg-card group relative rounded-2xl border p-5 shadow-sm transition-shadow hover:shadow-md">
       <header className="flex items-start gap-3">
@@ -75,44 +77,68 @@ export function QuoteCard({
               <CalendarIcon className="size-3" />
               {formatSaidAt(quote.saidAt)}
             </span>
-            <span aria-hidden>·</span>
-            <span title={`נוסף ${formatRelative(quote.createdAt)}`}>
-              נוסף {formatRelative(quote.createdAt)}
+            <span className="inline-flex items-center gap-2">
+              <span aria-hidden>·</span>
+              <span title={`נוסף ${formatRelative(quote.createdAt)}`}>
+                נוסף {formatRelative(quote.createdAt)}
+              </span>
             </span>
+            {quote.addedBy ? (
+              <span className="inline-flex items-center gap-2">
+                <span aria-hidden>·</span>
+                <span>נוסף על ידי {quote.addedBy}</span>
+              </span>
+            ) : null}
           </p>
         </div>
 
-        {/* Hidden when signed out because the actions would only 401 — this is
-            presentation, not a permission check. The API is the boundary. */}
-        {user ? (
-          <DropdownMenu>
-            <DropdownMenuTrigger
-              render={
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="text-muted-foreground size-8 shrink-0 opacity-0 transition-opacity focus-visible:opacity-100 group-hover:opacity-100 data-popup-open:opacity-100"
-                  aria-label="אפשרויות נוספות"
+        <div className="ms-auto flex shrink-0 items-center gap-1">
+          {/* Hidden when signed out because the actions would only 401 — this is
+              presentation, not a permission check. The API is the boundary. */}
+          {user ? (
+            <DropdownMenu>
+              <DropdownMenuTrigger
+                render={
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="text-muted-foreground size-8 opacity-0 transition-opacity focus-visible:opacity-100 group-hover:opacity-100 data-popup-open:opacity-100"
+                    aria-label="אפשרויות נוספות"
+                  >
+                    <MoreHorizontalIcon className="size-4" />
+                  </Button>
+                }
+              />
+              <DropdownMenuContent align="end" className="min-w-40">
+                <DropdownMenuItem onClick={() => setEditing(true)}>
+                  <PencilIcon />
+                  עריכה
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  variant="destructive"
+                  onClick={() => setDeleting(true)}
                 >
-                  <MoreHorizontalIcon className="size-4" />
-                </Button>
-              }
-            />
-            <DropdownMenuContent align="end" className="min-w-40">
-              <DropdownMenuItem onClick={() => setEditing(true)}>
-                <PencilIcon />
-                עריכה
-              </DropdownMenuItem>
-              <DropdownMenuItem
-                variant="destructive"
-                onClick={() => setDeleting(true)}
-              >
-                <Trash2Icon />
-                מחיקה
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-        ) : null}
+                  <Trash2Icon />
+                  מחיקה
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          ) : null}
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={copy}
+            className="text-muted-foreground hover:text-primary size-8"
+            aria-label={copyLabel}
+            title={copyLabel}
+          >
+            {copied ? (
+              <CheckIcon className="size-4" />
+            ) : (
+              <CopyIcon className="size-4" />
+            )}
+          </Button>
+        </div>
       </header>
 
       <blockquote className="relative mt-4 text-lg leading-relaxed font-medium text-balance whitespace-pre-wrap">
@@ -124,25 +150,6 @@ export function QuoteCard({
           {quote.context}
         </p>
       ) : null}
-
-      <footer className="mt-4 flex items-center justify-between gap-3 border-t pt-3">
-        <span className="text-muted-foreground truncate text-xs">
-          {quote.addedBy ? `נוסף על ידי ${quote.addedBy}` : " "}
-        </span>
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={copy}
-          className="text-muted-foreground hover:text-primary shrink-0 gap-1.5 text-xs"
-        >
-          {copied ? (
-            <CheckIcon className="size-3.5" />
-          ) : (
-            <CopyIcon className="size-3.5" />
-          )}
-          {copied ? "הועתק" : "העתקה"}
-        </Button>
-      </footer>
 
       <QuoteEngagement quote={quote} />
 
