@@ -124,8 +124,19 @@ try {
     { key: { guessedById: 1 } },
   ]);
 
+  await db.collection("quote_likes").createIndexes([
+    // PUT retries are idempotent, but this remains the final one-like boundary.
+    { key: { quoteId: 1, userId: 1 }, unique: true },
+  ]);
+
+  await db.collection("quote_comments").createIndexes([
+    // Covers both the oldest-first conversation and latest-two preview scans.
+    { key: { quoteId: 1, createdAt: 1, _id: 1 } },
+    { key: { authorId: 1 } },
+  ]);
+
   console.log(
-    `Indexes ready on ${dbName}: quotes, users, login_attempts, themes`,
+    `Indexes ready on ${dbName}: quotes, users, login_attempts, themes, quote_likes, quote_comments`,
   );
 
   if (process.argv.includes("--demo")) {

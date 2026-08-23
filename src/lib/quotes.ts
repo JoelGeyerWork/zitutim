@@ -1,7 +1,14 @@
 import "server-only";
 
-import { ObjectId, type Collection, type Filter } from "mongodb";
+import {
+  ObjectId,
+  type Collection,
+  type Document,
+  type Filter,
+} from "mongodb";
 
+import { deleteQuoteEngagement } from "@/lib/engagement";
+import type { QuoteComment } from "@/lib/engagement-schema";
 import { getDb } from "@/lib/mongodb";
 import {
   PAGE_SIZE,
@@ -48,7 +55,46 @@ export interface QuoteDoc {
   updatedAt: Date;
 }
 
-function serialize(doc: QuoteDoc): Quote {
+interface QuoteCommentAggregateDoc {
+  _id: ObjectId;
+  quoteId: ObjectId;
+  authorId: ObjectId;
+  authorName: string;
+  text: string;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+interface QuoteAggregateDoc extends QuoteDoc {
+  likeCount: number;
+  commentCount: number;
+  likedByViewer: boolean;
+  commentsPreview: QuoteCommentAggregateDoc[];
+}
+
+function serializeComment(doc: QuoteCommentAggregateDoc): QuoteComment {
+  return {
+    id: doc._id.toHexString(),
+    quoteId: doc.quoteId.toHexString(),
+    authorId: doc.authorId.toHexString(),
+    authorName: doc.authorName,
+    text: doc.text,
+    createdAt: doc.createdAt.toISOString(),
+    updatedAt: doc.updatedAt.toISOString(),
+  };
+}
+
+function serialize(doc: QuoteDoc | QuoteAggregateDoc): Quote {
+  const engagement =
+    "likeCount" in doc
+      ? doc
+      : {
+          likeCount: 0,
+          commentCount: 0,
+          likedByViewer: false,
+          commentsPreview: [],
+        };
+
   return {
     id: doc._id.toHexString(),
     text: doc.text,
@@ -62,6 +108,10 @@ function serialize(doc: QuoteDoc): Quote {
     updatedById: doc.updatedById?.toHexString() ?? null,
     createdAt: doc.createdAt.toISOString(),
     updatedAt: doc.updatedAt.toISOString(),
+    likeCount: engagement.likeCount,
+    commentCount: engagement.commentCount,
+    likedByViewer: engagement.likedByViewer,
+    commentsPreview: engagement.commentsPreview.map(serializeComment),
   };
 }
 
@@ -88,6 +138,113 @@ const sortSpecs: Record<SortOption, Record<string, 1 | -1>> = {
 };
 
 /**
+ * Resolve counts, the current viewer's like and the latest-two preview in the
+ * same aggregate that loads the quote page. Each lookup is index-backed and
+ * avoids a query per card.
+ */
+function engagementStages(viewerId?: string): Document[] {
+  const viewer =
+    viewerId && ObjectId.isValid(viewerId) ? new ObjectId(viewerId) : null;
+
+  return [
+    {
+      $lookup: {
+        from: "quote_likes",
+        let: { currentQuoteId: "$_id" },
+        pipeline: [
+          {
+            $match: {
+              $expr: { $eq: ["$quoteId", "$$currentQuoteId"] },
+            },
+          },
+          {
+            $group: {
+              _id: null,
+              count: { $sum: 1 },
+              viewerLiked: {
+                $max: viewer
+                  ? { $cond: [{ $eq: ["$userId", viewer] }, 1, 0] }
+                  : 0,
+              },
+            },
+          },
+        ],
+        as: "likeSummary",
+      },
+    },
+    {
+      $lookup: {
+        from: "quote_comments",
+        let: { currentQuoteId: "$_id" },
+        pipeline: [
+          {
+            $match: {
+              $expr: { $eq: ["$quoteId", "$$currentQuoteId"] },
+            },
+          },
+          {
+            $facet: {
+              total: [{ $count: "value" }],
+              preview: [
+                // Fetch newest first so the limit selects the latest two, then
+                // reverse below so those two still read chronologically.
+                { $sort: { createdAt: -1, _id: -1 } },
+                { $limit: 2 },
+                {
+                  $lookup: {
+                    from: "users",
+                    localField: "authorId",
+                    foreignField: "_id",
+                    as: "author",
+                  },
+                },
+                {
+                  $set: {
+                    authorName: {
+                      $ifNull: [
+                        { $first: "$author.displayName" },
+                        "משתמש לא מוכר",
+                      ],
+                    },
+                  },
+                },
+                {
+                  $project: {
+                    author: 0,
+                  },
+                },
+              ],
+            },
+          },
+          {
+            $project: {
+              count: { $ifNull: [{ $first: "$total.value" }, 0] },
+              preview: { $reverseArray: "$preview" },
+            },
+          },
+        ],
+        as: "commentSummary",
+      },
+    },
+    {
+      $set: {
+        likeCount: { $ifNull: [{ $first: "$likeSummary.count" }, 0] },
+        likedByViewer: {
+          $eq: [{ $ifNull: [{ $first: "$likeSummary.viewerLiked" }, 0] }, 1],
+        },
+        commentCount: {
+          $ifNull: [{ $first: "$commentSummary.count" }, 0],
+        },
+        commentsPreview: {
+          $ifNull: [{ $first: "$commentSummary.preview" }, []],
+        },
+      },
+    },
+    { $unset: ["likeSummary", "commentSummary"] },
+  ];
+}
+
+/**
  * Offset pagination rather than a cursor: a team quote wall is small enough
  * that the skip cost never matters, and it keeps "load more" trivial on both
  * the feed and the search page.
@@ -97,11 +254,13 @@ export async function listQuotes({
   sort = "added",
   skip = 0,
   limit = PAGE_SIZE,
+  viewerId,
 }: {
   search?: string;
   sort?: SortOption;
   skip?: number;
   limit?: number;
+  viewerId?: string;
 } = {}): Promise<QuotePage> {
   const collection = await quotes();
   const filter: Filter<QuoteDoc> = {};
@@ -124,10 +283,13 @@ export async function listQuotes({
 
   const [docs, total] = await Promise.all([
     collection
-      .find(filter)
-      .sort(sortSpecs[sort] ?? sortSpecs.added)
-      .skip(safeSkip)
-      .limit(safeLimit)
+      .aggregate<QuoteAggregateDoc>([
+        { $match: filter },
+        { $sort: sortSpecs[sort] ?? sortSpecs.added },
+        { $skip: safeSkip },
+        { $limit: safeLimit },
+        ...engagementStages(viewerId),
+      ])
       .toArray(),
     collection.countDocuments(filter),
   ]);
@@ -139,10 +301,18 @@ export async function listQuotes({
   };
 }
 
-export async function getQuote(id: string): Promise<Quote | null> {
+export async function getQuote(
+  id: string,
+  viewerId?: string,
+): Promise<Quote | null> {
   if (!ObjectId.isValid(id)) return null;
   const collection = await quotes();
-  const doc = await collection.findOne({ _id: new ObjectId(id) });
+  const [doc] = await collection
+    .aggregate<QuoteAggregateDoc>([
+      { $match: { _id: new ObjectId(id) } },
+      ...engagementStages(viewerId),
+    ])
+    .toArray();
   return doc ? serialize(doc) : null;
 }
 
@@ -204,13 +374,18 @@ export async function updateQuote(
     { returnDocument: "after" },
   );
 
-  return doc ? serialize(doc) : null;
+  return doc ? getQuote(id, actor.id) : null;
 }
 
 export async function deleteQuote(id: string): Promise<boolean> {
   if (!ObjectId.isValid(id)) return false;
   const collection = await quotes();
-  const result = await collection.deleteOne({ _id: new ObjectId(id) });
+  const quoteId = new ObjectId(id);
+  const result = await collection.deleteOne({ _id: quoteId });
+  // Standalone Mongo (including the memory-server suite) cannot provide a
+  // transaction here. Cleanup still runs when the quote was already absent,
+  // so a retry can finish after a partial infrastructure failure.
+  await deleteQuoteEngagement(quoteId);
   return result.deletedCount === 1;
 }
 

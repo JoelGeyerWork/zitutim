@@ -28,11 +28,13 @@ export async function GET(request: Request) {
     : "added";
 
   try {
+    const session = await getSessionFrom(request);
     const page = await listQuotes({
       search: params.get("q") ?? undefined,
       sort,
       skip: Number(params.get("skip")) || 0,
       limit: Number(params.get("limit")) || PAGE_SIZE,
+      viewerId: session?.id,
     });
     return NextResponse.json(page);
   } catch (error) {

@@ -314,6 +314,23 @@ the same `quoteInputSchema` and return `422` with `issues` keyed by field name;
 `QuoteForm` renders those inline. The form's own checks are for responsiveness
 only — the server is the authority.
 
+### Quote engagement
+
+Likes and comments are normalized into `quote_likes` and `quote_comments`.
+`quote_likes` has a unique `{ quoteId, userId }` index and the API uses
+idempotent PUT desired-state semantics; `quote_comments` stores `authorId` but
+not a name snapshot, so reads resolve the current `users.displayName`. The quote
+feed's aggregate resolves counts, the viewer's like, and a deterministic
+latest-two comment preview in one database command per page rather than querying
+per card. Full comments read oldest-first and end every sort in `_id`.
+
+`src/lib/engagement-schema.ts` is client-safe; `src/lib/engagement.ts` owns the
+Mongo documents and mutations. Comment writes require ownership in the database
+layer as well as hiding controls in the UI. Quote deletion removes the quote and
+then its engagement without a transaction because standalone Mongo and
+mongodb-memory-server do not support one; cleanup also runs on a repeated delete,
+so retrying can finish a partial infrastructure failure.
+
 ### Auth
 
 **The app process handles every employee's real domain password.** That is a

@@ -10,6 +10,11 @@ vi.mock("sonner", () => ({
   toast: { success: vi.fn(), error: vi.fn() },
 }));
 
+vi.mock("next/navigation", () => ({
+  usePathname: () => "/quotes/search",
+  useRouter: () => ({ refresh: vi.fn() }),
+}));
+
 function page(quotes: Quote[], overrides: Partial<QuotePage> = {}): QuotePage {
   return { quotes, total: quotes.length, hasMore: false, ...overrides };
 }
