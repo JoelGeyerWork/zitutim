@@ -15,6 +15,7 @@ links into them rather than being a section itself:
 | `/` | the hub — this week's ישב״צ, and a teaser per section |
 | `/quotes`, `/quotes/search`, `/quotes/create` | the quote wall: who said something, when, and what led to it |
 | `/meetups`, `/meetups/themes` | the weekly ישב״צ, the refreshment rotation, and the theme-guessing game |
+| `/shotef`, `/shotef/reviews`, `/shotef/hall-of-fame` | the weekly on-call slot: whose week it is, how each week went, and the monitors we have already solved |
 | `/login` | — |
 
 Navigation is exactly two levels, both in the header at every screen size: a
@@ -155,6 +156,35 @@ themes-page "whose turn was it" header) still reads the hard-coded `TEAM`, so it
 can drift from the DB rotation if the two lists of the same eight ever diverge.
 It is a smaller seam than two rosters, and collapsing `TEAM` into the rotation is
 what finally closes it.
+
+### שוטף is front-end only, for now
+
+The on-call section is **UI first and hard-coded**: `src/lib/shotef.ts` holds the
+roster, the weekly reviews and the hall of fame as fixtures, and all three pages
+render them directly. There is no collection, no route handler and no write
+path — nothing here is editable from the browser, deliberately, until the
+screens are agreed on.
+
+It is still written to split the way the rest of the app does. `shotef.ts` is
+client-safe — no `server-only`, no `mongodb` — so when it grows a database the
+types and the pure date math stay put (or move to a `shotef-schema.ts`) and a
+`server-only` layer re-exports them, exactly like `quotes.ts`/`quote-schema.ts`.
+The pages already fix "now" on the server and pass `nowIso` down, so the wheel
+hydrates onto the person it rendered.
+
+Two things worth knowing about the math:
+
+- **The shift changes hands on Sunday, not on ישב״צ day.** It has its own
+  anchor (`SHOTEF_ANCHOR`) and its own `currentShift`/`shiftIndex`, rather than
+  borrowing the Tuesday-anchored `rotationIndex` — a Sunday is not a whole
+  number of weeks from that anchor, so sharing it would only work by rounding.
+- **The countdown is to the handover, not to the start.** On duty, what matters
+  is how much of the week is left, so the card counts down to
+  `handoverOf(shift)`.
+
+The wheel itself is shared: `RotationWheel` (was `MeetupWheel`) draws both
+rotations and knows about neither — the icon at its hub is the only thing that
+says which one you are looking at.
 
 ### It runs on an air-gapped network
 

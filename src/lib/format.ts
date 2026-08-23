@@ -26,6 +26,18 @@ const meetupDate = new Intl.DateTimeFormat(LOCALE, {
   timeZone: "UTC",
 });
 
+/** The two halves of a week range — "16" and "22 באוגוסט". */
+const dayOnly = new Intl.DateTimeFormat(LOCALE, {
+  day: "numeric",
+  timeZone: "UTC",
+});
+
+const dayMonth = new Intl.DateTimeFormat(LOCALE, {
+  day: "numeric",
+  month: "long",
+  timeZone: "UTC",
+});
+
 export function formatSaidAt(iso: string): string {
   return fullDate.format(new Date(iso));
 }
@@ -36,6 +48,25 @@ export function formatMeetupDate(iso: string): string {
 
 export function formatSaidAtShort(iso: string): string {
   return shortDate.format(new Date(iso));
+}
+
+/**
+ * "16–22 באוגוסט" for a week that starts at `iso` — a shotef shift is a span,
+ * and naming only its first day reads as a single date. The month is spelled
+ * once when both ends share it. UTC throughout, like every formatter here.
+ */
+export function formatWeekRange(iso: string): string {
+  const start = new Date(iso);
+  const end = new Date(start.getTime() + 6 * 24 * 60 * 60 * 1000);
+
+  return start.getUTCMonth() === end.getUTCMonth()
+    ? `${dayOnly.format(start)}–${dayMonth.format(end)}`
+    : `${dayMonth.format(start)} – ${dayMonth.format(end)}`;
+}
+
+/** "30 באוגוסט" — a single day, where a whole range would not fit. */
+export function formatDayMonth(iso: string): string {
+  return dayMonth.format(new Date(iso));
 }
 
 const relative = new Intl.RelativeTimeFormat(LOCALE, { numeric: "auto" });

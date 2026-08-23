@@ -8,7 +8,20 @@ import { formatMeetupDate, plural } from "@/lib/format";
 import { HUB, SECTIONS, type Section } from "@/lib/navigation";
 import { type RosterMember } from "@/lib/roster";
 import { getRotation } from "@/lib/rotation";
-import { conjugate, currentMeetup, daysUntil, MEETUP, rotationIndex } from "@/lib/team";
+import {
+  SHOTEF_ROSTER,
+  currentShift,
+  handoverOf,
+  shiftIndex,
+} from "@/lib/shotef";
+import {
+  conjugate,
+  currentMeetup,
+  daysUntil,
+  MEETUP,
+  rotationIndex,
+  type Member,
+} from "@/lib/team";
 import { getSession } from "@/lib/session";
 import { getStats, listQuotes } from "@/lib/quotes";
 import { cn } from "@/lib/utils";
@@ -36,6 +49,12 @@ export default async function HubPage() {
         }
       : null;
 
+  // The shotef rotation is still hard-coded, so this is a plain lookup rather
+  // than one of the awaited reads above.
+  const shift = currentShift(now);
+  const onCall =
+    SHOTEF_ROSTER[shiftIndex(shift, SHOTEF_ROSTER.length)];
+
   /**
    * What each section shows on its card. A section with nothing registered
    * still gets a card — its description and a way in — so adding one to
@@ -49,6 +68,15 @@ export default async function HubPage() {
           content: <MeetupTeaser member={thisWeek.member} date={thisWeek.date} now={now} />,
         }
       : {},
+    "/shotef": {
+      content: (
+        <ShotefTeaser
+          member={onCall}
+          handover={handoverOf(shift.toISOString())}
+          now={now}
+        />
+      ),
+    },
     "/quotes": { content: <QuoteTeaser stats={stats} quote={latest.quotes[0]} /> },
   };
 
@@ -148,6 +176,30 @@ function MeetupTeaser({
         {formatMeetupDate(date)}, {MEETUP.time} · {MEETUP.place}
       </p>
     </>
+  );
+}
+
+function ShotefTeaser({
+  member,
+  handover,
+  now,
+}: {
+  member: Member;
+  /** When the shift is handed on — on duty, that is the date that matters. */
+  handover: string;
+  now: Date;
+}) {
+  return (
+    <div className="mt-3 flex items-center gap-3">
+      <PersonAvatar name={member.name} className="size-12 text-lg" />
+      <div className="min-w-0">
+        <p className="truncate font-semibold">{member.name}</p>
+        <p className="text-muted-foreground text-sm">
+          {conjugate(member, "אחראי", "אחראית")} על הבאגים · התורנות עוברת{" "}
+          {daysUntil(handover, now)}
+        </p>
+      </div>
+    </div>
   );
 }
 

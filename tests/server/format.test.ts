@@ -4,7 +4,9 @@ import {
   authorTone,
   formatRelative,
   formatSaidAt,
+  formatDayMonth,
   formatSaidAtShort,
+  formatWeekRange,
   initial,
   plural,
   toInputValue,
@@ -13,6 +15,32 @@ import {
 
 afterEach(() => {
   vi.useRealTimers();
+});
+
+describe("formatWeekRange", () => {
+  it("spells the month once when both ends share it", () => {
+    expect(formatWeekRange("2026-08-16T00:00:00.000Z")).toBe("16–22 באוגוסט");
+  });
+
+  it("spells both months when the week crosses one", () => {
+    expect(formatWeekRange("2026-09-27T00:00:00.000Z")).toBe(
+      "27 בספטמבר – 3 באוקטובר",
+    );
+  });
+
+  // UTC midnight in, UTC out — a local-time render would move the week back a
+  // day west of Greenwich, like every other date in the app.
+  it("formats in UTC", () => {
+    expect(formatWeekRange("2026-08-16T00:00:00.000Z")).toBe(
+      formatWeekRange("2026-08-16T23:00:00.000Z"),
+    );
+  });
+});
+
+describe("formatDayMonth", () => {
+  it("renders a bare day and month", () => {
+    expect(formatDayMonth("2026-08-30T00:00:00.000Z")).toBe("30 באוגוסט");
+  });
 });
 
 describe("formatSaidAt", () => {

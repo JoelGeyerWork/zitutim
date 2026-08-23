@@ -1,9 +1,16 @@
 "use client";
 
-import { CoffeeIcon } from "lucide-react";
+import { CoffeeIcon, type LucideIcon } from "lucide-react";
 
 import type { Member } from "@/lib/team";
 import { cn } from "@/lib/utils";
+
+/**
+ * The wheel both weekly rotations spin — the ישב״צ refreshments and the שוטף.
+ * It knows nothing about either: it is handed the faces, the angle and whether
+ * it is mid-spin, and the only thing that says which rotation this is, is the
+ * icon at the hub.
+ */
 
 const SIZE = 200;
 const C = SIZE / 2;
@@ -53,11 +60,12 @@ const INK = {
   seam: "var(--foreground)",
 } as const;
 
-export function MeetupWheel({
+export function RotationWheel({
   members,
   rotation,
   durationMs,
   spinning,
+  icon: HubIcon = CoffeeIcon,
 }: {
   /** Fixed for the life of the wheel — a wheel's faces don't move, it turns. */
   members: Member[];
@@ -65,6 +73,8 @@ export function MeetupWheel({
   rotation: number;
   durationMs: number;
   spinning: boolean;
+  /** What sits at the hub, and the only thing naming the rotation. */
+  icon?: LucideIcon;
 }) {
   const slice = sliceAngle(members.length);
 
@@ -168,7 +178,7 @@ export function MeetupWheel({
           spinning && "scale-90",
         )}
       >
-        <CoffeeIcon className="text-primary size-5" />
+        <HubIcon className="text-primary size-5" />
       </div>
     </div>
   );
