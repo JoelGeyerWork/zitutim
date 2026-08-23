@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, type FormEvent } from "react";
+import { useRef, useState, type FormEvent } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import {
@@ -33,10 +33,15 @@ export function QuoteEngagement({ quote }: { quote: Quote }) {
 
   const [liked, setLiked] = useState(quote.likedByViewer);
   const [likeCount, setLikeCount] = useState(quote.likeCount);
-  const [commentCount, setCommentCount] = useState(quote.commentCount);
-  const [comments, setComments] = useState(quote.commentsPreview);
+  const [commentState, setCommentState] = useState({
+    count: quote.commentCount,
+    comments: quote.commentsPreview,
+  });
+  const { count: commentCount, comments } = commentState;
   const [expanded, setExpanded] = useState(false);
   const [loadingComments, setLoadingComments] = useState(false);
+  const [commentsError, setCommentsError] = useState<string | null>(null);
+  const commentsRequest = useRef(0);
   const [liking, setLiking] = useState(false);
   const [newText, setNewText] = useState("");
   const [newError, setNewError] = useState<string | null>(null);
@@ -54,8 +59,10 @@ export function QuoteEngagement({ quote }: { quote: Quote }) {
     setSeed(quote);
     setLiked(quote.likedByViewer);
     setLikeCount(quote.likeCount);
-    setCommentCount(quote.commentCount);
-    if (!expanded) setComments(quote.commentsPreview);
+    setCommentState((current) => ({
+      count: quote.commentCount,
+      comments: expanded ? current.comments : quote.commentsPreview,
+    }));
   }
 
   async function responseMessage(
@@ -86,6 +93,8 @@ export function QuoteEngagement({ quote }: { quote: Quote }) {
         body: JSON.stringify({ liked: nextLiked }),
       });
       if (response.status === 401) {
+        setLiked(!nextLiked);
+        setLikeCount(previousCount);
         sendToLogin();
         return;
       }
@@ -96,7 +105,6 @@ export function QuoteEngagement({ quote }: { quote: Quote }) {
       const state: LikeState = await response.json();
       setLiked(state.likedByViewer);
       setLikeCount(state.likeCount);
-      router.refresh();
     } catch (error) {
       setLiked(!nextLiked);
       setLikeCount(previousCount);
@@ -109,21 +117,28 @@ export function QuoteEngagement({ quote }: { quote: Quote }) {
   }
 
   async function loadComments() {
+    const request = ++commentsRequest.current;
     setLoadingComments(true);
+    setCommentsError(null);
     try {
       const response = await fetch(`/api/quotes/${quote.id}/comments`);
       if (!response.ok) {
         throw new Error(await responseMessage(response, "טעינת התגובות נכשלה"));
       }
       const payload: { comments: QuoteComment[] } = await response.json();
-      setComments(payload.comments);
-      setCommentCount(payload.comments.length);
+      if (request !== commentsRequest.current) return;
+      setCommentState({
+        count: payload.comments.length,
+        comments: payload.comments,
+      });
     } catch (error) {
-      toast.error(
-        error instanceof Error ? error.message : "לא הצלחנו לטעון את התגובות",
-      );
+      if (request !== commentsRequest.current) return;
+      const message =
+        error instanceof Error ? error.message : "לא הצלחנו לטעון את התגובות";
+      setCommentsError(message);
+      toast.error(message);
     } finally {
-      setLoadingComments(false);
+      if (request === commentsRequest.current) setLoadingComments(false);
     }
   }
 
@@ -162,11 +177,27 @@ export function QuoteEngagement({ quote }: { quote: Quote }) {
       }
 
       const comment: QuoteComment = await response.json();
-      setComments((current) => [...current, comment]);
-      setCommentCount((current) => current + 1);
+      commentsRequest.current += 1;
+      setCommentState((current) => {
+        const existing = current.comments.findIndex(
+          (item) => item.id === comment.id,
+        );
+        if (existing !== -1) {
+          return {
+            ...current,
+            comments: current.comments.map((item, index) =>
+              index === existing ? comment : item,
+            ),
+          };
+        }
+        return {
+          count: current.count + 1,
+          comments: [...current.comments, comment],
+        };
+      });
       setNewText("");
       toast.success("התגובה נוספה");
-      router.refresh();
+      void loadComments();
     } catch {
       toast.error("אין חיבור לשרת");
     } finally {
@@ -215,12 +246,16 @@ export function QuoteEngagement({ quote }: { quote: Quote }) {
       }
 
       const updated: QuoteComment = await response.json();
-      setComments((current) =>
-        current.map((item) => (item.id === updated.id ? updated : item)),
-      );
+      commentsRequest.current += 1;
+      setCommentState((current) => ({
+        ...current,
+        comments: current.comments.map((item) =>
+          item.id === updated.id ? updated : item,
+        ),
+      }));
       setEditingId(null);
       toast.success("התגובה עודכנה");
-      router.refresh();
+      void loadComments();
     } catch {
       toast.error("אין חיבור לשרת");
     } finally {
@@ -244,13 +279,22 @@ export function QuoteEngagement({ quote }: { quote: Quote }) {
         throw new Error(await responseMessage(response, "מחיקת התגובה נכשלה"));
       }
 
-      setComments((current) =>
-        current.filter((item) => item.id !== comment.id),
-      );
-      setCommentCount((current) => Math.max(0, current - 1));
+      commentsRequest.current += 1;
+      setCommentState((current) => {
+        const comments = current.comments.filter(
+          (item) => item.id !== comment.id,
+        );
+        return {
+          count:
+            comments.length === current.comments.length
+              ? current.count
+              : Math.max(0, current.count - 1),
+          comments,
+        };
+      });
       if (editingId === comment.id) setEditingId(null);
       toast.success("התגובה נמחקה");
-      router.refresh();
+      void loadComments();
     } catch (error) {
       toast.error(
         error instanceof Error ? error.message : "לא הצלחנו למחוק את התגובה",
@@ -328,6 +372,31 @@ export function QuoteEngagement({ quote }: { quote: Quote }) {
           aria-busy={loadingComments}
         >
           <h3 className="sr-only">תגובות לציטוט</h3>
+
+          {commentsError ? (
+            <div
+              className="border-destructive/40 bg-destructive/5 text-destructive rounded-xl border px-3 py-2 text-sm"
+              role="alert"
+            >
+              <p>{commentsError}</p>
+              <p className="mt-1 text-xs">
+                ייתכן שמוצגות כאן רק התגובות האחרונות.
+              </p>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="mt-2"
+                onClick={() => void loadComments()}
+                disabled={loadingComments}
+              >
+                {loadingComments ? (
+                  <Loader2Icon className="animate-spin" />
+                ) : null}
+                ניסיון נוסף
+              </Button>
+            </div>
+          ) : null}
 
           {loadingComments && comments.length === 0 ? (
             <p className="text-muted-foreground flex items-center gap-2 text-sm">

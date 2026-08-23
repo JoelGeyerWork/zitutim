@@ -17,9 +17,10 @@ vi.mock("sonner", () => ({
 }));
 
 const refresh = vi.hoisted(() => vi.fn());
+const push = vi.hoisted(() => vi.fn());
 vi.mock("next/navigation", () => ({
   usePathname: () => "/quotes",
-  useRouter: () => ({ refresh }),
+  useRouter: () => ({ push, refresh }),
 }));
 
 let fetchMock: ReturnType<typeof vi.fn>;
@@ -34,6 +35,7 @@ beforeEach(() => {
   fetchMock = vi.fn();
   vi.stubGlobal("fetch", fetchMock);
   refresh.mockReset();
+  push.mockReset();
   vi.mocked(toast.success).mockReset();
   vi.mocked(toast.error).mockReset();
 });
@@ -114,7 +116,28 @@ describe("QuoteEngagement", () => {
         body: JSON.stringify({ liked: false }),
       }),
     );
-    expect(refresh).toHaveBeenCalled();
+    expect(refresh).not.toHaveBeenCalled();
+  });
+
+  it("rolls back an optimistic like before redirecting on an expired session", async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ error: "צריך להתחבר" }, 401));
+    const user = userEvent.setup();
+    renderSignedIn(
+      <QuoteEngagement
+        quote={makeQuote({ likeCount: 2, likedByViewer: false })}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: /סימון לייק/ }));
+
+    await waitFor(() => {
+      expect(screen.getByText("2 לייקים")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /סימון לייק/ })).toHaveAttribute(
+        "aria-pressed",
+        "false",
+      );
+    });
+    expect(push).toHaveBeenCalledWith("/login?next=%2Fquotes");
   });
 
   it("loads the full conversation and adds a comment inline", async () => {
@@ -140,6 +163,69 @@ describe("QuoteEngagement", () => {
     expect(screen.getByText("2 תגובות")).toBeInTheDocument();
     expect(screen.getByLabelText("הוספת תגובה")).toHaveValue("");
     expect(toast.success).toHaveBeenCalledWith("התגובה נוספה");
+    expect(refresh).not.toHaveBeenCalled();
+  });
+
+  it("ignores an older comment load after an overlapping comment creation", async () => {
+    const old = makeComment({ id: "1", text: "ישנה" });
+    const added = makeComment({ id: "2", text: "תגובה חדשה" });
+    let resolveInitialLoad!: (response: Response) => void;
+    const initialLoad = new Promise<Response>((resolve) => {
+      resolveInitialLoad = resolve;
+    });
+    fetchMock
+      .mockImplementationOnce(() => initialLoad)
+      .mockResolvedValueOnce(jsonResponse(added, 201))
+      .mockResolvedValueOnce(jsonResponse({ comments: [old, added] }));
+    const user = userEvent.setup();
+
+    renderSignedIn(
+      <QuoteEngagement
+        quote={makeQuote({ commentCount: 1, commentsPreview: [old] })}
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: "תגובה אחת" }));
+    await user.type(screen.getByLabelText("הוספת תגובה"), added.text);
+    await user.click(screen.getByRole("button", { name: "שליחה" }));
+
+    expect(await screen.findByText(added.text)).toBeInTheDocument();
+    resolveInitialLoad(jsonResponse({ comments: [old] }));
+
+    await waitFor(() => {
+      expect(screen.getAllByText(added.text)).toHaveLength(1);
+      expect(screen.getByText("2 תגובות")).toBeInTheDocument();
+    });
+  });
+
+  it("keeps a failed full-thread load visibly retryable", async () => {
+    const preview = makeComment({ text: "תגובה אחרונה" });
+    const older = makeComment({ id: "2", text: "תגובה ישנה" });
+    fetchMock
+      .mockResolvedValueOnce(
+        jsonResponse({ error: "לא הצלחנו לטעון את התגובות" }, 500),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({ comments: [older, preview] }),
+      );
+    const user = userEvent.setup();
+
+    render(
+      <QuoteEngagement
+        quote={makeQuote({
+          commentCount: 2,
+          commentsPreview: [preview],
+        })}
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: "2 תגובות" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "ייתכן שמוצגות כאן רק התגובות האחרונות",
+    );
+    await user.click(screen.getByRole("button", { name: "ניסיון נוסף" }));
+
+    expect(await screen.findByText(older.text)).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
   it("offers edit and delete only on the viewer's own comments", async () => {
