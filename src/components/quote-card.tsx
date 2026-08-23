@@ -14,6 +14,7 @@ import { toast } from "sonner";
 import { DeleteQuoteDialog } from "@/components/delete-quote-dialog";
 import { EditQuoteDialog } from "@/components/edit-quote-dialog";
 import { toneFor } from "@/components/person-avatar";
+import { QuoteEngagement } from "@/components/quote-engagement";
 import { useSession } from "@/components/session-provider";
 import { Button } from "@/components/ui/button";
 import {
@@ -142,6 +143,8 @@ export function QuoteCard({
           {copied ? "הועתק" : "העתקה"}
         </Button>
       </footer>
+
+      <QuoteEngagement quote={quote} />
 
       {/* Mounted only while open so the form always starts from fresh data. */}
       {editing ? (

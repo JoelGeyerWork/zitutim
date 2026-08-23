@@ -11,7 +11,10 @@ vi.mock("sonner", () => ({
 }));
 
 const push = vi.hoisted(() => vi.fn());
-vi.mock("next/navigation", () => ({ useRouter: () => ({ push }) }));
+vi.mock("next/navigation", () => ({
+  usePathname: () => "/quotes",
+  useRouter: () => ({ push, refresh: vi.fn() }),
+}));
 
 /** The actions menu only exists for a signed-in user. */
 function renderSignedIn(ui: React.ReactElement) {

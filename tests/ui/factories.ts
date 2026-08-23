@@ -1,4 +1,5 @@
 import type { Quote } from "@/lib/quote-schema";
+import type { QuoteComment } from "@/lib/engagement-schema";
 import type {
   Standing,
   Theme,
@@ -19,6 +20,10 @@ export function makeQuote(overrides: Partial<Quote> = {}): Quote {
     updatedById: null,
     createdAt: "2026-08-08T09:00:00.000Z",
     updatedAt: "2026-08-08T09:00:00.000Z",
+    likeCount: 0,
+    commentCount: 0,
+    likedByViewer: false,
+    commentsPreview: [],
     ...overrides,
   };
 }
@@ -30,6 +35,21 @@ export function makeSessionUser(
     id: "6b0000000000000000000001",
     name: "דנה כהן",
     username: "dana",
+    ...overrides,
+  };
+}
+
+export function makeComment(
+  overrides: Partial<QuoteComment> = {},
+): QuoteComment {
+  return {
+    id: "7c0000000000000000000001",
+    quoteId: "6a0000000000000000000001",
+    authorId: "6b0000000000000000000001",
+    authorName: "דנה כהן",
+    text: "תגובה טובה",
+    createdAt: "2026-08-20T09:00:00.000Z",
+    updatedAt: "2026-08-20T09:00:00.000Z",
     ...overrides,
   };
 }

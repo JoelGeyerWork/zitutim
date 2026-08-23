@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+import type { QuoteComment } from "@/lib/engagement-schema";
+
 /**
  * Types, constants and validation shared by the server and the browser.
  * Deliberately free of any `mongodb` import so client components can use it.
@@ -24,6 +26,12 @@ export interface Quote {
   updatedById: string | null;
   createdAt: string;
   updatedAt: string;
+  likeCount: number;
+  commentCount: number;
+  /** Whether the signed-in viewer has liked this quote; false when anonymous. */
+  likedByViewer: boolean;
+  /** Latest two comments, displayed in chronological order. */
+  commentsPreview: QuoteComment[];
 }
 
 export interface QuotePage {

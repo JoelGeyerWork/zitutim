@@ -4,6 +4,7 @@ import { PageHeader, PageShell } from "@/components/page-shell";
 import { QuoteFeed } from "@/components/quote-feed";
 import { plural } from "@/lib/format";
 import { getStats, listQuotes } from "@/lib/quotes";
+import { getSession } from "@/lib/session";
 
 export const dynamic = "force-dynamic";
 
@@ -12,7 +13,11 @@ export const metadata: Metadata = {
 };
 
 export default async function FeedPage() {
-  const [page, stats] = await Promise.all([listQuotes(), getStats()]);
+  const user = await getSession();
+  const [page, stats] = await Promise.all([
+    listQuotes({ viewerId: user?.id }),
+    getStats(),
+  ]);
 
   return (
     <PageShell>

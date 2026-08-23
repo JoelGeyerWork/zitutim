@@ -19,9 +19,10 @@ export const dynamic = "force-dynamic";
 type Params = { params: Promise<{ id: string }> };
 
 /** Deliberately public, like the collection GET. */
-export async function GET(_request: Request, { params }: Params) {
+export async function GET(request: Request, { params }: Params) {
   const { id } = await params;
-  const quote = await getQuote(id);
+  const session = await getSessionFrom(request);
+  const quote = await getQuote(id, session?.id);
   if (!quote) {
     return NextResponse.json({ error: "הציטוט לא נמצא" }, { status: 404 });
   }

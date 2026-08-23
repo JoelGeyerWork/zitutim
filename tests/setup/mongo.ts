@@ -1,6 +1,7 @@
 import { MongoMemoryServer } from "mongodb-memory-server";
 import { afterAll, beforeAll } from "vitest";
 
+import { createEngagementIndexes } from "@/lib/engagement";
 import { closeClient } from "@/lib/mongodb";
 
 /**
@@ -14,6 +15,7 @@ beforeAll(async () => {
   server = await MongoMemoryServer.create();
   process.env.MONGODB_URI = server.getUri();
   process.env.MONGODB_DB = "zitutim_test";
+  await createEngagementIndexes();
 });
 
 afterAll(async () => {
