@@ -67,6 +67,17 @@ describe("QuoteEngagement", () => {
       ]);
   });
 
+  it("keeps the comments disclosure target mounted while collapsed", () => {
+    const quote = makeQuote();
+    render(<QuoteEngagement quote={quote} />);
+
+    const toggle = screen.getByRole("button", { name: "0 תגובות" });
+    const targetId = toggle.getAttribute("aria-controls");
+
+    expect(targetId).toBe(`comments-${quote.id}`);
+    expect(document.getElementById(targetId!)).toHaveAttribute("hidden");
+  });
+
   it("sends anonymous engagement attempts to login but keeps comments public", async () => {
     const comment = makeComment();
     fetchMock.mockResolvedValue(
@@ -227,6 +238,36 @@ describe("QuoteEngagement", () => {
 
     expect(await screen.findByText(older.text)).toBeInTheDocument();
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("does not call a complete local thread partial after a re-sync failure", async () => {
+    const old = makeComment({ id: "1", text: "ישנה" });
+    const added = makeComment({ id: "2", text: "תגובה חדשה" });
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse({ comments: [old] }))
+      .mockResolvedValueOnce(jsonResponse(added, 201))
+      .mockResolvedValueOnce(
+        jsonResponse({ error: "רענון התגובות נכשל" }, 500),
+      );
+    const user = userEvent.setup();
+
+    renderSignedIn(
+      <QuoteEngagement
+        quote={makeQuote({ commentCount: 1, commentsPreview: [old] })}
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: "תגובה אחת" }));
+    await screen.findByText(old.text);
+    await user.type(screen.getByLabelText("הוספת תגובה"), added.text);
+    await user.click(screen.getByRole("button", { name: "שליחה" }));
+
+    expect(await screen.findByText(added.text)).toBeInTheDocument();
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("רענון התגובות נכשל");
+    expect(alert).not.toHaveTextContent(
+      "ייתכן שמוצגות כאן רק התגובות האחרונות",
+    );
+    expect(screen.getByText("2 תגובות")).toBeInTheDocument();
   });
 
   it("offers edit and delete only on the viewer's own comments", async () => {

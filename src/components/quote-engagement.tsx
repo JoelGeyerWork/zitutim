@@ -38,9 +38,15 @@ export function QuoteEngagement({ quote }: { quote: Quote }) {
     comments: quote.commentsPreview,
   });
   const { count: commentCount, comments } = commentState;
+  const [commentsComplete, setCommentsComplete] = useState(
+    quote.commentCount === quote.commentsPreview.length,
+  );
   const [expanded, setExpanded] = useState(false);
   const [loadingComments, setLoadingComments] = useState(false);
-  const [commentsError, setCommentsError] = useState<string | null>(null);
+  const [commentsError, setCommentsError] = useState<{
+    message: string;
+    mayBeIncomplete: boolean;
+  } | null>(null);
   const commentsRequest = useRef(0);
   const [liking, setLiking] = useState(false);
   const [newText, setNewText] = useState("");
@@ -59,6 +65,11 @@ export function QuoteEngagement({ quote }: { quote: Quote }) {
     setSeed(quote);
     setLiked(quote.likedByViewer);
     setLikeCount(quote.likeCount);
+    setCommentsComplete(
+      expanded
+        ? commentsComplete && quote.commentCount === commentCount
+        : quote.commentCount === quote.commentsPreview.length,
+    );
     setCommentState((current) => ({
       count: quote.commentCount,
       comments: expanded ? current.comments : quote.commentsPreview,
@@ -127,6 +138,7 @@ export function QuoteEngagement({ quote }: { quote: Quote }) {
       }
       const payload: { comments: QuoteComment[] } = await response.json();
       if (request !== commentsRequest.current) return;
+      setCommentsComplete(true);
       setCommentState({
         count: payload.comments.length,
         comments: payload.comments,
@@ -135,7 +147,10 @@ export function QuoteEngagement({ quote }: { quote: Quote }) {
       if (request !== commentsRequest.current) return;
       const message =
         error instanceof Error ? error.message : "לא הצלחנו לטעון את התגובות";
-      setCommentsError(message);
+      setCommentsError({
+        message,
+        mayBeIncomplete: !commentsComplete,
+      });
       toast.error(message);
     } finally {
       if (request === commentsRequest.current) setLoadingComments(false);
@@ -378,10 +393,12 @@ export function QuoteEngagement({ quote }: { quote: Quote }) {
               className="border-destructive/40 bg-destructive/5 text-destructive rounded-xl border px-3 py-2 text-sm"
               role="alert"
             >
-              <p>{commentsError}</p>
-              <p className="mt-1 text-xs">
-                ייתכן שמוצגות כאן רק התגובות האחרונות.
-              </p>
+              <p>{commentsError.message}</p>
+              {commentsError.mayBeIncomplete ? (
+                <p className="mt-1 text-xs">
+                  ייתכן שמוצגות כאן רק התגובות האחרונות.
+                </p>
+              ) : null}
               <Button
                 type="button"
                 variant="outline"
@@ -561,7 +578,9 @@ export function QuoteEngagement({ quote }: { quote: Quote }) {
             </p>
           )}
         </div>
-      ) : null}
+      ) : (
+        <div id={`comments-${quote.id}`} hidden />
+      )}
     </section>
   );
 }
