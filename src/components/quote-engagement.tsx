@@ -67,7 +67,7 @@ export function QuoteEngagement({ quote }: { quote: Quote }) {
   }
 
   function sendToLogin() {
-    window.location.assign(loginHref);
+    router.push(loginHref);
   }
 
   async function toggleLike() {
