@@ -251,7 +251,7 @@ describe("quote comments", () => {
     const db = await getDb();
     const original = Collection.prototype.findOneAndUpdate;
     vi.spyOn(Collection.prototype, "findOneAndUpdate").mockImplementationOnce(
-      async function (filter, update) {
+      async function (this: Collection, filter, update) {
         const result = await original.call(this, filter, update);
         await db.collection("quotes").deleteOne({
           _id: new ObjectId(quote.id),
@@ -285,7 +285,7 @@ describe("quote comments", () => {
     const db = await getDb();
     const original = Collection.prototype.deleteOne;
     vi.spyOn(Collection.prototype, "deleteOne").mockImplementationOnce(
-      async function (filter, options) {
+      async function (this: Collection, filter, options) {
         const result = await original.call(this, filter, options);
         await db.collection("quotes").deleteMany({
           _id: new ObjectId(quote.id),
