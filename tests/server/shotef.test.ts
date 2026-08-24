@@ -7,10 +7,15 @@ import {
   SHOTEF_ROSTER,
   averageRating,
   buildShifts,
+  byFame,
+  countBySeverity,
   currentShift,
+  fastestFix,
   handoverOf,
   memberById,
   shiftIndex,
+  solverBoard,
+  type SolvedMonitor,
 } from "@/lib/shotef";
 import { rotate, type Member } from "@/lib/team";
 
@@ -122,6 +127,101 @@ describe("averageRating", () => {
   });
 });
 
+/** A plaque with only the fields a given test cares about spelled out. */
+const plaque = (over: Partial<SolvedMonitor>): SolvedMonitor => ({
+  ...HALL_OF_FAME[0],
+  ...over,
+});
+
+describe("byFame", () => {
+  it("puts the loudest tier first and the newest inside a tier", () => {
+    const wall = byFame([
+      plaque({ id: "1", severity: "minor", solvedAt: "2026-08-01T00:00:00.000Z" }),
+      plaque({ id: "2", severity: "critical", solvedAt: "2026-01-01T00:00:00.000Z" }),
+      plaque({ id: "3", severity: "major", solvedAt: "2026-02-01T00:00:00.000Z" }),
+      plaque({ id: "4", severity: "critical", solvedAt: "2026-03-01T00:00:00.000Z" }),
+    ]);
+
+    expect(wall.map((monitor) => monitor.id)).toEqual(["4", "2", "3", "1"]);
+  });
+
+  it("leaves the source list alone", () => {
+    const wall = [
+      plaque({ id: "1", severity: "minor" }),
+      plaque({ id: "2", severity: "critical" }),
+    ];
+    byFame(wall);
+
+    expect(wall.map((monitor) => monitor.id)).toEqual(["1", "2"]);
+  });
+});
+
+describe("solverBoard", () => {
+  it("counts plaques per person, most first", () => {
+    const board = solverBoard([
+      plaque({ id: "1", solvedById: "ori" }),
+      plaque({ id: "2", solvedById: "maya" }),
+      plaque({ id: "3", solvedById: "ori" }),
+    ]);
+
+    expect(board.map((row) => [row.member.id, row.solved])).toEqual([
+      ["ori", 2],
+      ["maya", 1],
+    ]);
+  });
+
+  it("breaks a tie on the newest save", () => {
+    const board = solverBoard([
+      plaque({ id: "1", solvedById: "ori", solvedAt: "2026-01-01T00:00:00.000Z" }),
+      plaque({ id: "2", solvedById: "maya", solvedAt: "2026-05-01T00:00:00.000Z" }),
+    ]);
+
+    expect(board[0].member.id).toBe("maya");
+    expect(board[0].lastSolved).toBe("2026-05-01T00:00:00.000Z");
+  });
+
+  // A monitor keeps its plaque either way — the board is about people, and
+  // someone off the roster has no row to put on it.
+  it("drops a solver who is no longer on the roster", () => {
+    const board = solverBoard([
+      plaque({ id: "1", solvedById: "who" }),
+      plaque({ id: "2", solvedById: "ori" }),
+    ]);
+
+    expect(board.map((row) => row.member.id)).toEqual(["ori"]);
+  });
+});
+
+describe("fastestFix and countBySeverity", () => {
+  it("finds the quickest save", () => {
+    const fastest = fastestFix([
+      plaque({ id: "1", minutesToFix: 300 }),
+      plaque({ id: "2", minutesToFix: 11 }),
+      plaque({ id: "3", minutesToFix: 90 }),
+    ]);
+
+    expect(fastest?.id).toBe("2");
+  });
+
+  it("has nothing to name on an empty wall", () => {
+    expect(fastestFix([])).toBeUndefined();
+    expect(countBySeverity([], "critical")).toBe(0);
+  });
+
+  it("counts one tier", () => {
+    expect(
+      countBySeverity(
+        [
+          plaque({ id: "1", severity: "critical" }),
+          plaque({ id: "2", severity: "minor" }),
+          plaque({ id: "3", severity: "critical" }),
+        ],
+        "critical",
+      ),
+    ).toBe(2);
+  });
+});
+
 // The fixtures are what the three screens render today, so a typo in an id
 // would show up only as "לא ידוע" on a card.
 describe("the hard-coded content", () => {
@@ -138,6 +238,13 @@ describe("the hard-coded content", () => {
     for (const review of SHOTEF_REVIEWS) {
       expect(review.rating).toBeGreaterThanOrEqual(0);
       expect(review.rating).toBeLessThanOrEqual(5);
+    }
+  });
+
+  it("gives every plaque a name and a positive time to fix", () => {
+    for (const monitor of HALL_OF_FAME) {
+      expect(monitor.award, monitor.id).not.toBe("");
+      expect(monitor.minutesToFix, monitor.id).toBeGreaterThan(0);
     }
   });
 

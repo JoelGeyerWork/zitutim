@@ -5,6 +5,7 @@ import {
   formatRelative,
   formatSaidAt,
   formatDayMonth,
+  formatDuration,
   formatSaidAtShort,
   formatWeekRange,
   initial,
@@ -15,6 +16,31 @@ import {
 
 afterEach(() => {
   vi.useRealTimers();
+});
+
+describe("formatDuration", () => {
+  it("counts minutes below an hour", () => {
+    expect(formatDuration(11)).toBe("11 דקות");
+    expect(formatDuration(1)).toBe("דקה");
+  });
+
+  // Hebrew has a dual form, so 2 is its own word and cannot be reached by
+  // counting — the one thing here a naive `${n} שעות` would get wrong.
+  it("uses the dual for two hours and two days", () => {
+    expect(formatDuration(120)).toBe("שעתיים");
+    expect(formatDuration(2 * 24 * 60)).toBe("יומיים");
+  });
+
+  it("counts hours, then days", () => {
+    expect(formatDuration(60)).toBe("שעה");
+    expect(formatDuration(300)).toBe("5 שעות");
+    expect(formatDuration(24 * 60)).toBe("יום");
+    expect(formatDuration(3 * 24 * 60)).toBe("3 ימים");
+  });
+
+  it("spells a half day", () => {
+    expect(formatDuration(36 * 60)).toBe("יום וחצי");
+  });
 });
 
 describe("formatWeekRange", () => {

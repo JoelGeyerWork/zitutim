@@ -108,6 +108,31 @@ export function toInputValue(iso: string): string {
 }
 
 /**
+ * A wall-clock span in Hebrew: "11 דקות", "שעתיים", "יום וחצי". Hebrew has a
+ * dual form, so 2 is its own word in every unit and cannot be reached by
+ * counting. Halves are spelled only for the day, which is the one unit here
+ * coarse enough to need them.
+ */
+export function formatDuration(minutes: number): string {
+  if (minutes < 60) return minutes === 1 ? "דקה" : `${minutes} דקות`;
+
+  if (minutes < 24 * 60) {
+    const hours = Math.round(minutes / 60);
+    if (hours === 1) return "שעה";
+    if (hours === 2) return "שעתיים";
+    return `${hours} שעות`;
+  }
+
+  const days = Math.round((minutes / (24 * 60)) * 2) / 2;
+  const half = days % 1 !== 0;
+  const whole = Math.floor(days);
+
+  const name =
+    whole === 1 ? "יום" : whole === 2 ? "יומיים" : `${whole} ימים`;
+  return half ? `${name} וחצי` : name;
+}
+
+/**
  * Hebrew counts read badly with a bare numeral at 1 ("1 תוצאות"), so the
  * singular gets its own wording. Two is close enough to the plural form here.
  */

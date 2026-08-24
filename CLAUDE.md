@@ -543,7 +543,9 @@ directional *icons* are a separate judgment call: the "לפיד" arrow in
 leftward in RTL.
 
 Hebrew counts need `plural()` from `src/lib/format.ts` — a bare numeral reads
-badly at 1 ("1 תוצאות").
+badly at 1 ("1 תוצאות"). Durations need `formatDuration()` from the same module
+for the same reason, one step worse: Hebrew has a dual, so 2 is its own word in
+every unit ("שעתיים", "יומיים") and cannot be reached by counting.
 
 ## UI library
 

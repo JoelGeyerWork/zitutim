@@ -196,9 +196,34 @@ export const SEVERITY_LABELS: Record<MonitorSeverity, string> = {
   minor: "מינורית",
 };
 
+/**
+ * What the plaque is engraved with. The key is mapped to an icon in the view —
+ * the data says what the fix was *about*, not which component draws it, so a
+ * redesign doesn't have to rewrite the hall.
+ */
+export type AwardIcon =
+  | "memory"
+  | "loop"
+  | "certificate"
+  | "fire"
+  | "disk"
+  | "network"
+  | "cache"
+  | "backup"
+  | "latency"
+  | "pipeline"
+  | "index";
+
 /** A monitor that fired, and what it took to make it stop. */
 export type SolvedMonitor = {
   id: string;
+  /**
+   * The name the fix is remembered by. The monitor is what the machine calls
+   * it; this is what a person calls it — and it is what makes the wall read as
+   * a hall of fame rather than as an incident log.
+   */
+  award: string;
+  icon: AwardIcon;
   /** The monitor as it is spelled in the alerting system — quoted verbatim. */
   monitor: string;
   severity: MonitorSeverity;
@@ -208,81 +233,145 @@ export type SolvedMonitor = {
   solvedById: string;
   /** UTC midnight of the day it was closed. */
   solvedAt: string;
-  /** Wall-clock time from the page to the fix, as a Hebrew phrase. */
-  timeToFix: string;
+  /** Wall-clock minutes from the page to the fix. Rendered by `formatDuration`
+   *  rather than written out, so "the fastest one" is something we can compute
+   *  instead of something we have to keep in agreement by hand. */
+  minutesToFix: number;
 };
 
-/** Newest first, like the reviews. */
+/** Newest first, like the reviews. The wall re-sorts; the record is a record. */
 export const HALL_OF_FAME: SolvedMonitor[] = [
   {
     id: "m-db-ram",
+    award: "צייד הזיכרון",
+    icon: "memory",
     monitor: "db-prod-01: RAM above 95%",
     severity: "critical",
     solution:
       "לא דליפה — שאילתת דוח חודשית רצה בלי אינדקס ומשכה את כל הטבלה לזיכרון. הוספנו אינדקס מורכב על tenant ועל created_at, וזמן הריצה ירד מארבע דקות לשתי שניות. הזיכרון חזר ל-40% ולא עלה מאז.",
     solvedById: "ori",
     solvedAt: "2026-08-18T00:00:00.000Z",
-    timeToFix: "3 שעות",
+    minutesToFix: 180,
+  },
+  {
+    id: "m-backup-stale",
+    award: "שומר הגיבויים",
+    icon: "backup",
+    monitor: "backup: last successful backup older than 48h",
+    severity: "critical",
+    solution:
+      "הגיבוי נכשל בשקט שלושה לילות אחרי ששינינו שם של דיסק — הסקריפט המשיך לדווח הצלחה כי בדק רק שהוא רץ, לא שהוא כתב. תיקנו את הנתיב, החלפנו את הבדיקה בקוד היציאה של המשימה, וגם שחזרנו גיבוי אחד כדי לוודא שיש מה לשחזר.",
+    solvedById: "daniel",
+    solvedAt: "2026-08-11T00:00:00.000Z",
+    minutesToFix: 300,
   },
   {
     id: "m-queue-lag",
+    award: "שובר הלולאה",
+    icon: "loop",
     monitor: "ingest-queue: consumer lag > 10k",
     severity: "critical",
     solution:
       "צרכן אחד נתקע על הודעה פגומה וניסה אותה שוב ושוב בלולאה אינסופית. הוספנו תור מכתבים־מתים אחרי שלושה ניסיונות, והפעם גם התראה על התור הזה — כדי שהודעה פגומה תהיה שקופה במקום להיות שקטה.",
     solvedById: "yonatan",
     solvedAt: "2026-08-06T00:00:00.000Z",
-    timeToFix: "יום וחצי",
+    minutesToFix: 2160,
   },
   {
     id: "m-tls-expiry",
+    award: "שומר התעודות",
+    icon: "certificate",
     monitor: "gateway: TLS certificate expires in 3 days",
     severity: "major",
     solution:
       "חידוש ידני שאף אחד לא נזכר בו. חידשנו, ואז החלפנו את הזיכרון האנושי בקרון שמחדש 30 יום מראש ומדווח לערוץ. ההתראה נשארה — היא עכשיו רשת ביטחון ולא לוח שנה.",
     solvedById: "daniel",
     solvedAt: "2026-07-29T00:00:00.000Z",
-    timeToFix: "שעה",
+    minutesToFix: 60,
   },
   {
     id: "m-5xx-spike",
+    award: "מכבה השריפות",
+    icon: "fire",
     monitor: "api: 5xx rate above 2% for 5m",
     severity: "critical",
     solution:
       "שחרור שהוסיף שדה חובה לבקשה בלי לעדכן את האפליקציה בנייד. החזרנו לאחור תוך אחת־עשרה דקות, ואז שחררנו מחדש כששני הצדדים מסונכרנים. מאז שדה חובה חדש עובר קודם דרך שלב שבו הוא עדיין אופציונלי.",
     solvedById: "itay",
     solvedAt: "2026-07-21T00:00:00.000Z",
-    timeToFix: "11 דקות",
+    minutesToFix: 11,
+  },
+  {
+    id: "m-p95-latency",
+    award: "קוטל השאילתות",
+    icon: "latency",
+    monitor: "web: p95 latency above 2s",
+    severity: "major",
+    solution:
+      "וידג׳ט חדש בדף הבית שאל את מסד הנתונים פעם אחת לכל שורה שהוא הציג — שמונים שאילתות בטעינה אחת. איחדנו אותן לשאילתה אחת, וה-p95 חזר מ-2.4 שניות ל-400 מילישניות.",
+    solvedById: "itay",
+    solvedAt: "2026-07-06T00:00:00.000Z",
+    minutesToFix: 240,
   },
   {
     id: "m-disk-logs",
+    award: "מפנה הדיסק",
+    icon: "disk",
     monitor: "app-03: disk usage above 90%",
     severity: "major",
     solution:
       "לוגים בלי סבב. פינינו, הגדרנו logrotate יומי עם שמירה לשבועיים, והורדנו את רמת הלוג של הבריאות מ-debug ל-info. תפוסת הדיסק יציבה על 55%.",
     solvedById: "tamar",
     solvedAt: "2026-06-30T00:00:00.000Z",
-    timeToFix: "שעתיים",
+    minutesToFix: 120,
+  },
+  {
+    id: "m-etl-nightly",
+    award: "מאלף הצינור",
+    icon: "pipeline",
+    monitor: "etl: nightly export failed",
+    severity: "minor",
+    solution:
+      "המקור הוסיף עמודה, והטוען שלנו נפל על סכימה שלא הכיר. עכשיו הוא סופג עמודות שאינן מוכרות לו במקום ליפול, ומדווח עליהן בבוקר — טעינה שנכשלת היא בעיה, טעינה שמפתיעה היא רק ידיעה.",
+    solvedById: "ori",
+    solvedAt: "2026-06-22T00:00:00.000Z",
+    minutesToFix: 90,
   },
   {
     id: "m-ldap-timeouts",
+    award: "מציל הכניסה",
+    icon: "network",
     monitor: "auth: LDAP bind timeouts",
     severity: "major",
     solution:
       "לא אנחנו — בקר תחום אחד מתוך שלושה יצא מהאוויר, והקליינט המשיך לנסות דווקא אותו. פנינו לתשתיות, ובינתיים קיצרנו את הטיים־אאוט וסידרנו מעבר לבקר הבא ברשימה. הכניסה נשארה עובדת גם כשבקר נופל.",
     solvedById: "noa",
     solvedAt: "2026-06-11T00:00:00.000Z",
-    timeToFix: "4 שעות",
+    minutesToFix: 240,
   },
   {
     id: "m-cache-stampede",
+    award: "מרגיע העדר",
+    icon: "cache",
     monitor: "cache: hit rate below 60%",
     severity: "minor",
     solution:
       "כל המפתחות פגו באותה שנייה בדיוק, ואז כולם רצו יחד למסד הנתונים. פיזרנו את תוקף המפתחות באקראי בעד עשר אחוז, וההצלחה חזרה ל-94%.",
     solvedById: "maya",
     solvedAt: "2026-05-24T00:00:00.000Z",
-    timeToFix: "יום",
+    minutesToFix: 1440,
+  },
+  {
+    id: "m-search-index",
+    award: "בונה האינדקס",
+    icon: "index",
+    monitor: "search: index rebuild stuck for 6h",
+    severity: "minor",
+    solution:
+      "בנייה מחדש שרצה על אותו מסמך פגום עד אינסוף. דילגנו עליו, המשכנו את הבנייה, ואז הוספנו לה יומן התקדמות — מאז בנייה תקועה נראית תקועה תוך דקות במקום תוך חצי יום.",
+    solvedById: "ori",
+    solvedAt: "2026-05-10T00:00:00.000Z",
+    minutesToFix: 150,
   },
 ];
 
@@ -296,4 +385,78 @@ export function averageRating(reviews: ShotefReview[]): number {
   if (reviews.length === 0) return 0;
   const total = reviews.reduce((sum, review) => sum + review.rating, 0);
   return Math.round((total / reviews.length) * 10) / 10;
+}
+
+/**
+ * A hall of fame is a wall, not a timeline: the loudest monitor anyone ever
+ * silenced belongs at the top, whenever it was. Ties inside a tier fall back to
+ * the newest, so a fresh save is not buried under an old one of equal weight.
+ */
+const SEVERITY_RANK: Record<MonitorSeverity, number> = {
+  critical: 0,
+  major: 1,
+  minor: 2,
+};
+
+export function byFame(monitors: SolvedMonitor[]): SolvedMonitor[] {
+  return [...monitors].sort(
+    (a, b) =>
+      SEVERITY_RANK[a.severity] - SEVERITY_RANK[b.severity] ||
+      b.solvedAt.localeCompare(a.solvedAt),
+  );
+}
+
+/** One row of the board: who has their name on how many plaques. */
+export type Solver = {
+  member: Member;
+  solved: number;
+  /** Newest save, for breaking a tie on form rather than on name order. */
+  lastSolved: string;
+};
+
+/**
+ * The people behind the wall, most plaques first. Anyone no longer on the
+ * roster drops out rather than appearing nameless — their monitors keep their
+ * plaques, which is where the record actually lives.
+ */
+export function solverBoard(monitors: SolvedMonitor[]): Solver[] {
+  const board = new Map<string, Solver>();
+
+  for (const monitor of monitors) {
+    const member = memberById(monitor.solvedById);
+    if (!member) continue;
+
+    const row = board.get(member.id);
+    if (row) {
+      row.solved += 1;
+      if (monitor.solvedAt > row.lastSolved) row.lastSolved = monitor.solvedAt;
+    } else {
+      board.set(member.id, {
+        member,
+        solved: 1,
+        lastSolved: monitor.solvedAt,
+      });
+    }
+  }
+
+  return [...board.values()].sort(
+    (a, b) => b.solved - a.solved || b.lastSolved.localeCompare(a.lastSolved),
+  );
+}
+
+/** How many of the plaques were the loud kind — the wall's headline number. */
+export function countBySeverity(
+  monitors: SolvedMonitor[],
+  severity: MonitorSeverity,
+): number {
+  return monitors.filter((monitor) => monitor.severity === severity).length;
+}
+
+/** The quickest save on the wall, or undefined on an empty one. */
+export function fastestFix(monitors: SolvedMonitor[]): SolvedMonitor | undefined {
+  return monitors.reduce<SolvedMonitor | undefined>(
+    (best, monitor) =>
+      !best || monitor.minutesToFix < best.minutesToFix ? monitor : best,
+    undefined,
+  );
 }
