@@ -13,6 +13,8 @@ import {
   fastestFix,
   handoverOf,
   memberById,
+  monitorInputSchema,
+  newMonitor,
   shiftIndex,
   solverBoard,
   solversOf,
@@ -258,6 +260,83 @@ describe("fastestFix", () => {
 
   it("has nothing to name on an empty wall", () => {
     expect(fastestFix([])).toBeUndefined();
+  });
+});
+
+describe("monitorInputSchema", () => {
+  const input = {
+    monitor: "redis-02: evicted keys above 1k/min",
+    icon: "cache" as const,
+    solution: "הכפלנו את מגבלת הזיכרון והוצאנו את המפתחות הגדולים.",
+    solvedByIds: ["maya"],
+    firstFiredAt: "2026-07-01",
+    solvedAt: "2026-08-20",
+    minutesToFix: 240,
+  };
+
+  const issueOn = (over: Record<string, unknown>) => {
+    const result = monitorInputSchema.safeParse({ ...input, ...over });
+    return result.success ? undefined : result.error.issues[0];
+  };
+
+  it("accepts a filled-in form", () => {
+    expect(monitorInputSchema.safeParse(input).success).toBe(true);
+  });
+
+  it("refuses a certificate with nobody on it", () => {
+    expect(issueOn({ solvedByIds: [] })?.message).toBe(
+      "צריך לבחור לפחות אדם אחד",
+    );
+  });
+
+  // The form cannot send a name twice, but a route handler would trust this
+  // schema, and that one can be sent anything.
+  it("keeps one of a name sent twice", () => {
+    const parsed = monitorInputSchema.parse({
+      ...input,
+      solvedByIds: ["maya", "maya", "ori"],
+    });
+
+    expect(parsed.solvedByIds).toEqual(["maya", "ori"]);
+  });
+
+  it("refuses a monitor solved before it fired, on the date it blames", () => {
+    const issue = issueOn({
+      firstFiredAt: "2026-08-21",
+      solvedAt: "2026-08-20",
+    });
+
+    expect(issue?.path).toEqual(["firstFiredAt"]);
+  });
+
+  it("refuses a fix that took no time at all", () => {
+    expect(issueOn({ minutesToFix: 0 })).toBeDefined();
+    expect(issueOn({ minutesToFix: Number.NaN })).toBeDefined();
+  });
+});
+
+describe("newMonitor", () => {
+  const input = monitorInputSchema.parse({
+    monitor: "redis-02: evicted keys above 1k/min",
+    icon: "cache",
+    solution: "הכפלנו את מגבלת הזיכרון והוצאנו את המפתחות הגדולים.",
+    solvedByIds: ["maya"],
+    firstFiredAt: "2026-07-01",
+    solvedAt: "2026-08-20",
+    minutesToFix: 240,
+  });
+
+  // The wall's date maths and formatters all read UTC midnight, like `saidAt`.
+  it("stores both dates at UTC midnight", () => {
+    const monitor = newMonitor(input);
+
+    expect(monitor.firstFiredAt).toBe("2026-07-01T00:00:00.000Z");
+    expect(monitor.solvedAt).toBe("2026-08-20T00:00:00.000Z");
+    expect(alertingDays(monitor)).toBe(50);
+  });
+
+  it("gives every plaque an id of its own, so a list can key by it", () => {
+    expect(newMonitor(input).id).not.toBe(newMonitor(input).id);
   });
 });
 

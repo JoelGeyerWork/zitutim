@@ -11,6 +11,9 @@
  * Client-safe on purpose: the wheel is a client component.
  */
 
+import { z } from "zod";
+
+import { dateOnly } from "@/lib/quote-schema";
 import { type Member } from "@/lib/team";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -192,18 +195,36 @@ export const SHOTEF_REVIEWS: ShotefReview[] = [
  * — the data says what the fix was *about*, not which component draws it, so a
  * redesign doesn't have to rewrite the hall.
  */
-export type AwardIcon =
-  | "memory"
-  | "loop"
-  | "certificate"
-  | "fire"
-  | "disk"
-  | "network"
-  | "cache"
-  | "backup"
-  | "latency"
-  | "pipeline"
-  | "index";
+export const AWARD_ICONS = [
+  "memory",
+  "loop",
+  "certificate",
+  "fire",
+  "disk",
+  "network",
+  "cache",
+  "backup",
+  "latency",
+  "pipeline",
+  "index",
+] as const;
+
+export type AwardIcon = (typeof AWARD_ICONS)[number];
+
+/** What each seal is called in the picker. The view owns which glyph it draws. */
+export const AWARD_ICON_LABELS: Record<AwardIcon, string> = {
+  memory: "זיכרון",
+  loop: "לולאה",
+  certificate: "תעודות",
+  fire: "שריפה",
+  disk: "דיסק",
+  network: "רשת",
+  cache: "מטמון",
+  backup: "גיבוי",
+  latency: "זמני תגובה",
+  pipeline: "צינור נתונים",
+  index: "אינדקס",
+};
 
 /** A monitor that fired, and what it took to make it stop. */
 export type SolvedMonitor = {
@@ -450,4 +471,63 @@ export function fastestFix(monitors: SolvedMonitor[]): SolvedMonitor | undefined
       !best || monitor.minutesToFix < best.minutesToFix ? monitor : best,
     undefined,
   );
+}
+
+/**
+ * What the add form collects. Validation lives here rather than in the dialog
+ * for the same reason the other sections keep theirs in a schema module: it is
+ * the shape a route handler will re-validate the day this stops being local,
+ * and it is testable without rendering anything.
+ */
+export const monitorInputSchema = z
+  .object({
+    monitor: z
+      .string()
+      .trim()
+      .min(3, "צריך לכתוב איך המוניטור נקרא")
+      .max(120, "השם ארוך מדי"),
+    icon: z.enum(AWARD_ICONS),
+    solution: z
+      .string()
+      .trim()
+      .min(10, "צריך לכתוב איך פתרתם את זה")
+      .max(1200, "ההסבר ארוך מדי"),
+    solvedByIds: z
+      .array(z.string())
+      // Through a Set: the form cannot send a name twice, but the schema is
+      // what a route handler would trust, and that one can be sent anything.
+      .transform((ids) => [...new Set(ids)])
+      .refine((ids) => ids.length > 0, "צריך לבחור לפחות אדם אחד"),
+    firstFiredAt: dateOnly,
+    solvedAt: dateOnly,
+    minutesToFix: z
+      .number("צריך למלא כמה זמן זה לקח")
+      .int("צריך מספר שלם")
+      .positive("צריך מספר גדול מאפס")
+      .max(60 * 24 * 365, "זה כבר לא זמן טיפול"),
+  })
+  // A monitor cannot be silenced before it first fired, and the certificate
+  // renders the span between the two — so it is caught here, not on the wall.
+  .refine((input) => input.firstFiredAt <= input.solvedAt, {
+    path: ["firstFiredAt"],
+    error: "המוניטור לא יכול להיפתר לפני שהוא צעק",
+  });
+
+export type MonitorInput = z.infer<typeof monitorInputSchema>;
+
+/**
+ * A validated input as a plaque on the wall. The id is generated here because
+ * nothing stores these yet — when something does, it will hand back its own.
+ */
+export function newMonitor(input: MonitorInput): SolvedMonitor {
+  return {
+    id: `m-local-${crypto.randomUUID()}`,
+    icon: input.icon,
+    monitor: input.monitor,
+    solution: input.solution,
+    solvedByIds: input.solvedByIds,
+    firstFiredAt: `${input.firstFiredAt}T00:00:00.000Z`,
+    solvedAt: `${input.solvedAt}T00:00:00.000Z`,
+    minutesToFix: input.minutesToFix,
+  };
 }

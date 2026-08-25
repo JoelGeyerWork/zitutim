@@ -1,6 +1,10 @@
+"use client";
+
+import { useState } from "react";
 import {
   BellRingIcon,
   CpuIcon,
+  PlusIcon,
   DatabaseBackupIcon,
   FlameIcon,
   GaugeIcon,
@@ -16,7 +20,9 @@ import {
   type LucideIcon,
 } from "lucide-react";
 
+import { MonitorFormDialog } from "@/components/monitor-form-dialog";
 import { PersonAvatar } from "@/components/person-avatar";
+import { Button } from "@/components/ui/button";
 import {
   formatDaySpan,
   formatDuration,
@@ -36,8 +42,8 @@ import {
 import { conjugate, type Member } from "@/lib/team";
 import { cn } from "@/lib/utils";
 
-/** What the fix was about, as a face on the medallion. */
-const AWARD_ICONS: Record<AwardIcon, LucideIcon> = {
+/** What the fix was about, as a face on the seal. */
+const SEAL_ICONS: Record<AwardIcon, LucideIcon> = {
   memory: CpuIcon,
   loop: RefreshCwIcon,
   certificate: ShieldCheckIcon,
@@ -51,7 +57,18 @@ const AWARD_ICONS: Record<AwardIcon, LucideIcon> = {
   index: SearchIcon,
 };
 
-export function HallOfFame({ monitors }: { monitors: SolvedMonitor[] }) {
+export function HallOfFame({
+  initial,
+  roster,
+}: {
+  initial: SolvedMonitor[];
+  roster: Member[];
+}) {
+  // Local only: a new certificate lives in this tab until the section grows a
+  // database. Nothing hands down a fresh `initial`, so there is no `seed`
+  // reconcile here like the quote feed and the themes view keep.
+  const [monitors, setMonitors] = useState(initial);
+  const [adding, setAdding] = useState(false);
   const board = solverBoard(monitors);
 
   return (
@@ -60,9 +77,18 @@ export function HallOfFame({ monitors }: { monitors: SolvedMonitor[] }) {
       {board.length > 1 ? <Podium board={board} /> : null}
 
       <section className="space-y-3">
-        <h2 className="text-muted-foreground text-xs font-semibold">
-          כל ההישגים
-        </h2>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h2 className="text-muted-foreground text-xs font-semibold">
+            כל ההישגים
+          </h2>
+          {/* Not gated on a session like the other sections' add buttons:
+              there is nothing to authorise yet, since this writes to React
+              state and no further. It takes the gate when it takes an API. */}
+          <Button size="sm" onClick={() => setAdding(true)} className="gap-1.5">
+            <PlusIcon className="size-4" />
+            תעודה חדשה
+          </Button>
+        </div>
 
         {/*
           Two to a shelf. The columns are set flush against each other and the
@@ -96,6 +122,16 @@ export function HallOfFame({ monitors }: { monitors: SolvedMonitor[] }) {
           })}
         </ol>
       </section>
+
+      {/* Mounted only while open, so each visit starts from an empty form. */}
+      {adding ? (
+        <MonitorFormDialog
+          open
+          onOpenChange={setAdding}
+          onAdd={(monitor) => setMonitors((current) => [monitor, ...current])}
+          roster={roster}
+        />
+      ) : null}
     </div>
   );
 }
@@ -266,7 +302,7 @@ function Shelf({ seam }: { seam?: "start" | "end" }) {
  */
 function Plaque({ monitor }: { monitor: SolvedMonitor }) {
   const solvers = solversOf(monitor);
-  const Icon = AWARD_ICONS[monitor.icon];
+  const Icon = SEAL_ICONS[monitor.icon];
 
   return (
     <article className="bg-card relative flex h-full flex-col rounded-md border p-2 shadow-sm transition-shadow hover:shadow-md">
