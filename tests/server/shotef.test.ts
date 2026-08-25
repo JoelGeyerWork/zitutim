@@ -225,9 +225,9 @@ describe("the hard-coded content", () => {
     }
   });
 
-  it("gives every plaque a name and a positive time to fix", () => {
+  it("gives every plaque a monitor to name it and a positive time to fix", () => {
     for (const monitor of HALL_OF_FAME) {
-      expect(monitor.award, monitor.id).not.toBe("");
+      expect(monitor.monitor, monitor.id).not.toBe("");
       expect(monitor.minutesToFix, monitor.id).toBeGreaterThan(0);
     }
   });

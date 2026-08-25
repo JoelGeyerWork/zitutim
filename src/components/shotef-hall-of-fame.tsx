@@ -291,19 +291,15 @@ function Plaque({ monitor }: { monitor: SolvedMonitor }) {
           <Icon className="size-6" />
         </span>
 
-        <h3 className="mt-4 text-lg leading-tight font-bold">
-          {monitor.award}
-        </h3>
-
-        {/* Quoted exactly as the alerting system spells it — LTR and
-            monospaced, so it can be searched for there letter by letter
-            rather than translated back from memory. */}
-        <code
+        {/* The monitor is the title. Quoted exactly as the alerting system
+            spells it — LTR and monospaced, so it can be searched for there
+            letter by letter rather than translated back from memory. */}
+        <h3
           dir="ltr"
-          className="text-muted-foreground mt-1.5 block font-mono text-xs break-words"
+          className="mt-4 font-mono text-[15px] leading-snug font-semibold break-words"
         >
           {monitor.monitor}
-        </code>
+        </h3>
 
         <Rule />
 

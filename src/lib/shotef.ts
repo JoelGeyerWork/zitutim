@@ -188,8 +188,8 @@ export const SHOTEF_REVIEWS: ShotefReview[] = [
 ];
 
 /**
- * What the plaque is engraved with. The key is mapped to an icon in the view —
- * the data says what the fix was *about*, not which component draws it, so a
+ * The face on the certificate's seal. The key is mapped to an icon in the view
+ * — the data says what the fix was *about*, not which component draws it, so a
  * redesign doesn't have to rewrite the hall.
  */
 export type AwardIcon =
@@ -208,14 +208,12 @@ export type AwardIcon =
 /** A monitor that fired, and what it took to make it stop. */
 export type SolvedMonitor = {
   id: string;
-  /**
-   * The name the fix is remembered by. The monitor is what the machine calls
-   * it; this is what a person calls it — and it is what makes the wall read as
-   * a hall of fame rather than as an incident log.
-   */
-  award: string;
   icon: AwardIcon;
-  /** The monitor as it is spelled in the alerting system — quoted verbatim. */
+  /**
+   * The monitor as it is spelled in the alerting system — quoted verbatim, and
+   * the certificate's own title: what is being honoured here is the thing that
+   * used to fire, so the wall is searchable by the string people actually saw.
+   */
   monitor: string;
   /** How it was actually solved. The point of the whole page. */
   solution: string;
@@ -233,7 +231,6 @@ export type SolvedMonitor = {
 export const HALL_OF_FAME: SolvedMonitor[] = [
   {
     id: "m-db-ram",
-    award: "צייד הזיכרון",
     icon: "memory",
     monitor: "db-prod-01: RAM above 95%",
     solution:
@@ -244,7 +241,6 @@ export const HALL_OF_FAME: SolvedMonitor[] = [
   },
   {
     id: "m-backup-stale",
-    award: "שומר הגיבויים",
     icon: "backup",
     monitor: "backup: last successful backup older than 48h",
     solution:
@@ -255,7 +251,6 @@ export const HALL_OF_FAME: SolvedMonitor[] = [
   },
   {
     id: "m-queue-lag",
-    award: "שובר הלולאה",
     icon: "loop",
     monitor: "ingest-queue: consumer lag > 10k",
     solution:
@@ -266,7 +261,6 @@ export const HALL_OF_FAME: SolvedMonitor[] = [
   },
   {
     id: "m-tls-expiry",
-    award: "שומר התעודות",
     icon: "certificate",
     monitor: "gateway: TLS certificate expires in 3 days",
     solution:
@@ -277,7 +271,6 @@ export const HALL_OF_FAME: SolvedMonitor[] = [
   },
   {
     id: "m-5xx-spike",
-    award: "מכבה השריפות",
     icon: "fire",
     monitor: "api: 5xx rate above 2% for 5m",
     solution:
@@ -288,7 +281,6 @@ export const HALL_OF_FAME: SolvedMonitor[] = [
   },
   {
     id: "m-p95-latency",
-    award: "קוטל השאילתות",
     icon: "latency",
     monitor: "web: p95 latency above 2s",
     solution:
@@ -299,7 +291,6 @@ export const HALL_OF_FAME: SolvedMonitor[] = [
   },
   {
     id: "m-disk-logs",
-    award: "מפנה הדיסק",
     icon: "disk",
     monitor: "app-03: disk usage above 90%",
     solution:
@@ -310,7 +301,6 @@ export const HALL_OF_FAME: SolvedMonitor[] = [
   },
   {
     id: "m-etl-nightly",
-    award: "מאלף הצינור",
     icon: "pipeline",
     monitor: "etl: nightly export failed",
     solution:
@@ -321,7 +311,6 @@ export const HALL_OF_FAME: SolvedMonitor[] = [
   },
   {
     id: "m-ldap-timeouts",
-    award: "מציל הכניסה",
     icon: "network",
     monitor: "auth: LDAP bind timeouts",
     solution:
@@ -332,7 +321,6 @@ export const HALL_OF_FAME: SolvedMonitor[] = [
   },
   {
     id: "m-cache-stampede",
-    award: "מרגיע העדר",
     icon: "cache",
     monitor: "cache: hit rate below 60%",
     solution:
@@ -343,7 +331,6 @@ export const HALL_OF_FAME: SolvedMonitor[] = [
   },
   {
     id: "m-search-index",
-    award: "בונה האינדקס",
     icon: "index",
     monitor: "search: index rebuild stuck for 6h",
     solution:
