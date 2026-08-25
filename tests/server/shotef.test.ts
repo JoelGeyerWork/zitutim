@@ -7,8 +7,7 @@ import {
   SHOTEF_ROSTER,
   averageRating,
   buildShifts,
-  byFame,
-  countBySeverity,
+  byNewest,
   currentShift,
   fastestFix,
   handoverOf,
@@ -133,24 +132,23 @@ const plaque = (over: Partial<SolvedMonitor>): SolvedMonitor => ({
   ...over,
 });
 
-describe("byFame", () => {
-  it("puts the loudest tier first and the newest inside a tier", () => {
-    const wall = byFame([
-      plaque({ id: "1", severity: "minor", solvedAt: "2026-08-01T00:00:00.000Z" }),
-      plaque({ id: "2", severity: "critical", solvedAt: "2026-01-01T00:00:00.000Z" }),
-      plaque({ id: "3", severity: "major", solvedAt: "2026-02-01T00:00:00.000Z" }),
-      plaque({ id: "4", severity: "critical", solvedAt: "2026-03-01T00:00:00.000Z" }),
+describe("byNewest", () => {
+  it("orders the wall by when, since nothing there outranks anything else", () => {
+    const wall = byNewest([
+      plaque({ id: "1", solvedAt: "2026-02-01T00:00:00.000Z" }),
+      plaque({ id: "2", solvedAt: "2026-08-01T00:00:00.000Z" }),
+      plaque({ id: "3", solvedAt: "2026-05-01T00:00:00.000Z" }),
     ]);
 
-    expect(wall.map((monitor) => monitor.id)).toEqual(["4", "2", "3", "1"]);
+    expect(wall.map((monitor) => monitor.id)).toEqual(["2", "3", "1"]);
   });
 
   it("leaves the source list alone", () => {
     const wall = [
-      plaque({ id: "1", severity: "minor" }),
-      plaque({ id: "2", severity: "critical" }),
+      plaque({ id: "1", solvedAt: "2026-02-01T00:00:00.000Z" }),
+      plaque({ id: "2", solvedAt: "2026-08-01T00:00:00.000Z" }),
     ];
-    byFame(wall);
+    byNewest(wall);
 
     expect(wall.map((monitor) => monitor.id)).toEqual(["1", "2"]);
   });
@@ -192,7 +190,7 @@ describe("solverBoard", () => {
   });
 });
 
-describe("fastestFix and countBySeverity", () => {
+describe("fastestFix", () => {
   it("finds the quickest save", () => {
     const fastest = fastestFix([
       plaque({ id: "1", minutesToFix: 300 }),
@@ -205,20 +203,6 @@ describe("fastestFix and countBySeverity", () => {
 
   it("has nothing to name on an empty wall", () => {
     expect(fastestFix([])).toBeUndefined();
-    expect(countBySeverity([], "critical")).toBe(0);
-  });
-
-  it("counts one tier", () => {
-    expect(
-      countBySeverity(
-        [
-          plaque({ id: "1", severity: "critical" }),
-          plaque({ id: "2", severity: "minor" }),
-          plaque({ id: "3", severity: "critical" }),
-        ],
-        "critical",
-      ),
-    ).toBe(2);
   });
 });
 

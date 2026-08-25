@@ -18,14 +18,11 @@ import {
 import { PersonAvatar } from "@/components/person-avatar";
 import { formatDuration, formatSaidAtShort, plural } from "@/lib/format";
 import {
-  SEVERITY_LABELS,
-  byFame,
-  countBySeverity,
+  byNewest,
   fastestFix,
   memberById,
   solverBoard,
   type AwardIcon,
-  type MonitorSeverity,
   type SolvedMonitor,
   type Solver,
 } from "@/lib/shotef";
@@ -47,46 +44,21 @@ const AWARD_ICONS: Record<AwardIcon, LucideIcon> = {
   index: SearchIcon,
 };
 
-/**
- * Red is the only chromatic hue here, so a tier cannot be spelled in colour the
- * way a medal would be. It is spelled in *weight* instead: the loudest monitor
- * gets the struck medallion and the filled pill, the quietest an outline.
- */
-const SEVERITY_STYLE: Record<
-  MonitorSeverity,
-  { medallion: string; pill: string; rail: boolean }
-> = {
-  critical: {
-    medallion: "bg-primary text-primary-foreground ring-primary/30",
-    pill: "bg-primary text-primary-foreground",
-    rail: true,
-  },
-  major: {
-    medallion: "bg-primary/10 text-primary ring-primary/25",
-    pill: "bg-secondary text-secondary-foreground",
-    rail: false,
-  },
-  minor: {
-    medallion: "bg-muted text-muted-foreground ring-border",
-    pill: "text-muted-foreground border border-border",
-    rail: false,
-  },
-};
-
 export function HallOfFame({ monitors }: { monitors: SolvedMonitor[] }) {
   const board = solverBoard(monitors);
 
   return (
     <div className="space-y-4">
-      <TrophyCase monitors={monitors} leader={board[0]} />
+      <TrophyCase monitors={monitors} board={board} />
       {board.length > 1 ? <Podium board={board} /> : null}
 
       <section className="space-y-3">
         <h2 className="text-muted-foreground text-xs font-semibold">
           כל ההישגים
         </h2>
-        {/* Ordered by weight rather than by date: a wall, not a timeline. */}
-        {byFame(monitors).map((monitor) => (
+        {/* Every plaque is struck the same, because every plaque counts the
+            same — so the only ordering left on the wall is when. */}
+        {byNewest(monitors).map((monitor) => (
           <Plaque key={monitor.id} monitor={monitor} />
         ))}
       </section>
@@ -97,12 +69,13 @@ export function HallOfFame({ monitors }: { monitors: SolvedMonitor[] }) {
 /** The case the whole wall sits in — the count, and the three numbers on it. */
 function TrophyCase({
   monitors,
-  leader,
+  board,
 }: {
   monitors: SolvedMonitor[];
-  leader?: Solver;
+  board: Solver[];
 }) {
   const fastest = fastestFix(monitors);
+  const leader = board[0];
 
   return (
     <section className="bg-accent text-accent-foreground relative overflow-hidden rounded-2xl border border-transparent p-5">
@@ -128,10 +101,7 @@ function TrophyCase({
       </div>
 
       <dl className="relative mt-4 grid grid-cols-3 gap-2 border-t border-current/10 pt-3 text-center">
-        <Stat
-          label="קריטיות"
-          value={String(countBySeverity(monitors, "critical"))}
-        />
+        <Stat label="פותרים" value={String(board.length)} />
         <Stat
           label="התיקון המהיר"
           value={fastest ? formatDuration(fastest.minutesToFix) : "—"}
@@ -156,15 +126,14 @@ function Stat({ label, value }: { label: string; value: string }) {
 
 /**
  * The three people with the most plaques, on a real podium: second, first,
- * third, with the winner raised. The order is visual, not semantic — the list
- * itself is still written first-to-third, so it is read in rank order.
+ * third, with the winner raised.
  */
 function Podium({ board }: { board: Solver[] }) {
   const [first, second, third] = board;
-  // `flatMap` rather than `filter`, so a board of two narrows to the two rows
-  // that exist instead of leaving the third `undefined` for every use below.
   // Written in rank order and re-ordered visually with `order`, so the list
   // reads 1-2-3 to a screen reader while the columns read 2-1-3 on screen.
+  // `flatMap` rather than `filter`, so a board of two narrows to the two rows
+  // that exist instead of leaving the third `undefined` for every use below.
   const steps = (
     [
       [first, 1],
@@ -229,41 +198,22 @@ function Plaque({ monitor }: { monitor: SolvedMonitor }) {
   const solver = memberById(monitor.solvedById);
   const name = solver?.name ?? "לא ידוע";
   const Icon = AWARD_ICONS[monitor.icon];
-  const style = SEVERITY_STYLE[monitor.severity];
 
   return (
     <article className="bg-card relative overflow-hidden rounded-2xl border shadow-sm transition-shadow hover:shadow-md">
-      {/* The rail the meetup card uses for "this is the loud one", reused here
-          for the tier that earned it. */}
-      {style.rail ? (
-        <span
-          aria-hidden
-          className="bg-primary absolute inset-y-0 start-0 w-1.5"
-        />
-      ) : null}
+      {/* The rail is the plaque's mount, not a rank: every entry gets one. */}
+      <span
+        aria-hidden
+        className="bg-primary absolute inset-y-0 start-0 w-1.5"
+      />
 
-      <header className={cn("flex items-start gap-4 p-5", style.rail && "ps-6")}>
-        <span
-          className={cn(
-            "ring-offset-card flex size-14 shrink-0 items-center justify-center rounded-full shadow-sm ring-2 ring-offset-2",
-            style.medallion,
-          )}
-        >
+      <header className="flex items-start gap-4 p-5 ps-6">
+        <span className="bg-primary text-primary-foreground ring-primary/30 ring-offset-card flex size-14 shrink-0 items-center justify-center rounded-full shadow-sm ring-2 ring-offset-2">
           <Icon className="size-6" />
         </span>
 
         <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-            <h3 className="text-lg leading-tight font-bold">{monitor.award}</h3>
-            <span
-              className={cn(
-                "rounded-full px-2 py-0.5 text-[11px] font-medium",
-                style.pill,
-              )}
-            >
-              {SEVERITY_LABELS[monitor.severity]}
-            </span>
-          </div>
+          <h3 className="text-lg leading-tight font-bold">{monitor.award}</h3>
 
           {/* Quoted exactly as the alerting system spells it — LTR and
               monospaced, so it can be searched for there letter by letter
@@ -277,7 +227,7 @@ function Plaque({ monitor }: { monitor: SolvedMonitor }) {
         </div>
       </header>
 
-      <div className={cn("border-t px-5 py-4", style.rail && "ps-6")}>
+      <div className="border-t px-5 py-4 ps-6">
         <h4 className="text-muted-foreground text-xs font-semibold">
           איך פתרנו
         </h4>
@@ -285,12 +235,7 @@ function Plaque({ monitor }: { monitor: SolvedMonitor }) {
       </div>
 
       {/* The engraved base of the plaque: who, when, how long it took. */}
-      <footer
-        className={cn(
-          "bg-muted/40 flex flex-wrap items-center gap-x-3 gap-y-2 border-t px-5 py-3",
-          style.rail && "ps-6",
-        )}
-      >
+      <footer className="bg-muted/40 flex flex-wrap items-center gap-x-3 gap-y-2 border-t px-5 py-3 ps-6">
         <PersonAvatar name={name} className="size-7 text-xs" />
         <span className="text-sm font-medium">{name}</span>
         <span className="text-muted-foreground text-xs">
