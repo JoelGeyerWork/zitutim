@@ -56,11 +56,38 @@ export function HallOfFame({ monitors }: { monitors: SolvedMonitor[] }) {
         <h2 className="text-muted-foreground text-xs font-semibold">
           כל ההישגים
         </h2>
-        {/* Every plaque is struck the same, because every plaque counts the
-            same — so the only ordering left on the wall is when. */}
-        {byNewest(monitors).map((monitor) => (
-          <Plaque key={monitor.id} monitor={monitor} />
-        ))}
+
+        {/*
+          Two to a shelf. The columns are set flush against each other and the
+          cards keep their distance with their own padding instead of a grid
+          gap, so the two shelves meet at the column boundary and read as one
+          board. Below `sm` there is one column, and every plaque gets a shelf
+          of its own — which is also what the last plaque of an odd wall gets.
+        */}
+        <ol className="grid gap-y-7 sm:grid-cols-2 sm:gap-x-0">
+          {byNewest(monitors).map((monitor, index, wall) => {
+            // Which column the plaque stands in, and whether it is the odd one
+            // out at the end of the wall — which keeps a whole shelf, borders
+            // and corners intact, rather than half of one.
+            const opens = index % 2 === 0;
+            const alone = opens && index === wall.length - 1;
+
+            return (
+              <li key={monitor.id} className="flex flex-col">
+                <div
+                  className={cn("flex-1", opens ? "sm:pe-2" : "sm:ps-2")}
+                >
+                  {/* Stretched, so both plaques on a shelf stand the same
+                      height and their bases actually rest on it. */}
+                  <Plaque monitor={monitor} />
+                </div>
+                <Shelf
+                  seam={alone ? undefined : opens ? "end" : "start"}
+                />
+              </li>
+            );
+          })}
+        </ol>
       </section>
     </div>
   );
@@ -194,13 +221,43 @@ function Podium({ board }: { board: Solver[] }) {
   );
 }
 
+/**
+ * The board the plaques stand on: a lit top edge, and the shadow it throws on
+ * the wall behind it. Neutrals only — the palette has one hue and it is spoken
+ * for. Decorative throughout.
+ *
+ * Each plaque carries half a shelf, and `seam` is the side where its half meets
+ * the other one: that edge loses its border and its rounding, so the two halves
+ * read as a single board rather than as two planks pushed together.
+ */
+function Shelf({ seam }: { seam?: "start" | "end" }) {
+  return (
+    <div aria-hidden>
+      <div
+        className={cn(
+          "from-muted-foreground/45 to-muted-foreground/25 border-border h-3.5 rounded-[3px] border bg-gradient-to-b shadow-md",
+          seam === "end" && "sm:rounded-e-none sm:border-e-0",
+          seam === "start" && "sm:rounded-s-none sm:border-s-0",
+        )}
+      />
+      <div
+        className={cn(
+          "bg-foreground/20 mx-4 h-2 rounded-b-md",
+          seam === "end" && "sm:me-0 sm:rounded-ee-none",
+          seam === "start" && "sm:ms-0 sm:rounded-es-none",
+        )}
+      />
+    </div>
+  );
+}
+
 function Plaque({ monitor }: { monitor: SolvedMonitor }) {
   const solver = memberById(monitor.solvedById);
   const name = solver?.name ?? "לא ידוע";
   const Icon = AWARD_ICONS[monitor.icon];
 
   return (
-    <article className="bg-card relative overflow-hidden rounded-2xl border shadow-sm transition-shadow hover:shadow-md">
+    <article className="bg-card relative flex h-full flex-col overflow-hidden rounded-2xl border shadow-sm transition-shadow hover:shadow-md">
       {/* The rail is the plaque's mount, not a rank: every entry gets one. */}
       <span
         aria-hidden
@@ -220,14 +277,14 @@ function Plaque({ monitor }: { monitor: SolvedMonitor }) {
               rather than translated back from memory. */}
           <code
             dir="ltr"
-            className="text-muted-foreground mt-2 block truncate font-mono text-xs"
+            className="text-muted-foreground mt-2 block font-mono text-xs break-words"
           >
             {monitor.monitor}
           </code>
         </div>
       </header>
 
-      <div className="border-t px-5 py-4 ps-6">
+      <div className="flex-1 border-t px-5 py-4 ps-6">
         <h4 className="text-muted-foreground text-xs font-semibold">
           איך פתרנו
         </h4>
