@@ -8,7 +8,6 @@ import {
   RefreshCwIcon,
   SearchIcon,
   ShieldCheckIcon,
-  TimerIcon,
   TrophyIcon,
   WorkflowIcon,
   ZapIcon,
@@ -251,59 +250,112 @@ function Shelf({ seam }: { seam?: "start" | "end" }) {
   );
 }
 
+/**
+ * One award, drawn as a certificate: a ruled frame inside the card's own
+ * border, corner marks, a seal, and a signature block at the foot. Squarer
+ * corners than the cards elsewhere in the app, on purpose — the formality is
+ * the point, and it is what separates a citation from a list item.
+ */
 function Plaque({ monitor }: { monitor: SolvedMonitor }) {
   const solver = memberById(monitor.solvedById);
   const name = solver?.name ?? "לא ידוע";
   const Icon = AWARD_ICONS[monitor.icon];
 
   return (
-    <article className="bg-card relative flex h-full flex-col overflow-hidden rounded-2xl border shadow-sm transition-shadow hover:shadow-md">
-      {/* The rail is the plaque's mount, not a rank: every entry gets one. */}
+    <article className="bg-card relative flex h-full flex-col rounded-md border p-2 shadow-sm transition-shadow hover:shadow-md">
+      {/* The ruled frame, and the four corner marks on it. */}
       <span
         aria-hidden
-        className="bg-primary absolute inset-y-0 start-0 w-1.5"
+        className="border-primary/25 pointer-events-none absolute inset-2 rounded-[2px] border"
       />
+      {CORNERS.map((corner) => (
+        <span
+          key={corner}
+          aria-hidden
+          className={cn(
+            "border-primary/60 pointer-events-none absolute size-3",
+            corner,
+          )}
+        />
+      ))}
 
-      <header className="flex items-start gap-4 p-5 ps-6">
-        <span className="bg-primary text-primary-foreground ring-primary/30 ring-offset-card flex size-14 shrink-0 items-center justify-center rounded-full shadow-sm ring-2 ring-offset-2">
+      <div className="relative flex flex-1 flex-col items-center px-4 py-6 text-center">
+        <p className="text-muted-foreground flex w-full items-center gap-2 text-[10px] font-semibold tracking-widest">
+          <span aria-hidden className="bg-border h-px flex-1" />
+          תעודת הוקרה
+          <span aria-hidden className="bg-border h-px flex-1" />
+        </p>
+
+        {/* The seal. */}
+        <span className="bg-primary text-primary-foreground ring-primary/30 ring-offset-card mt-5 flex size-14 items-center justify-center rounded-full shadow-sm ring-2 ring-offset-2">
           <Icon className="size-6" />
         </span>
 
-        <div className="min-w-0 flex-1">
-          <h3 className="text-lg leading-tight font-bold">{monitor.award}</h3>
+        <h3 className="mt-4 text-lg leading-tight font-bold">
+          {monitor.award}
+        </h3>
 
-          {/* Quoted exactly as the alerting system spells it — LTR and
-              monospaced, so it can be searched for there letter by letter
-              rather than translated back from memory. */}
-          <code
-            dir="ltr"
-            className="text-muted-foreground mt-2 block font-mono text-xs break-words"
-          >
-            {monitor.monitor}
-          </code>
-        </div>
-      </header>
+        {/* Quoted exactly as the alerting system spells it — LTR and
+            monospaced, so it can be searched for there letter by letter
+            rather than translated back from memory. */}
+        <code
+          dir="ltr"
+          className="text-muted-foreground mt-1.5 block font-mono text-xs break-words"
+        >
+          {monitor.monitor}
+        </code>
 
-      <div className="flex-1 border-t px-5 py-4 ps-6">
-        <h4 className="text-muted-foreground text-xs font-semibold">
+        <Rule />
+
+        <p className="text-muted-foreground text-[10px] font-semibold tracking-widest">
           איך פתרנו
-        </h4>
-        <p className="mt-2 text-sm leading-relaxed">{monitor.solution}</p>
-      </div>
+        </p>
+        {/* The citation itself. Read as prose, so it keeps its own alignment
+            while everything around it stays centred on the page's axis. */}
+        <p className="mt-2 flex-1 text-start text-sm leading-relaxed">
+          {monitor.solution}
+        </p>
 
-      {/* The engraved base of the plaque: who, when, how long it took. */}
-      <footer className="bg-muted/40 flex flex-wrap items-center gap-x-3 gap-y-2 border-t px-5 py-3 ps-6">
-        <PersonAvatar name={name} className="size-7 text-xs" />
-        <span className="text-sm font-medium">{name}</span>
-        <span className="text-muted-foreground text-xs">
-          {formatSaidAtShort(monitor.solvedAt)}
-        </span>
-        <span className="text-muted-foreground ms-auto flex items-center gap-1 text-xs">
-          <TimerIcon className="size-3.5" aria-hidden />
-          {solver ? conjugate(solver, "פתר", "פתרה") : "נפתר"} תוך{" "}
-          {formatDuration(monitor.minutesToFix)}
-        </span>
-      </footer>
+        {/* The signature block: flex-1 above it pins it to the foot, so two
+            certificates on one shelf sign on the same line. */}
+        <div className="mt-5 w-full">
+          <span aria-hidden className="bg-border mx-auto block h-px w-2/3" />
+          <p className="text-muted-foreground mt-2 text-[10px] tracking-widest">
+            מוענקת ל
+          </p>
+          <div className="mt-1.5 flex items-center justify-center gap-2">
+            <PersonAvatar name={name} className="size-7 text-xs" />
+            <span className="text-sm font-bold">{name}</span>
+          </div>
+          <p className="text-muted-foreground mt-1.5 text-xs">
+            {formatSaidAtShort(monitor.solvedAt)} ·{" "}
+            {solver ? conjugate(solver, "פתר", "פתרה") : "נפתר"} תוך{" "}
+            {formatDuration(monitor.minutesToFix)}
+          </p>
+        </div>
+      </div>
     </article>
+  );
+}
+
+/** The four corner marks of the ruled frame, as logical border pairs. */
+const CORNERS = [
+  "top-2 start-2 border-t-2 border-s-2 rounded-ss-[2px]",
+  "top-2 end-2 border-t-2 border-e-2 rounded-se-[2px]",
+  "bottom-2 start-2 border-b-2 border-s-2 rounded-es-[2px]",
+  "bottom-2 end-2 border-b-2 border-e-2 rounded-ee-[2px]",
+] as const;
+
+/** A ruled separator with a mark at its centre — the certificate's own. */
+function Rule() {
+  return (
+    <span
+      aria-hidden
+      className="my-5 flex w-2/3 items-center justify-center gap-2"
+    >
+      <span className="bg-border h-px flex-1" />
+      <span className="bg-primary/60 size-1.5 rotate-45" />
+      <span className="bg-border h-px flex-1" />
+    </span>
   );
 }
