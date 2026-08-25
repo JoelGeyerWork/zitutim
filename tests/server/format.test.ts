@@ -5,6 +5,7 @@ import {
   formatRelative,
   formatSaidAt,
   formatDayMonth,
+  formatDaySpan,
   formatDuration,
   formatSaidAtShort,
   formatWeekRange,
@@ -40,6 +41,26 @@ describe("formatDuration", () => {
 
   it("spells a half day", () => {
     expect(formatDuration(36 * 60)).toBe("יום וחצי");
+  });
+});
+
+describe("formatDaySpan", () => {
+  it("coarsens as the span grows", () => {
+    expect(formatDaySpan(3)).toBe("3 ימים");
+    expect(formatDaySpan(47)).toBe("7 שבועות");
+    expect(formatDaySpan(132)).toBe("4 חודשים");
+    expect(formatDaySpan(434)).toBe("שנה");
+  });
+
+  it("uses the dual at every scale", () => {
+    expect(formatDaySpan(2)).toBe("יומיים");
+    expect(formatDaySpan(14)).toBe("שבועיים");
+    expect(formatDaySpan(60)).toBe("חודשיים");
+    expect(formatDaySpan(730)).toBe("שנתיים");
+  });
+
+  it("has a word for a monitor silenced the day it fired", () => {
+    expect(formatDaySpan(0)).toBe("פחות מיום");
   });
 });
 

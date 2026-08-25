@@ -133,6 +133,29 @@ export function formatDuration(minutes: number): string {
 }
 
 /**
+ * A span of days in Hebrew, coarsened as it grows: days, then weeks, then
+ * months, then years. Same dual as `formatDuration` — 2 is its own word at
+ * every scale — and the same reason for the coarsening: "444 ימים" is a number
+ * nobody converts in their head, while "שנה" lands immediately.
+ */
+export function formatDaySpan(days: number): string {
+  if (days < 1) return "פחות מיום";
+  if (days < 14) return count(days, "יום", "יומיים", "ימים");
+  if (days < 60) return count(Math.round(days / 7), "שבוע", "שבועיים", "שבועות");
+  if (days < 365) {
+    return count(Math.round(days / 30), "חודש", "חודשיים", "חודשים");
+  }
+  return count(Math.round(days / 365), "שנה", "שנתיים", "שנים");
+}
+
+/** One, the dual, or a numeral and the plural. */
+function count(n: number, one: string, two: string, many: string): string {
+  if (n === 1) return one;
+  if (n === 2) return two;
+  return `${n} ${many}`;
+}
+
+/**
  * Hebrew counts read badly with a bare numeral at 1 ("1 תוצאות"), so the
  * singular gets its own wording. Two is close enough to the plural form here.
  */

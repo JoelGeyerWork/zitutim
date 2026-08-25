@@ -224,6 +224,13 @@ export type SolvedMonitor = {
    * one of them is a wall people stop trusting.
    */
   solvedByIds: string[];
+  /**
+   * UTC midnight of the day the monitor first fired. Half the story of a
+   * plaque is how long the thing was allowed to scream before anybody fixed
+   * it — a page that woke someone once is not the same save as one the team
+   * had been dismissing since spring.
+   */
+  firstFiredAt: string;
   /** UTC midnight of the day it was closed. */
   solvedAt: string;
   /** Wall-clock minutes from the page to the fix. Rendered by `formatDuration`
@@ -241,6 +248,7 @@ export const HALL_OF_FAME: SolvedMonitor[] = [
     solution:
       "לא דליפה — שאילתת דוח חודשית רצה בלי אינדקס ומשכה את כל הטבלה לזיכרון. הוספנו אינדקס מורכב על tenant ועל created_at, וזמן הריצה ירד מארבע דקות לשתי שניות. הזיכרון חזר ל-40% ולא עלה מאז.",
     solvedByIds: ["ori", "daniel"],
+    firstFiredAt: "2026-06-09T00:00:00.000Z",
     solvedAt: "2026-08-18T00:00:00.000Z",
     minutesToFix: 180,
   },
@@ -251,6 +259,7 @@ export const HALL_OF_FAME: SolvedMonitor[] = [
     solution:
       "הגיבוי נכשל בשקט שלושה לילות אחרי ששינינו שם של דיסק — הסקריפט המשיך לדווח הצלחה כי בדק רק שהוא רץ, לא שהוא כתב. תיקנו את הנתיב, החלפנו את הבדיקה בקוד היציאה של המשימה, וגם שחזרנו גיבוי אחד כדי לוודא שיש מה לשחזר.",
     solvedByIds: ["daniel"],
+    firstFiredAt: "2026-08-08T00:00:00.000Z",
     solvedAt: "2026-08-11T00:00:00.000Z",
     minutesToFix: 300,
   },
@@ -261,6 +270,7 @@ export const HALL_OF_FAME: SolvedMonitor[] = [
     solution:
       "צרכן אחד נתקע על הודעה פגומה וניסה אותה שוב ושוב בלולאה אינסופית. הוספנו תור מכתבים־מתים אחרי שלושה ניסיונות, והפעם גם התראה על התור הזה — כדי שהודעה פגומה תהיה שקופה במקום להיות שקטה.",
     solvedByIds: ["yonatan", "itay"],
+    firstFiredAt: "2026-08-05T00:00:00.000Z",
     solvedAt: "2026-08-06T00:00:00.000Z",
     minutesToFix: 2160,
   },
@@ -271,6 +281,7 @@ export const HALL_OF_FAME: SolvedMonitor[] = [
     solution:
       "חידוש ידני שאף אחד לא נזכר בו. חידשנו, ואז החלפנו את הזיכרון האנושי בקרון שמחדש 30 יום מראש ומדווח לערוץ. ההתראה נשארה — היא עכשיו רשת ביטחון ולא לוח שנה.",
     solvedByIds: ["daniel"],
+    firstFiredAt: "2026-07-26T00:00:00.000Z",
     solvedAt: "2026-07-29T00:00:00.000Z",
     minutesToFix: 60,
   },
@@ -281,6 +292,7 @@ export const HALL_OF_FAME: SolvedMonitor[] = [
     solution:
       "שחרור שהוסיף שדה חובה לבקשה בלי לעדכן את האפליקציה בנייד. החזרנו לאחור תוך אחת־עשרה דקות, ואז שחררנו מחדש כששני הצדדים מסונכרנים. מאז שדה חובה חדש עובר קודם דרך שלב שבו הוא עדיין אופציונלי.",
     solvedByIds: ["itay", "yonatan"],
+    firstFiredAt: "2026-07-21T00:00:00.000Z",
     solvedAt: "2026-07-21T00:00:00.000Z",
     minutesToFix: 11,
   },
@@ -291,6 +303,7 @@ export const HALL_OF_FAME: SolvedMonitor[] = [
     solution:
       "וידג׳ט חדש בדף הבית שאל את מסד הנתונים פעם אחת לכל שורה שהוא הציג — שמונים שאילתות בטעינה אחת. איחדנו אותן לשאילתה אחת, וה-p95 חזר מ-2.4 שניות ל-400 מילישניות.",
     solvedByIds: ["itay", "maya"],
+    firstFiredAt: "2026-05-20T00:00:00.000Z",
     solvedAt: "2026-07-06T00:00:00.000Z",
     minutesToFix: 240,
   },
@@ -301,6 +314,7 @@ export const HALL_OF_FAME: SolvedMonitor[] = [
     solution:
       "לוגים בלי סבב. פינינו, הגדרנו logrotate יומי עם שמירה לשבועיים, והורדנו את רמת הלוג של הבריאות מ-debug ל-info. תפוסת הדיסק יציבה על 55%.",
     solvedByIds: ["tamar"],
+    firstFiredAt: "2026-06-16T00:00:00.000Z",
     solvedAt: "2026-06-30T00:00:00.000Z",
     minutesToFix: 120,
   },
@@ -311,6 +325,7 @@ export const HALL_OF_FAME: SolvedMonitor[] = [
     solution:
       "המקור הוסיף עמודה, והטוען שלנו נפל על סכימה שלא הכיר. עכשיו הוא סופג עמודות שאינן מוכרות לו במקום ליפול, ומדווח עליהן בבוקר — טעינה שנכשלת היא בעיה, טעינה שמפתיעה היא רק ידיעה.",
     solvedByIds: ["ori"],
+    firstFiredAt: "2026-06-13T00:00:00.000Z",
     solvedAt: "2026-06-22T00:00:00.000Z",
     minutesToFix: 90,
   },
@@ -321,6 +336,7 @@ export const HALL_OF_FAME: SolvedMonitor[] = [
     solution:
       "לא אנחנו — בקר תחום אחד מתוך שלושה יצא מהאוויר, והקליינט המשיך לנסות דווקא אותו. פנינו לתשתיות, ובינתיים קיצרנו את הטיים־אאוט וסידרנו מעבר לבקר הבא ברשימה. הכניסה נשארה עובדת גם כשבקר נופל.",
     solvedByIds: ["noa", "daniel"],
+    firstFiredAt: "2026-06-10T00:00:00.000Z",
     solvedAt: "2026-06-11T00:00:00.000Z",
     minutesToFix: 240,
   },
@@ -331,6 +347,7 @@ export const HALL_OF_FAME: SolvedMonitor[] = [
     solution:
       "כל המפתחות פגו באותה שנייה בדיוק, ואז כולם רצו יחד למסד הנתונים. פיזרנו את תוקף המפתחות באקראי בעד עשר אחוז, וההצלחה חזרה ל-94%.",
     solvedByIds: ["maya"],
+    firstFiredAt: "2026-01-12T00:00:00.000Z",
     solvedAt: "2026-05-24T00:00:00.000Z",
     minutesToFix: 1440,
   },
@@ -341,6 +358,7 @@ export const HALL_OF_FAME: SolvedMonitor[] = [
     solution:
       "בנייה מחדש שרצה על אותו מסמך פגום עד אינסוף. דילגנו עליו, המשכנו את הבנייה, ואז הוספנו לה יומן התקדמות — מאז בנייה תקועה נראית תקועה תוך דקות במקום תוך חצי יום.",
     solvedByIds: ["ori", "tamar"],
+    firstFiredAt: "2025-03-02T00:00:00.000Z",
     solvedAt: "2026-05-10T00:00:00.000Z",
     minutesToFix: 150,
   },
@@ -416,6 +434,13 @@ export function solverBoard(monitors: SolvedMonitor[]): Solver[] {
   return [...board.values()].sort(
     (a, b) => b.solved - a.solved || b.lastSolved.localeCompare(a.lastSolved),
   );
+}
+
+/** Whole days the monitor was firing before it was finally silenced. */
+export function alertingDays(monitor: SolvedMonitor): number {
+  const from = new Date(monitor.firstFiredAt).getTime();
+  const to = new Date(monitor.solvedAt).getTime();
+  return Math.max(0, Math.round((to - from) / (24 * 60 * 60 * 1000)));
 }
 
 /** The quickest save on the wall, or undefined on an empty one. */

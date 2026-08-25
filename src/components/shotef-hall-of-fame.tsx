@@ -1,4 +1,5 @@
 import {
+  BellRingIcon,
   CpuIcon,
   DatabaseBackupIcon,
   FlameIcon,
@@ -15,8 +16,14 @@ import {
 } from "lucide-react";
 
 import { PersonAvatar } from "@/components/person-avatar";
-import { formatDuration, formatSaidAtShort, plural } from "@/lib/format";
 import {
+  formatDaySpan,
+  formatDuration,
+  formatSaidAtShort,
+  plural,
+} from "@/lib/format";
+import {
+  alertingDays,
   byNewest,
   fastestFix,
   solverBoard,
@@ -299,6 +306,13 @@ function Plaque({ monitor }: { monitor: SolvedMonitor }) {
         >
           {monitor.monitor}
         </h3>
+
+        {/* How long it was allowed to scream. Half of what makes a save worth
+            a certificate is what it was like before it. */}
+        <p className="text-muted-foreground mt-2 flex items-center gap-1.5 text-xs">
+          <BellRingIcon className="size-3.5 shrink-0" aria-hidden />
+          צעק במשך {formatDaySpan(alertingDays(monitor))}
+        </p>
 
         <Rule />
 

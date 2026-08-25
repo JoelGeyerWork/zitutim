@@ -5,6 +5,7 @@ import {
   HANDOVER_WEEKDAY,
   SHOTEF_REVIEWS,
   SHOTEF_ROSTER,
+  alertingDays,
   averageRating,
   buildShifts,
   byNewest,
@@ -218,6 +219,32 @@ describe("solverBoard", () => {
   });
 });
 
+describe("alertingDays", () => {
+  it("counts whole days from the first page to the fix", () => {
+    expect(
+      alertingDays(
+        plaque({
+          firstFiredAt: "2026-06-09T00:00:00.000Z",
+          solvedAt: "2026-08-18T00:00:00.000Z",
+        }),
+      ),
+    ).toBe(70);
+  });
+
+  // A monitor caught and fixed the same morning: a real record, and the one
+  // that would come out negative if the arithmetic ever ran backwards.
+  it("is 0 for a monitor silenced the day it first fired", () => {
+    expect(
+      alertingDays(
+        plaque({
+          firstFiredAt: "2026-07-21T00:00:00.000Z",
+          solvedAt: "2026-07-21T00:00:00.000Z",
+        }),
+      ),
+    ).toBe(0);
+  });
+});
+
 describe("fastestFix", () => {
   it("finds the quickest save", () => {
     const fastest = fastestFix([
@@ -260,6 +287,17 @@ describe("the hard-coded content", () => {
     for (const monitor of HALL_OF_FAME) {
       expect(monitor.monitor, monitor.id).not.toBe("");
       expect(monitor.minutesToFix, monitor.id).toBeGreaterThan(0);
+    }
+  });
+
+  // A monitor cannot be solved before it first fired, and the certificate
+  // renders the span between the two.
+  it("fires every monitor before it is silenced", () => {
+    for (const monitor of HALL_OF_FAME) {
+      expect(
+        monitor.firstFiredAt <= monitor.solvedAt,
+        monitor.id,
+      ).toBe(true);
     }
   });
 
