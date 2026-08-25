@@ -99,9 +99,11 @@ export function ThemesView({
         <h2 className="text-muted-foreground text-xs font-semibold">
           ההיסטוריה
         </h2>
-        {themes.map((theme) => (
-          <ThemeCard key={theme.id} theme={theme} />
-        ))}
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          {themes.map((theme) => (
+            <ThemeCard key={theme.id} theme={theme} />
+          ))}
+        </div>
 
         {hasMore ? (
           <div className="py-2 text-center">
@@ -187,33 +189,35 @@ function Leaderboard({ board }: { board: Standing[] }) {
 
 function ThemeCard({ theme }: { theme: Theme }) {
   return (
-    <article className="bg-card rounded-2xl border p-5 shadow-sm">
-      <header className="flex items-center gap-3">
-        <PersonAvatar name={theme.broughtBy} className="size-9 text-sm" />
-        <div className="min-w-0 flex-1">
-          <p className="truncate text-sm font-medium">{theme.broughtBy}</p>
-          <p className="text-muted-foreground truncate text-xs">
-            {formatMeetupDate(theme.date)}
-          </p>
-        </div>
-      </header>
+    <article className="bg-card flex h-full flex-col rounded-2xl border p-5 shadow-sm">
+      <div className="flex-1">
+        <header className="flex items-center gap-3">
+          <PersonAvatar name={theme.broughtBy} className="size-9 text-sm" />
+          <div className="min-w-0 flex-1">
+            <p className="truncate text-sm font-medium">{theme.broughtBy}</p>
+            <p className="text-muted-foreground truncate text-xs">
+              {formatMeetupDate(theme.date)}
+            </p>
+          </div>
+        </header>
 
-      <p className="mt-3 flex items-start gap-2 text-lg leading-snug font-semibold text-balance">
-        <LightbulbIcon className="text-primary mt-1 size-4 shrink-0" />
-        {theme.theme}
-      </p>
+        <p className="mt-3 flex items-start gap-2 text-lg leading-snug font-semibold text-balance">
+          <LightbulbIcon className="text-primary mt-1 size-4 shrink-0" />
+          {theme.theme}
+        </p>
 
-      {theme.snacks.length > 0 ? (
-        <ul className="mt-3 flex flex-wrap gap-1.5">
-          {theme.snacks.map((snack) => (
-            <li key={snack}>
-              <Badge variant="outline" className="font-normal">
-                {snack}
-              </Badge>
-            </li>
-          ))}
-        </ul>
-      ) : null}
+        {theme.snacks.length > 0 ? (
+          <ul className="mt-3 flex flex-wrap gap-1.5">
+            {theme.snacks.map((snack) => (
+              <li key={snack}>
+                <Badge variant="outline" className="font-normal">
+                  {snack}
+                </Badge>
+              </li>
+            ))}
+          </ul>
+        ) : null}
+      </div>
 
       <footer className="mt-4 border-t pt-3 text-sm">
         {theme.guessedBy ? (

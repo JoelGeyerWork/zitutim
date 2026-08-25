@@ -109,6 +109,18 @@ describe("ThemesView", () => {
     expect(screen.getByText("הכול עגול")).toBeInTheDocument();
   });
 
+  it("lays the history out two cards to a row from sm", () => {
+    const themes = [
+      makeTheme({ id: "1", theme: "הכול עגול" }),
+      makeTheme({ id: "2", theme: "מקסיקו", date: "2026-08-11T00:00:00.000Z" }),
+    ];
+    const { container } = render(view({ initial: page(themes) }));
+    const grid = container.querySelector(".sm\\:grid-cols-2");
+
+    expect(grid).not.toBeNull();
+    expect(grid?.querySelectorAll("article")).toHaveLength(2);
+  });
+
   it("reports the total and solved count from the stats prop", () => {
     render(
       view({
