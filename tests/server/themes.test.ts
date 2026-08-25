@@ -367,6 +367,17 @@ describe("listThemes", () => {
       total: 2,
     });
   });
+
+  it("counts matches, not the page, when searching", async () => {
+    await create({ date: "2026-08-18", theme: "הכול עגול" });
+    await create({ date: "2026-08-11", theme: "עגול גם כאן" });
+    await create({ date: "2026-08-04", theme: "מקסיקו" });
+
+    const page = await listThemes({ search: "עגול", limit: 1 });
+    expect(page.themes).toHaveLength(1);
+    expect(page.total).toBe(2);
+    expect(page.hasMore).toBe(true);
+  });
 });
 
 describe("getThemeStats", () => {
