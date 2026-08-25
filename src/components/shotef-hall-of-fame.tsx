@@ -9,6 +9,7 @@ import {
   RefreshCwIcon,
   SearchIcon,
   ShieldCheckIcon,
+  TimerIcon,
   TrophyIcon,
   WorkflowIcon,
   ZapIcon,
@@ -307,12 +308,36 @@ function Plaque({ monitor }: { monitor: SolvedMonitor }) {
           {monitor.monitor}
         </h3>
 
-        {/* How long it was allowed to scream. Half of what makes a save worth
-            a certificate is what it was like before it. */}
-        <p className="text-muted-foreground mt-2 flex items-center gap-1.5 text-xs">
-          <BellRingIcon className="size-3.5 shrink-0" aria-hidden />
-          צעק במשך {formatDaySpan(alertingDays(monitor))}
-        </p>
+        {/* The two spans side by side, because each one is only worth
+            anything against the other: three hours is a long fix for a page
+            caught the same morning and a trivial one for a monitor the team
+            had been dismissing since spring. */}
+        <dl className="mt-4 grid w-full grid-cols-2 text-center">
+          <div className="border-border border-e px-2">
+            <dd className="flex items-center justify-center gap-1.5 text-sm font-bold">
+              <BellRingIcon
+                className="text-muted-foreground size-3.5 shrink-0"
+                aria-hidden
+              />
+              {formatDaySpan(alertingDays(monitor))}
+            </dd>
+            <dt className="text-muted-foreground mt-0.5 text-[10px] tracking-widest">
+              צעק במשך
+            </dt>
+          </div>
+          <div className="px-2">
+            <dd className="flex items-center justify-center gap-1.5 text-sm font-bold">
+              <TimerIcon
+                className="text-muted-foreground size-3.5 shrink-0"
+                aria-hidden
+              />
+              {formatDuration(monitor.minutesToFix)}
+            </dd>
+            <dt className="text-muted-foreground mt-0.5 text-[10px] tracking-widest">
+              {solvedVerb(solvers)} תוך
+            </dt>
+          </div>
+        </dl>
 
         <Rule />
 
@@ -343,8 +368,7 @@ function Plaque({ monitor }: { monitor: SolvedMonitor }) {
             ))}
           </ul>
           <p className="text-muted-foreground mt-1.5 text-xs">
-            {formatSaidAtShort(monitor.solvedAt)} · {solvedVerb(solvers)} תוך{" "}
-            {formatDuration(monitor.minutesToFix)}
+            {formatSaidAtShort(monitor.solvedAt)}
           </p>
         </div>
       </div>
