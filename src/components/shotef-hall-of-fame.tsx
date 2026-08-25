@@ -303,7 +303,7 @@ function Plaque({ monitor }: { monitor: SolvedMonitor }) {
             letter by letter rather than translated back from memory. */}
         <h3
           dir="ltr"
-          className="mt-4 font-mono text-[15px] leading-snug font-semibold break-words"
+          className="mt-4 font-mono text-lg leading-snug font-semibold break-words"
         >
           {monitor.monitor}
         </h3>
@@ -314,9 +314,9 @@ function Plaque({ monitor }: { monitor: SolvedMonitor }) {
             had been dismissing since spring. */}
         <dl className="mt-4 grid w-full grid-cols-2 text-center">
           <div className="border-border border-e px-2">
-            <dd className="flex items-center justify-center gap-1.5 text-sm font-bold">
+            <dd className="flex items-center justify-center gap-1.5 text-xs font-bold">
               <BellRingIcon
-                className="text-muted-foreground size-3.5 shrink-0"
+                className="text-muted-foreground size-3 shrink-0"
                 aria-hidden
               />
               {formatDaySpan(alertingDays(monitor))}
@@ -326,9 +326,9 @@ function Plaque({ monitor }: { monitor: SolvedMonitor }) {
             </dt>
           </div>
           <div className="px-2">
-            <dd className="flex items-center justify-center gap-1.5 text-sm font-bold">
+            <dd className="flex items-center justify-center gap-1.5 text-xs font-bold">
               <TimerIcon
-                className="text-muted-foreground size-3.5 shrink-0"
+                className="text-muted-foreground size-3 shrink-0"
                 aria-hidden
               />
               {formatDuration(monitor.minutesToFix)}
