@@ -217,8 +217,13 @@ export type SolvedMonitor = {
   monitor: string;
   /** How it was actually solved. The point of the whole page. */
   solution: string;
-  /** Index into `SHOTEF_ROSTER` by `id`. */
-  solvedById: string;
+  /**
+   * Everyone whose name goes on the certificate, by `SHOTEF_ROSTER` id. Most
+   * pages were not silenced alone — the shotef holds the ticket, but whoever
+   * knew the subsystem is usually on the call too, and a wall that credits only
+   * one of them is a wall people stop trusting.
+   */
+  solvedByIds: string[];
   /** UTC midnight of the day it was closed. */
   solvedAt: string;
   /** Wall-clock minutes from the page to the fix. Rendered by `formatDuration`
@@ -235,7 +240,7 @@ export const HALL_OF_FAME: SolvedMonitor[] = [
     monitor: "db-prod-01: RAM above 95%",
     solution:
       "לא דליפה — שאילתת דוח חודשית רצה בלי אינדקס ומשכה את כל הטבלה לזיכרון. הוספנו אינדקס מורכב על tenant ועל created_at, וזמן הריצה ירד מארבע דקות לשתי שניות. הזיכרון חזר ל-40% ולא עלה מאז.",
-    solvedById: "ori",
+    solvedByIds: ["ori", "daniel"],
     solvedAt: "2026-08-18T00:00:00.000Z",
     minutesToFix: 180,
   },
@@ -245,7 +250,7 @@ export const HALL_OF_FAME: SolvedMonitor[] = [
     monitor: "backup: last successful backup older than 48h",
     solution:
       "הגיבוי נכשל בשקט שלושה לילות אחרי ששינינו שם של דיסק — הסקריפט המשיך לדווח הצלחה כי בדק רק שהוא רץ, לא שהוא כתב. תיקנו את הנתיב, החלפנו את הבדיקה בקוד היציאה של המשימה, וגם שחזרנו גיבוי אחד כדי לוודא שיש מה לשחזר.",
-    solvedById: "daniel",
+    solvedByIds: ["daniel"],
     solvedAt: "2026-08-11T00:00:00.000Z",
     minutesToFix: 300,
   },
@@ -255,7 +260,7 @@ export const HALL_OF_FAME: SolvedMonitor[] = [
     monitor: "ingest-queue: consumer lag > 10k",
     solution:
       "צרכן אחד נתקע על הודעה פגומה וניסה אותה שוב ושוב בלולאה אינסופית. הוספנו תור מכתבים־מתים אחרי שלושה ניסיונות, והפעם גם התראה על התור הזה — כדי שהודעה פגומה תהיה שקופה במקום להיות שקטה.",
-    solvedById: "yonatan",
+    solvedByIds: ["yonatan", "itay"],
     solvedAt: "2026-08-06T00:00:00.000Z",
     minutesToFix: 2160,
   },
@@ -265,7 +270,7 @@ export const HALL_OF_FAME: SolvedMonitor[] = [
     monitor: "gateway: TLS certificate expires in 3 days",
     solution:
       "חידוש ידני שאף אחד לא נזכר בו. חידשנו, ואז החלפנו את הזיכרון האנושי בקרון שמחדש 30 יום מראש ומדווח לערוץ. ההתראה נשארה — היא עכשיו רשת ביטחון ולא לוח שנה.",
-    solvedById: "daniel",
+    solvedByIds: ["daniel"],
     solvedAt: "2026-07-29T00:00:00.000Z",
     minutesToFix: 60,
   },
@@ -275,7 +280,7 @@ export const HALL_OF_FAME: SolvedMonitor[] = [
     monitor: "api: 5xx rate above 2% for 5m",
     solution:
       "שחרור שהוסיף שדה חובה לבקשה בלי לעדכן את האפליקציה בנייד. החזרנו לאחור תוך אחת־עשרה דקות, ואז שחררנו מחדש כששני הצדדים מסונכרנים. מאז שדה חובה חדש עובר קודם דרך שלב שבו הוא עדיין אופציונלי.",
-    solvedById: "itay",
+    solvedByIds: ["itay", "yonatan"],
     solvedAt: "2026-07-21T00:00:00.000Z",
     minutesToFix: 11,
   },
@@ -285,7 +290,7 @@ export const HALL_OF_FAME: SolvedMonitor[] = [
     monitor: "web: p95 latency above 2s",
     solution:
       "וידג׳ט חדש בדף הבית שאל את מסד הנתונים פעם אחת לכל שורה שהוא הציג — שמונים שאילתות בטעינה אחת. איחדנו אותן לשאילתה אחת, וה-p95 חזר מ-2.4 שניות ל-400 מילישניות.",
-    solvedById: "itay",
+    solvedByIds: ["itay", "maya"],
     solvedAt: "2026-07-06T00:00:00.000Z",
     minutesToFix: 240,
   },
@@ -295,7 +300,7 @@ export const HALL_OF_FAME: SolvedMonitor[] = [
     monitor: "app-03: disk usage above 90%",
     solution:
       "לוגים בלי סבב. פינינו, הגדרנו logrotate יומי עם שמירה לשבועיים, והורדנו את רמת הלוג של הבריאות מ-debug ל-info. תפוסת הדיסק יציבה על 55%.",
-    solvedById: "tamar",
+    solvedByIds: ["tamar"],
     solvedAt: "2026-06-30T00:00:00.000Z",
     minutesToFix: 120,
   },
@@ -305,7 +310,7 @@ export const HALL_OF_FAME: SolvedMonitor[] = [
     monitor: "etl: nightly export failed",
     solution:
       "המקור הוסיף עמודה, והטוען שלנו נפל על סכימה שלא הכיר. עכשיו הוא סופג עמודות שאינן מוכרות לו במקום ליפול, ומדווח עליהן בבוקר — טעינה שנכשלת היא בעיה, טעינה שמפתיעה היא רק ידיעה.",
-    solvedById: "ori",
+    solvedByIds: ["ori"],
     solvedAt: "2026-06-22T00:00:00.000Z",
     minutesToFix: 90,
   },
@@ -315,7 +320,7 @@ export const HALL_OF_FAME: SolvedMonitor[] = [
     monitor: "auth: LDAP bind timeouts",
     solution:
       "לא אנחנו — בקר תחום אחד מתוך שלושה יצא מהאוויר, והקליינט המשיך לנסות דווקא אותו. פנינו לתשתיות, ובינתיים קיצרנו את הטיים־אאוט וסידרנו מעבר לבקר הבא ברשימה. הכניסה נשארה עובדת גם כשבקר נופל.",
-    solvedById: "noa",
+    solvedByIds: ["noa", "daniel"],
     solvedAt: "2026-06-11T00:00:00.000Z",
     minutesToFix: 240,
   },
@@ -325,7 +330,7 @@ export const HALL_OF_FAME: SolvedMonitor[] = [
     monitor: "cache: hit rate below 60%",
     solution:
       "כל המפתחות פגו באותה שנייה בדיוק, ואז כולם רצו יחד למסד הנתונים. פיזרנו את תוקף המפתחות באקראי בעד עשר אחוז, וההצלחה חזרה ל-94%.",
-    solvedById: "maya",
+    solvedByIds: ["maya"],
     solvedAt: "2026-05-24T00:00:00.000Z",
     minutesToFix: 1440,
   },
@@ -335,11 +340,23 @@ export const HALL_OF_FAME: SolvedMonitor[] = [
     monitor: "search: index rebuild stuck for 6h",
     solution:
       "בנייה מחדש שרצה על אותו מסמך פגום עד אינסוף. דילגנו עליו, המשכנו את הבנייה, ואז הוספנו לה יומן התקדמות — מאז בנייה תקועה נראית תקועה תוך דקות במקום תוך חצי יום.",
-    solvedById: "ori",
+    solvedByIds: ["ori", "tamar"],
     solvedAt: "2026-05-10T00:00:00.000Z",
     minutesToFix: 150,
   },
 ];
+
+/**
+ * Everyone named on a certificate, in the order they are written on it. Anyone
+ * off the roster drops out rather than appearing nameless — the certificate is
+ * still theirs, it just cannot say so.
+ */
+export function solversOf(monitor: SolvedMonitor): Member[] {
+  return [...new Set(monitor.solvedByIds)].flatMap((id) => {
+    const member = memberById(id);
+    return member ? [member] : [];
+  });
+}
 
 /** The roster row a review or a monitor points at, or undefined once removed. */
 export function memberById(id: string): Member | undefined {
@@ -379,19 +396,20 @@ export function solverBoard(monitors: SolvedMonitor[]): Solver[] {
   const board = new Map<string, Solver>();
 
   for (const monitor of monitors) {
-    const member = memberById(monitor.solvedById);
-    if (!member) continue;
-
-    const row = board.get(member.id);
-    if (row) {
-      row.solved += 1;
-      if (monitor.solvedAt > row.lastSolved) row.lastSolved = monitor.solvedAt;
-    } else {
-      board.set(member.id, {
-        member,
-        solved: 1,
-        lastSolved: monitor.solvedAt,
-      });
+    // Through a Set, so a name written twice on one certificate still counts
+    // for one plaque — it is the certificates that are being counted here.
+    for (const member of solversOf(monitor)) {
+      const row = board.get(member.id);
+      if (row) {
+        row.solved += 1;
+        if (monitor.solvedAt > row.lastSolved) row.lastSolved = monitor.solvedAt;
+      } else {
+        board.set(member.id, {
+          member,
+          solved: 1,
+          lastSolved: monitor.solvedAt,
+        });
+      }
     }
   }
 

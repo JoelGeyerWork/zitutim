@@ -14,6 +14,7 @@ import {
   memberById,
   shiftIndex,
   solverBoard,
+  solversOf,
   type SolvedMonitor,
 } from "@/lib/shotef";
 import { rotate, type Member } from "@/lib/team";
@@ -157,9 +158,9 @@ describe("byNewest", () => {
 describe("solverBoard", () => {
   it("counts plaques per person, most first", () => {
     const board = solverBoard([
-      plaque({ id: "1", solvedById: "ori" }),
-      plaque({ id: "2", solvedById: "maya" }),
-      plaque({ id: "3", solvedById: "ori" }),
+      plaque({ id: "1", solvedByIds: ["ori"] }),
+      plaque({ id: "2", solvedByIds: ["maya"] }),
+      plaque({ id: "3", solvedByIds: ["ori"] }),
     ]);
 
     expect(board.map((row) => [row.member.id, row.solved])).toEqual([
@@ -170,8 +171,8 @@ describe("solverBoard", () => {
 
   it("breaks a tie on the newest save", () => {
     const board = solverBoard([
-      plaque({ id: "1", solvedById: "ori", solvedAt: "2026-01-01T00:00:00.000Z" }),
-      plaque({ id: "2", solvedById: "maya", solvedAt: "2026-05-01T00:00:00.000Z" }),
+      plaque({ id: "1", solvedByIds: ["ori"], solvedAt: "2026-01-01T00:00:00.000Z" }),
+      plaque({ id: "2", solvedByIds: ["maya"], solvedAt: "2026-05-01T00:00:00.000Z" }),
     ]);
 
     expect(board[0].member.id).toBe("maya");
@@ -182,11 +183,38 @@ describe("solverBoard", () => {
   // someone off the roster has no row to put on it.
   it("drops a solver who is no longer on the roster", () => {
     const board = solverBoard([
-      plaque({ id: "1", solvedById: "who" }),
-      plaque({ id: "2", solvedById: "ori" }),
+      plaque({ id: "1", solvedByIds: ["who"] }),
+      plaque({ id: "2", solvedByIds: ["ori", "who"] }),
     ]);
 
-    expect(board.map((row) => row.member.id)).toEqual(["ori"]);
+    expect(board.map((row) => [row.member.id, row.solved])).toEqual([
+      ["ori", 1],
+    ]);
+  });
+
+  it("credits every name on a certificate", () => {
+    const board = solverBoard([
+      plaque({ id: "1", solvedByIds: ["ori", "maya", "tamar"] }),
+      plaque({ id: "2", solvedByIds: ["maya"] }),
+    ]);
+
+    // maya leads on count; the two on one plaque tie on count *and* on date,
+    // and keep the order they are written on the certificate.
+    expect(board.map((row) => [row.member.id, row.solved])).toEqual([
+      ["maya", 2],
+      ["ori", 1],
+      ["tamar", 1],
+    ]);
+  });
+
+  // Counting the names rather than the certificates would let one typo hand
+  // somebody two plaques for one save.
+  it("counts a certificate once for a name written on it twice", () => {
+    const board = solverBoard([plaque({ id: "1", solvedByIds: ["ori", "ori"] })]);
+
+    expect(board).toEqual([
+      expect.objectContaining({ solved: 1 }),
+    ]);
   });
 });
 
@@ -214,7 +242,10 @@ describe("the hard-coded content", () => {
       expect(memberById(review.memberId), review.id).toBeDefined();
     }
     for (const monitor of HALL_OF_FAME) {
-      expect(memberById(monitor.solvedById), monitor.id).toBeDefined();
+      expect(monitor.solvedByIds.length, monitor.id).toBeGreaterThan(0);
+      expect(solversOf(monitor), monitor.id).toHaveLength(
+        monitor.solvedByIds.length,
+      );
     }
   });
 

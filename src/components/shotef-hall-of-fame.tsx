@@ -19,13 +19,13 @@ import { formatDuration, formatSaidAtShort, plural } from "@/lib/format";
 import {
   byNewest,
   fastestFix,
-  memberById,
   solverBoard,
+  solversOf,
   type AwardIcon,
   type SolvedMonitor,
   type Solver,
 } from "@/lib/shotef";
-import { conjugate } from "@/lib/team";
+import { conjugate, type Member } from "@/lib/team";
 import { cn } from "@/lib/utils";
 
 /** What the fix was about, as a face on the medallion. */
@@ -257,8 +257,7 @@ function Shelf({ seam }: { seam?: "start" | "end" }) {
  * the point, and it is what separates a citation from a list item.
  */
 function Plaque({ monitor }: { monitor: SolvedMonitor }) {
-  const solver = memberById(monitor.solvedById);
-  const name = solver?.name ?? "לא ידוע";
+  const solvers = solversOf(monitor);
   const Icon = AWARD_ICONS[monitor.icon];
 
   return (
@@ -319,19 +318,43 @@ function Plaque({ monitor }: { monitor: SolvedMonitor }) {
           <p className="text-muted-foreground mt-2 text-[10px] tracking-widest">
             מוענקת ל
           </p>
-          <div className="mt-1.5 flex items-center justify-center gap-2">
-            <PersonAvatar name={name} className="size-7 text-xs" />
-            <span className="text-sm font-bold">{name}</span>
-          </div>
+          {/* One line per name. A certificate with three recipients lists them;
+              it does not squeeze them onto one line and truncate the third. */}
+          <ul className="mt-1.5 flex flex-col items-center gap-1.5">
+            {(solvers.length > 0 ? solvers : [UNKNOWN]).map((solver) => (
+              <li key={solver.id} className="flex items-center gap-2">
+                <PersonAvatar name={solver.name} className="size-7 text-xs" />
+                <span className="text-sm font-bold">{solver.name}</span>
+              </li>
+            ))}
+          </ul>
           <p className="text-muted-foreground mt-1.5 text-xs">
-            {formatSaidAtShort(monitor.solvedAt)} ·{" "}
-            {solver ? conjugate(solver, "פתר", "פתרה") : "נפתר"} תוך{" "}
+            {formatSaidAtShort(monitor.solvedAt)} · {solvedVerb(solvers)} תוך{" "}
             {formatDuration(monitor.minutesToFix)}
           </p>
         </div>
       </div>
     </article>
   );
+}
+
+/** Nobody on the roster answers for this one any more. */
+const UNKNOWN: Member = {
+  id: "unknown",
+  name: "לא ידוע",
+  role: "",
+  gender: "m",
+};
+
+/**
+ * "פתר" / "פתרה" / "פתרו". Hebrew conjugates the verb to the subject, and the
+ * past-tense plural is the same for either gender — so more than one name needs
+ * no decision about whose gender wins.
+ */
+function solvedVerb(solvers: Member[]): string {
+  if (solvers.length === 0) return "נפתר";
+  if (solvers.length === 1) return conjugate(solvers[0], "פתר", "פתרה");
+  return "פתרו";
 }
 
 /** The four corner marks of the ruled frame, as logical border pairs. */
