@@ -56,6 +56,10 @@ export function ThemeHistory({ initial }: { initial: ThemePage }) {
 
   const runSearch = useCallback(async (search: string) => {
     const id = ++requestId.current;
+    // A new query invalidates an in-flight load-more: that page belongs to
+    // the previous term, and its `loading` lock would swallow a click on
+    // the results that are about to land.
+    setLoading(false);
     setSearching(true);
     try {
       const params = new URLSearchParams({
@@ -95,24 +99,31 @@ export function ThemeHistory({ initial }: { initial: ThemePage }) {
 
   const loadMore = useCallback(async () => {
     if (loading || !displayedHasMore) return;
+    // Capture the generation of the query this page belongs to. `runSearch`
+    // (and clear) bump `requestId`, so a slow page for "עג" cannot merge
+    // into the "עגול" list that replaced it while we were in flight.
+    const id = requestId.current;
+    const forTerm = appliedTerm;
     setLoading(true);
     try {
       const params = new URLSearchParams({
         skip: String(displayed.length),
         limit: String(THEME_PAGE_SIZE),
       });
-      if (appliedTerm) params.set("q", appliedTerm);
+      if (forTerm) params.set("q", forTerm);
 
       const response = await fetch(`/api/themes?${params}`);
       if (!response.ok) throw new Error(String(response.status));
 
       const page: ThemePage = await response.json();
+      if (id !== requestId.current) return;
+
       const merge = (current: Theme[]) => {
         const seen = new Set(current.map((theme) => theme.id));
         return [...current, ...page.themes.filter((t) => !seen.has(t.id))];
       };
 
-      if (appliedTerm) {
+      if (forTerm) {
         setMatches((current) =>
           current ? { ...page, themes: merge(current.themes) } : page,
         );
@@ -121,8 +132,9 @@ export function ThemeHistory({ initial }: { initial: ThemePage }) {
         setHasMore(page.hasMore);
       }
     } catch {
+      if (id !== requestId.current) return;
       toast.error("לא הצלחנו לטעון עוד נושאים");
-      if (appliedTerm) {
+      if (forTerm) {
         setMatches((current) =>
           current ? { ...current, hasMore: false } : current,
         );
@@ -130,7 +142,7 @@ export function ThemeHistory({ initial }: { initial: ThemePage }) {
         setHasMore(false);
       }
     } finally {
-      setLoading(false);
+      if (id === requestId.current) setLoading(false);
     }
   }, [appliedTerm, displayed.length, displayedHasMore, loading]);
 
@@ -146,7 +158,10 @@ export function ThemeHistory({ initial }: { initial: ThemePage }) {
           value={term}
           onChange={(event) => {
             const value = event.target.value;
-            if (!value.trim()) requestId.current += 1;
+            if (!value.trim()) {
+              requestId.current += 1;
+              setLoading(false);
+            }
             setTerm(value);
           }}
           placeholder="חיפוש בנושא, בכיבוד או בשם…"
@@ -159,6 +174,7 @@ export function ThemeHistory({ initial }: { initial: ThemePage }) {
             size="icon-sm"
             onClick={() => {
               requestId.current += 1;
+              setLoading(false);
               setTerm("");
             }}
             aria-label="ניקוי החיפוש"
@@ -227,7 +243,7 @@ function ThemeCard({
 
         <p className="mt-3 flex items-start gap-2 text-lg leading-snug font-semibold text-balance">
           <LightbulbIcon className="text-primary mt-1 size-4 shrink-0" />
-          <Highlighted text={theme.theme} term={highlight} />
+          <Highlighted className="min-w-0" text={theme.theme} term={highlight} />
         </p>
 
         {theme.snacks.length > 0 ? (
@@ -266,18 +282,30 @@ function ThemeCard({
 }
 
 /** Wraps every case-insensitive occurrence of `term` in a <mark>. */
-function Highlighted({ text, term }: { text: string; term?: string }) {
+function Highlighted({
+  text,
+  term,
+  className,
+}: {
+  text: string;
+  term?: string;
+  className?: string;
+}) {
   const needle = term?.trim();
-  if (!needle) return <>{text}</>;
+  if (!needle) {
+    return className ? <span className={className}>{text}</span> : <>{text}</>;
+  }
 
   const pattern = new RegExp(
     `(${needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")})`,
     "gi",
   );
 
-  // split() with a capture group puts the matches at the odd indices.
+  // A single element, not a fragment: this sits inside `flex … gap-*`
+  // (the title, the snack chips). split() yields empty strings around a
+  // match, and as sibling flex items those would insert the gap into the word.
   return (
-    <>
+    <span className={className}>
       {text.split(pattern).map((part, index) =>
         index % 2 === 1 ? (
           <mark
@@ -290,7 +318,7 @@ function Highlighted({ text, term }: { text: string; term?: string }) {
           <span key={index}>{part}</span>
         ),
       )}
-    </>
+    </span>
   );
 }
 

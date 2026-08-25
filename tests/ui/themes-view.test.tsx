@@ -8,6 +8,7 @@ import {
   makeStanding,
   makeTheme,
   makeThemeMember,
+  jsonResponse,
   respondWith,
 } from "./factories";
 import type { Standing, Theme, ThemeMember, ThemePage } from "@/lib/theme-schema";
@@ -212,8 +213,7 @@ describe("ThemesView", () => {
     await user.type(screen.getByLabelText("חיפוש נושאים"), "מקסיקו");
     await waitFor(() => expect(fetchMock).toHaveBeenCalled());
 
-    // Six keystrokes must not mean six round trips.
-    expect(fetchMock.mock.calls.length).toBeLessThan(6);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it("highlights the matched term in the results", async () => {
@@ -227,6 +227,14 @@ describe("ThemesView", () => {
       const mark = document.querySelector("mark");
       expect(mark?.textContent).toBe("מקסיקו");
     });
+
+    // The title is `flex … gap-2`. Highlighted must be one flex item, or the
+    // gap lands between the empty split pieces around the mark.
+    const title = document.querySelector("article p.text-lg");
+    expect(title?.childElementCount).toBe(2);
+    expect(title?.querySelector(":scope > span")?.querySelector("mark")?.textContent).toBe(
+      "מקסיקו",
+    );
   });
 
   it("leaves the leaderboard in place while the history filters", async () => {
@@ -315,5 +323,59 @@ describe("ThemesView", () => {
     ).toBeInTheDocument();
     expect(toast.error).toHaveBeenCalled();
     expect(screen.queryByText("הכול עגול")).not.toBeInTheDocument();
+  });
+
+  it("does not merge a load-more page into a newer search", async () => {
+    const tomato = makeTheme({ id: "1", theme: "עגבניה" });
+    const round = makeTheme({
+      id: "2",
+      theme: "עגול",
+      date: "2026-08-11T00:00:00.000Z",
+    });
+    const extra = makeTheme({
+      id: "3",
+      theme: "עגלה",
+      date: "2026-08-04T00:00:00.000Z",
+    });
+
+    let releaseLoadMore: () => void = () => {};
+    const loadMoreGate = new Promise<void>((resolve) => {
+      releaseLoadMore = resolve;
+    });
+
+    fetchMock.mockImplementation(async (input: RequestInfo) => {
+      const url = new URL(String(input), "http://localhost");
+      const q = url.searchParams.get("q") ?? "";
+      if (url.searchParams.has("skip")) {
+        await loadMoreGate;
+        return jsonResponse(page([extra], { total: 3 }));
+      }
+      if (q === "עגול") return jsonResponse(page([round]));
+      return jsonResponse(page([tomato, round], { total: 3, hasMore: true }));
+    });
+
+    const user = userEvent.setup();
+    render(view({ initial: page([]) }));
+
+    await user.type(screen.getByLabelText("חיפוש נושאים"), "עג");
+    expect(
+      await screen.findByText("3 תוצאות עבור ״עג״"),
+    ).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "עוד נושאים" }));
+    await waitFor(() =>
+      expect(requestedUrls().some((url) => url.includes("skip="))).toBe(true),
+    );
+
+    await user.type(screen.getByLabelText("חיפוש נושאים"), "ול");
+    expect(
+      await screen.findByText("תוצאה אחת עבור ״עגול״"),
+    ).toBeInTheDocument();
+
+    releaseLoadMore();
+    // Let the stale page land (and be dropped) before asserting.
+    await waitFor(() => expect(screen.getAllByRole("article")).toHaveLength(1));
+
+    expect(screen.queryByText("עגלה")).not.toBeInTheDocument();
   });
 });
