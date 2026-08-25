@@ -189,7 +189,7 @@ function Leaderboard({ board }: { board: Standing[] }) {
 
 function ThemeCard({ theme }: { theme: Theme }) {
   return (
-    <article className="bg-card flex h-full flex-col rounded-2xl border p-5 shadow-sm">
+    <article className="bg-card flex flex-col rounded-2xl border p-5 shadow-sm">
       <div className="flex-1">
         <header className="flex items-center gap-3">
           <PersonAvatar name={theme.broughtBy} className="size-9 text-sm" />
