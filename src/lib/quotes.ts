@@ -14,6 +14,7 @@ import {
   PAGE_SIZE,
   QUOTE_GAME_LENGTH,
   QUOTE_GAME_OPTION_COUNT,
+  shuffled,
   type Quote,
   type QuoteGameRound,
   type QuotePage,
@@ -139,15 +140,6 @@ const sortSpecs: Record<SortOption, Record<string, 1 | -1>> = {
   oldest: { saidAt: 1, createdAt: 1, _id: 1 },
   author: { author: 1, saidAt: -1, _id: -1 },
 };
-
-function shuffled<T>(values: readonly T[]): T[] {
-  const result = [...values];
-  for (let index = result.length - 1; index > 0; index--) {
-    const swapWith = Math.floor(Math.random() * (index + 1));
-    [result[index], result[swapWith]] = [result[swapWith], result[index]];
-  }
-  return result;
-}
 
 /**
  * Resolve counts, the current viewer's like and the latest-two preview in the
@@ -351,6 +343,9 @@ export async function getQuoteGame(
     .aggregate<
       Pick<QuoteDoc, "_id" | "text" | "author" | "saidAt" | "context">
     >([
+      // Same non-empty rule as `authors` above, so a leftover blank name cannot
+      // be drawn as a question after being dropped from the option pool.
+      { $match: { author: { $regex: /\S/ } } },
       { $sample: { size: safeRoundCount } },
       {
         $project: {

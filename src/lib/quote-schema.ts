@@ -54,6 +54,16 @@ export interface QuoteGameRound {
   options: string[];
 }
 
+/** In-place Fisher–Yates, shared so the server deal and client replay stay one algorithm. */
+export function shuffled<T>(values: readonly T[]): T[] {
+  const result = [...values];
+  for (let index = result.length - 1; index > 0; index--) {
+    const swapWith = Math.floor(Math.random() * (index + 1));
+    [result[index], result[swapWith]] = [result[swapWith], result[index]];
+  }
+  return result;
+}
+
 export const SORT_OPTIONS = ["added", "recent", "oldest", "author"] as const;
 export type SortOption = (typeof SORT_OPTIONS)[number];
 

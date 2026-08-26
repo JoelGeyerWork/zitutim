@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import {
   CheckIcon,
   QuoteIcon,
@@ -19,28 +20,32 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { formatSaidAt, plural } from "@/lib/format";
-import type { QuoteGameRound } from "@/lib/quote-schema";
+import { shuffled, type QuoteGameRound } from "@/lib/quote-schema";
 import { cn } from "@/lib/utils";
-
-function shuffled<T>(values: readonly T[]): T[] {
-  const result = [...values];
-  for (let index = result.length - 1; index > 0; index--) {
-    const swapWith = Math.floor(Math.random() * (index + 1));
-    [result[index], result[swapWith]] = [result[swapWith], result[index]];
-  }
-  return result;
-}
 
 export function WhoSaidItGame({
   initialRounds,
 }: {
   initialRounds: QuoteGameRound[];
 }) {
+  const router = useRouter();
   const [rounds, setRounds] = useState(initialRounds);
   const [roundIndex, setRoundIndex] = useState(0);
   const [selected, setSelected] = useState<string | null>(null);
   const [score, setScore] = useState(0);
   const [finished, setFinished] = useState(false);
+
+  // router.refresh() re-runs the server component and hands us a new deal.
+  // Adjusting during render (rather than in an effect) drops the extra paint.
+  const [seed, setSeed] = useState(initialRounds);
+  if (seed !== initialRounds) {
+    setSeed(initialRounds);
+    setRounds(initialRounds);
+    setRoundIndex(0);
+    setSelected(null);
+    setScore(0);
+    setFinished(false);
+  }
 
   if (rounds.length === 0) {
     return (
@@ -61,6 +66,9 @@ export function WhoSaidItGame({
   }
 
   function restart() {
+    router.refresh();
+    // Local reshuffle so play-again is instant if the refresh is slow or
+    // `$sample` happens to return the same quotes.
     setRounds((current) =>
       shuffled(current).map((round) => ({
         ...round,
@@ -108,11 +116,13 @@ export function WhoSaidItGame({
   const correct = selected === round.correctAuthor;
 
   function choose(author: string) {
-    if (answered) return;
-    setSelected(author);
-    if (author === round.correctAuthor) {
-      setScore((current) => current + 1);
-    }
+    setSelected((current) => {
+      if (current !== null) return current;
+      if (author === round.correctAuthor) {
+        setScore((points) => points + 1);
+      }
+      return author;
+    });
   }
 
   function nextRound() {
@@ -138,13 +148,13 @@ export function WhoSaidItGame({
         className="bg-muted mb-6 h-1.5 overflow-hidden rounded-full"
         role="progressbar"
         aria-label="התקדמות במשחק"
-        aria-valuemin={1}
+        aria-valuemin={0}
         aria-valuemax={rounds.length}
-        aria-valuenow={roundIndex + 1}
+        aria-valuenow={roundIndex}
       >
         <div
           className="bg-primary h-full rounded-full transition-[width]"
-          style={{ width: `${((roundIndex + 1) / rounds.length) * 100}%` }}
+          style={{ width: `${(roundIndex / rounds.length) * 100}%` }}
         />
       </div>
 
