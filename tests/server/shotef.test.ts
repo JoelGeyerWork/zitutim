@@ -13,9 +13,14 @@ import {
   fastestFix,
   handoverOf,
   memberById,
+  byWeek,
+  closedWeeks,
   monitorInputSchema,
   newMonitor,
+  newReview,
+  reviewInputSchema,
   shiftIndex,
+  shotefOn,
   solverBoard,
   solversOf,
   type SolvedMonitor,
@@ -340,6 +345,127 @@ describe("newMonitor", () => {
   });
 });
 
+describe("byWeek", () => {
+  it("puts the newest week first, whatever order they arrived in", () => {
+    const weeks = ["2026-07-05", "2026-08-16", "2026-07-26"].map((week) => ({
+      ...SHOTEF_REVIEWS[0],
+      id: week,
+      weekStart: `${week}T00:00:00.000Z`,
+    }));
+
+    expect(byWeek(weeks).map((review) => review.id)).toEqual([
+      "2026-08-16",
+      "2026-07-26",
+      "2026-07-05",
+    ]);
+  });
+});
+
+describe("closedWeeks", () => {
+  // Thursday, mid-shift: the week that opened on the 23rd is still running.
+  const now = new Date("2026-08-27T09:00:00.000Z");
+
+  it("starts at the last week that ended, not the one still running", () => {
+    expect(closedWeeks(now, 3)).toEqual([
+      "2026-08-16T00:00:00.000Z",
+      "2026-08-09T00:00:00.000Z",
+      "2026-08-02T00:00:00.000Z",
+    ]);
+  });
+
+  // The handover is the earliest moment a week can be scored, so it has to be
+  // offered from that morning rather than a day later.
+  it("offers the week that just ended on handover morning", () => {
+    expect(closedWeeks(new Date("2026-08-23T06:00:00.000Z"), 1)).toEqual([
+      "2026-08-16T00:00:00.000Z",
+    ]);
+  });
+
+  it("only ever names Sundays", () => {
+    for (const week of closedWeeks(now, 20)) {
+      expect(new Date(week).getUTCDay(), week).toBe(HANDOVER_WEEKDAY);
+    }
+  });
+});
+
+describe("shotefOn", () => {
+  it("names whoever the anchored rotation had on duty that week", () => {
+    const week = new Date("2026-08-16T00:00:00.000Z");
+    const expected = ROSTER[shiftIndex(week, ROSTER.length)];
+
+    expect(shotefOn(week.toISOString(), ROSTER)).toBe(expected);
+  });
+
+  it("has nobody to name on an empty roster", () => {
+    expect(shotefOn("2026-08-16T00:00:00.000Z", [])).toBeUndefined();
+  });
+});
+
+describe("reviewInputSchema", () => {
+  const input = {
+    weekStart: "2026-08-16",
+    memberId: "daniel",
+    rating: 4,
+    headline: "שבוע של תור ריק",
+    body: "שתי פניות בלבד, ושתיהן נסגרו לפני הצהריים.",
+  };
+
+  const issueOn = (over: Record<string, unknown>) => {
+    const result = reviewInputSchema.safeParse({ ...input, ...over });
+    return result.success ? undefined : result.error.issues[0];
+  };
+
+  it("accepts a filled-in form", () => {
+    expect(reviewInputSchema.safeParse(input).success).toBe(true);
+  });
+
+  // A shift is a whole Sunday-to-Saturday week, so a week that starts on any
+  // other day is not a week anyone was on duty for.
+  it("refuses a week that doesn't start on a Sunday", () => {
+    expect(issueOn({ weekStart: "2026-08-18" })?.message).toBe(
+      "שבוע תורנות מתחיל ביום ראשון",
+    );
+  });
+
+  // Zero is a real score: a week that went badly is the one worth writing down.
+  it("takes zero stars but not a negative or a sixth one", () => {
+    expect(reviewInputSchema.safeParse({ ...input, rating: 0 }).success).toBe(
+      true,
+    );
+    expect(issueOn({ rating: -1 })).toBeDefined();
+    expect(issueOn({ rating: 6 })).toBeDefined();
+  });
+
+  it("refuses a summary with no words in it", () => {
+    expect(issueOn({ headline: "  " })).toBeDefined();
+    expect(issueOn({ body: "קצר" })).toBeDefined();
+  });
+
+  it("refuses a week with nobody on duty", () => {
+    expect(issueOn({ memberId: "" })?.message).toBe("צריך לבחור מי היה השוטף");
+  });
+});
+
+describe("newReview", () => {
+  const input = reviewInputSchema.parse({
+    weekStart: "2026-08-16",
+    memberId: "daniel",
+    rating: 4,
+    headline: "שבוע של תור ריק",
+    body: "שתי פניות בלבד, ושתיהן נסגרו לפני הצהריים.",
+  });
+
+  // Same rule as every other date here: stored at UTC midnight, because the
+  // formatters read UTC.
+  it("stores the week at UTC midnight", () => {
+    expect(newReview(input).weekStart).toBe("2026-08-16T00:00:00.000Z");
+  });
+
+  it("gives every summary an id of its own, so a list can key by it", () => {
+    expect(newReview(input).id).not.toBe(newReview(input).id);
+  });
+});
+
 // The fixtures are what the three screens render today, so a typo in an id
 // would show up only as "לא ידוע" on a card.
 describe("the hard-coded content", () => {
@@ -351,6 +477,14 @@ describe("the hard-coded content", () => {
       expect(monitor.solvedByIds.length, monitor.id).toBeGreaterThan(0);
       expect(solversOf(monitor), monitor.id).toHaveLength(
         monitor.solvedByIds.length,
+      );
+    }
+  });
+
+  it("opens every reviewed week on a Sunday", () => {
+    for (const review of SHOTEF_REVIEWS) {
+      expect(new Date(review.weekStart).getUTCDay(), review.id).toBe(
+        HANDOVER_WEEKDAY,
       );
     }
   });

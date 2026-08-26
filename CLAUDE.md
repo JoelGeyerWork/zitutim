@@ -161,9 +161,24 @@ what finally closes it.
 
 The on-call section is **UI first and hard-coded**: `src/lib/shotef.ts` holds the
 roster, the weekly reviews and the hall of fame as fixtures, and all three pages
-render them directly. There is no collection, no route handler and no write
-path — nothing here is editable from the browser, deliberately, until the
-screens are agreed on.
+render them directly. There is no collection and no route handler, deliberately,
+until the screens are agreed on.
+
+The two list pages do take an addition, but **only into React state**: the hall
+of fame's "תעודה חדשה" and the reviews' "סיכום חדש" prepend to a `useState` over
+the `initial` prop and a reload brings the fixtures back. Three things about
+that are worth keeping when it grows an API:
+
+- **The add buttons are not session-gated**, unlike every other section's. The
+  gate elsewhere hides a control whose API answers `401`; here there is nothing
+  to authorise. Each takes the gate when it takes a write path.
+- **`monitorInputSchema` and `reviewInputSchema` live in `shotef.ts`, not in
+  their dialogs** — they are the shape a route handler will re-validate, and the
+  dialogs map their issues to a `Record<field, message>`, the same shape the
+  other forms render from a server `422`.
+- **Neither state holds a `seed` reconcile** like `QuoteFeed` does, because
+  nothing hands down a fresh `initial`. The day a `router.refresh()` does, they
+  need one.
 
 It is still written to split the way the rest of the app does. `shotef.ts` is
 client-safe — no `server-only`, no `mongodb` — so when it grows a database the

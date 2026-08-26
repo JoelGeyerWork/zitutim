@@ -1,21 +1,40 @@
-import { StarIcon } from "lucide-react";
+"use client";
+
+import { useState } from "react";
+import { PlusIcon, StarIcon } from "lucide-react";
 
 import { PersonAvatar } from "@/components/person-avatar";
-import { Badge } from "@/components/ui/badge";
+import { ReviewFormDialog } from "@/components/review-form-dialog";
+import { Button } from "@/components/ui/button";
 import { formatWeekRange, plural } from "@/lib/format";
 import {
   averageRating,
+  byWeek,
   memberById,
   type ShotefReview,
 } from "@/lib/shotef";
+import { type Member } from "@/lib/team";
 import { cn } from "@/lib/utils";
 
 /** Whole stars only — a week is scored by feel, not to a decimal. */
 const MAX_STARS = 5;
 
-export function ShotefReviews({ reviews }: { reviews: ShotefReview[] }) {
+export function ShotefReviews({
+  initial,
+  roster,
+  nowIso,
+}: {
+  initial: ShotefReview[];
+  roster: Member[];
+  /** "Now" is fixed by the server, so the week picker offers the same weeks. */
+  nowIso: string;
+}) {
+  // Local only: a new summary lives in this tab until the section grows a
+  // database. Nothing hands down a fresh `initial`, so there is no `seed`
+  // reconcile here like the quote feed keeps.
+  const [reviews, setReviews] = useState(initial);
+  const [adding, setAdding] = useState(false);
   const average = averageRating(reviews);
-  const issues = reviews.reduce((sum, review) => sum + review.issues, 0);
 
   return (
     <div className="space-y-4">
@@ -29,8 +48,7 @@ export function ShotefReviews({ reviews }: { reviews: ShotefReview[] }) {
             </span>
           </p>
           <p className="text-muted-foreground mt-1 text-sm">
-            {plural(reviews.length, "שבוע אחד מסוכם", "שבועות מסוכמים")} ·{" "}
-            {plural(issues, "פנייה אחת", "פניות")} בסך הכול
+            {plural(reviews.length, "שבוע אחד מסוכם", "שבועות מסוכמים")}
           </p>
         </div>
         {/* Rounded down deliberately: a 3.8 that shows four full stars claims a
@@ -39,13 +57,37 @@ export function ShotefReviews({ reviews }: { reviews: ShotefReview[] }) {
       </section>
 
       <section className="space-y-3">
-        <h2 className="text-muted-foreground text-xs font-semibold">
-          שבוע אחרי שבוע
-        </h2>
-        {reviews.map((review) => (
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h2 className="text-muted-foreground text-xs font-semibold">
+            שבוע אחרי שבוע
+          </h2>
+          {/* Not gated on a session like the other sections' add buttons: this
+              writes to React state and no further. It takes the gate when it
+              takes an API. */}
+          <Button size="sm" onClick={() => setAdding(true)} className="gap-1.5">
+            <PlusIcon className="size-4" />
+            סיכום חדש
+          </Button>
+        </div>
+
+        {/* Sorted here rather than trusted from the fixtures: a summary can be
+            written for any week that has closed, not only the latest one. */}
+        {byWeek(reviews).map((review) => (
           <ReviewCard key={review.id} review={review} />
         ))}
       </section>
+
+      {/* Mounted only while open, so each visit starts from an empty form. */}
+      {adding ? (
+        <ReviewFormDialog
+          open
+          onOpenChange={setAdding}
+          onAdd={(review) => setReviews((current) => [review, ...current])}
+          reviews={reviews}
+          roster={roster}
+          nowIso={nowIso}
+        />
+      ) : null}
     </div>
   );
 }
@@ -75,15 +117,6 @@ function ReviewCard({ review }: { review: ShotefReview }) {
       <p className="text-muted-foreground mt-2 text-sm leading-relaxed">
         {review.body}
       </p>
-
-      <footer className="mt-4 flex flex-wrap items-center justify-between gap-2 border-t pt-3">
-        <Badge variant="outline" className="font-normal">
-          {plural(review.issues, "פנייה אחת", "פניות")} בשבוע
-        </Badge>
-        <span className="text-muted-foreground text-xs">
-          סוכם על ידי {review.reviewedBy}
-        </span>
-      </footer>
     </article>
   );
 }

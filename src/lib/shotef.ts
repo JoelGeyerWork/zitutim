@@ -120,10 +120,6 @@ export type ShotefReview = {
   /** One line, the way the week is remembered. */
   headline: string;
   body: string;
-  /** How many issues reached the shotef that week — context for the score. */
-  issues: number;
-  /** Who wrote the review. Reviews are of the week, not of the person. */
-  reviewedBy: string;
 };
 
 /** Newest week first — the list is read top-down and rarely scrolled far. */
@@ -135,8 +131,6 @@ export const SHOTEF_REVIEWS: ShotefReview[] = [
     rating: 5,
     headline: "שבוע שקט שנגמר בשדרוג",
     body: "שתי תקלות קטנות, שתיהן נסגרו באותו יום. בין לבין דניאל ניקה את התראות הרעש שהצטברו בחודשים האחרונים — מאז יש חצי מהפינגים ואף אחד לא מתגעגע.",
-    issues: 2,
-    reviewedBy: "נועה ברקת",
   },
   {
     id: "w-2026-08-09",
@@ -144,9 +138,7 @@ export const SHOTEF_REVIEWS: ShotefReview[] = [
     memberId: "tamar",
     rating: 4,
     headline: "גל תקלות מהשחרור של יום שני",
-    body: "השחרור הביא איתו שבע פניות ביומיים. תמר תיעדה כל אחת, זיהתה שכולן אותו באג ופתחה תיקון אחד במקום שבעה. ירד כוכב רק כי ההודעה לצוות יצאה באיחור.",
-    issues: 7,
-    reviewedBy: "איתי שרון",
+    body: "השחרור הביא איתו גל פניות ביומיים. תמר תיעדה כל אחת, זיהתה שכולן אותו באג ופתחה תיקון אחד במקום להתמודד עם כל אחת לחוד. ירד כוכב רק כי ההודעה לצוות יצאה באיחור.",
   },
   {
     id: "w-2026-08-02",
@@ -154,9 +146,7 @@ export const SHOTEF_REVIEWS: ShotefReview[] = [
     memberId: "yonatan",
     rating: 3,
     headline: "שבוע בינוני, בעיקר בגלל התור",
-    body: "ארבע פניות, כולן טופלו — אבל שתיים מהן חיכו יומיים כי לא היה ברור למי הן שייכות. הפתק שנשאר אחריו: להגדיר בעלות לפני שהתור מתמלא, לא אחרי.",
-    issues: 4,
-    reviewedBy: "נועה ברקת",
+    body: "הכול טופל בסוף — אבל חלק מהפניות חיכו יומיים כי לא היה ברור למי הן שייכות. הפתק שנשאר אחריו: להגדיר בעלות לפני שהתור מתמלא, לא אחרי.",
   },
   {
     id: "w-2026-07-26",
@@ -165,8 +155,6 @@ export const SHOTEF_REVIEWS: ShotefReview[] = [
     rating: 5,
     headline: "התקלה של הלקוח הגדול נסגרה תוך שעתיים",
     body: "פנייה דחופה נכנסה ברבע לחמש ביום רביעי. שירה שחזרה, מצאה, תיקנה ועדכנה את הלקוח לפני שהוא הספיק לשאול שוב. שאר השבוע היה שקט.",
-    issues: 3,
-    reviewedBy: "מאיה גלעד",
   },
   {
     id: "w-2026-07-19",
@@ -174,9 +162,7 @@ export const SHOTEF_REVIEWS: ShotefReview[] = [
     memberId: "ori",
     rating: 2,
     headline: "שבוע קשה, ולא באשמת אף אחד",
-    body: "תשע פניות, שתי התראות לילה ותקלת רשת שלא הייתה שלנו בכלל. אורי החזיק את הראש מעל המים, אבל מהשבוע הזה יצאנו עם מסקנה אחת: שוטף אחד לא מספיק בשבוע שחרור גדול.",
-    issues: 9,
-    reviewedBy: "נועה ברקת",
+    body: "שבוע עמוס, שתי התראות לילה ותקלת רשת שלא הייתה שלנו בכלל. אורי החזיק את הראש מעל המים, אבל מהשבוע הזה יצאנו עם מסקנה אחת: שוטף אחד לא מספיק בשבוע שחרור גדול.",
   },
   {
     id: "w-2026-07-12",
@@ -184,9 +170,7 @@ export const SHOTEF_REVIEWS: ShotefReview[] = [
     memberId: "maya",
     rating: 4,
     headline: "רוב הפניות בכלל לא היו באגים",
-    body: "חמש מתוך שש הפניות היו שאלות שימוש. מאיה ענתה, ואז כתבה מהן דף עזרה קצר שמאז חוסך לנו את אותן שאלות בדיוק.",
-    issues: 6,
-    reviewedBy: "תמר רוזן",
+    body: "כמעט כל מה שנכנס היה שאלות שימוש. מאיה ענתה, ואז כתבה מהן דף עזרה קצר שמאז חוסך לנו את אותן שאלות בדיוק.",
   },
 ];
 
@@ -407,6 +391,84 @@ export function averageRating(reviews: ShotefReview[]): number {
   if (reviews.length === 0) return 0;
   const total = reviews.reduce((sum, review) => sum + review.rating, 0);
   return Math.round((total / reviews.length) * 10) / 10;
+}
+
+/** Newest week first, whatever order they arrived in. */
+export function byWeek(reviews: ShotefReview[]): ShotefReview[] {
+  return [...reviews].sort((a, b) => b.weekStart.localeCompare(a.weekStart));
+}
+
+/**
+ * The last `count` weeks that have *closed*, newest first — what a review can
+ * be written about. The running week is left out deliberately: it has no score
+ * yet, and the earliest it can get one is the Sunday it hands over.
+ */
+export function closedWeeks(now: Date, count: number): string[] {
+  const lastClosed = currentShift(now).getTime() - WEEK_MS;
+
+  return Array.from({ length: count }, (_, back) =>
+    new Date(lastClosed - back * WEEK_MS).toISOString(),
+  );
+}
+
+/** Whose week it was, per the anchored rotation — the review's default author. */
+export function shotefOn(weekStartIso: string, roster: Member[]): Member | undefined {
+  return roster[shiftIndex(new Date(weekStartIso), roster.length)];
+}
+
+/** A star count, and what it is worth saying about it in the picker. */
+export const RATING_LABELS: Record<number, string> = {
+  0: "שבוע שלא נשמור למזכרת",
+  1: "היה קשה",
+  2: "היו ימים טובים יותר",
+  3: "שבוע סביר",
+  4: "שבוע טוב",
+  5: "שבוע מופתי",
+};
+
+export const reviewInputSchema = z.object({
+  // A shift is a whole Sunday-to-Saturday week, so a week that doesn't start on
+  // one is not a week anyone was on duty for. The form only offers Sundays; the
+  // check is here because this is the shape a route handler would trust.
+  weekStart: dateOnly.refine(
+    (value) => new Date(value).getUTCDay() === HANDOVER_WEEKDAY,
+    "שבוע תורנות מתחיל ביום ראשון",
+  ),
+  memberId: z.string().min(1, "צריך לבחור מי היה השוטף"),
+  // Zero is a legal score, so this is `min(0)` rather than `positive()` — a week
+  // that went badly is exactly the one worth writing down.
+  rating: z
+    .number("צריך לתת ציון")
+    .int("צריך מספר שלם")
+    .min(0, "הציון מתחיל באפס")
+    .max(5, "הציון נגמר בחמש"),
+  headline: z
+    .string()
+    .trim()
+    .min(3, "צריך משפט אחד שמסכם את השבוע")
+    .max(80, "הכותרת ארוכה מדי"),
+  body: z
+    .string()
+    .trim()
+    .min(10, "צריך לכתוב מה קרה בשבוע הזה")
+    .max(800, "הסיכום ארוך מדי"),
+});
+
+export type ReviewInput = z.infer<typeof reviewInputSchema>;
+
+/**
+ * A validated input as a card on the page. Like `newMonitor`, the id is minted
+ * here only because nothing stores these yet.
+ */
+export function newReview(input: ReviewInput): ShotefReview {
+  return {
+    id: `w-local-${crypto.randomUUID()}`,
+    weekStart: `${input.weekStart}T00:00:00.000Z`,
+    memberId: input.memberId,
+    rating: input.rating,
+    headline: input.headline,
+    body: input.body,
+  };
 }
 
 /**
