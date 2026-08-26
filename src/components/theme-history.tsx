@@ -96,9 +96,14 @@ export function ThemeHistory({ initial }: { initial: ThemePage }) {
   const displayedHasMore = appliedTerm
     ? (matches?.hasMore ?? false)
     : hasMore;
+  // Old results stay on screen until the new query lands. Hide load-more in
+  // that window: `requestId` has already moved to the new search, so a click
+  // would stamp the old term's next page with the new generation and merge it
+  // into the list that is about to arrive.
+  const querySettled = !searching && term.trim() === appliedTerm;
 
   const loadMore = useCallback(async () => {
-    if (loading || !displayedHasMore) return;
+    if (loading || !displayedHasMore || !querySettled) return;
     // Capture the generation of the query this page belongs to. `runSearch`
     // (and clear) bump `requestId`, so a slow page for "עג" cannot merge
     // into the "עגול" list that replaced it while we were in flight.
@@ -144,7 +149,13 @@ export function ThemeHistory({ initial }: { initial: ThemePage }) {
     } finally {
       if (id === requestId.current) setLoading(false);
     }
-  }, [appliedTerm, displayed.length, displayedHasMore, loading]);
+  }, [
+    appliedTerm,
+    displayed.length,
+    displayedHasMore,
+    loading,
+    querySettled,
+  ]);
 
   return (
     <section className="space-y-3">
@@ -204,7 +215,7 @@ export function ThemeHistory({ initial }: { initial: ThemePage }) {
         </div>
       )}
 
-      {displayedHasMore ? (
+      {displayedHasMore && querySettled ? (
         <div className="py-2 text-center">
           {loading ? (
             <Loader2Icon className="text-muted-foreground mx-auto size-5 animate-spin" />
