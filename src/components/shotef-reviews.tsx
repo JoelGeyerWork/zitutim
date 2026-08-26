@@ -12,7 +12,7 @@ import {
   byWeek,
   memberById,
   type ShotefReview,
-} from "@/lib/shotef";
+} from "@/lib/shotef-schema";
 import { type Member } from "@/lib/team";
 import { cn } from "@/lib/utils";
 
@@ -73,7 +73,7 @@ export function ShotefReviews({
         {/* Sorted here rather than trusted from the fixtures: a summary can be
             written for any week that has closed, not only the latest one. */}
         {byWeek(reviews).map((review) => (
-          <ReviewCard key={review.id} review={review} />
+          <ReviewCard key={review.id} review={review} roster={roster} />
         ))}
       </section>
 
@@ -92,10 +92,16 @@ export function ShotefReviews({
   );
 }
 
-function ReviewCard({ review }: { review: ShotefReview }) {
+function ReviewCard({
+  review,
+  roster,
+}: {
+  review: ShotefReview;
+  roster: Member[];
+}) {
   // A member who has left the roster keeps their week — the review is of the
   // week, and the name on it is the only identity it needs.
-  const member = memberById(review.memberId);
+  const member = memberById(review.memberId, roster);
   const name = member?.name ?? "לא ידוע";
 
   return (

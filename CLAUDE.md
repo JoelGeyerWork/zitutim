@@ -157,37 +157,57 @@ can drift from the DB rotation if the two lists of the same eight ever diverge.
 It is a smaller seam than two rosters, and collapsing `TEAM` into the rotation is
 what finally closes it.
 
-### שוטף is front-end only, for now
+### שוטף: the rotation is stored, the other two tabs are not yet
 
-The on-call section is **UI first and hard-coded**: `src/lib/shotef.ts` holds the
-roster, the weekly reviews and the hall of fame as fixtures, and all three pages
-render them directly. There is no collection and no route handler, deliberately,
-until the screens are agreed on.
+The on-call section is being moved off fixtures one tab at a time. **The
+rotation is done**; the weekly reviews and the hall of fame are still hard-coded
+and still write no further than React state.
 
-The two list pages do take an addition, but **only into React state**: the hall
-of fame's "תעודה חדשה" and the reviews' "סיכום חדש" prepend to a `useState` over
-the `initial` prop and a reload brings the fixtures back. Three things about
-that are worth keeping when it grows an API:
+**The rotation is a second row in the `rotation` collection**, `_id: "shotef"`,
+not a collection of its own. `rotation.ts` takes a `RotationKey` on every
+function, **defaulting to `"current"`** so the ישב״צ side reads exactly as it did
+when the module knew one row. The shape needed is identical
+(`{ userId, gender }[]`, order is array position) and the singleton/atomicity
+reasoning in `rotation.ts` is subtle enough that a second copy of it is a second
+copy to keep in agreement. `src/lib/shotef.ts` binds that module to this key —
+`getShotefRotation`, `addShotefMember`, … — so nothing outside it names the key,
+and the two rotations can differ only in which row they touch.
 
-- **The add buttons are not session-gated**, unlike every other section's. The
-  gate elsewhere hides a control whose API answers `401`; here there is nothing
+Membership works exactly like the meetup rotation: `GET|POST
+/api/shotef/rotation`, `PATCH|DELETE /api/shotef/rotation/[userId]`, `PUT
+/api/shotef/rotation/order`. `GET` is public, every mutation is
+`isSameOrigin` → session-off-the-`Request` **before** the body is parsed → Zod,
+POST re-resolves the person through `findPersonById` so nothing a client typed
+lands in a stored name, and removing the **last** member is refused (409) — a
+rotation with nobody on it has no week to render. **Someone in both rotations is
+one `users` row**, since both point at the same `upsertRosterUser` identity.
+
+The split follows quotes/themes exactly: **`src/lib/shotef-schema.ts` is
+client-safe** (every type, every Zod schema, every pure date/maths helper, every
+label map) and `src/lib/shotef.ts` is the `server-only` Mongo layer that
+re-exports it. **Client components must import from `@/lib/shotef-schema`** —
+pulling `@/lib/shotef` into a `"use client"` file drags the Mongo driver into the
+browser bundle. `memberById`, `solversOf` and `solverBoard` take the roster as an
+argument now rather than closing over a list, since membership is a database
+read.
+
+What is still fixtures, and what to keep when it moves:
+
+- `SHOTEF_REVIEWS` and `HALL_OF_FAME` live in `shotef-schema.ts` and FK against
+  **`SHOTEF_ROSTER`'s slug ids**, which is the only reason that list still
+  exists. Nothing else may reference it; it goes when they do.
+- **Their add buttons are not session-gated**, unlike every other section's. The
+  gate elsewhere hides a control whose API answers `401`; there is still nothing
   to authorise. Each takes the gate when it takes a write path.
-- **`monitorInputSchema` and `reviewInputSchema` live in `shotef.ts`, not in
-  their dialogs** — they are the shape a route handler will re-validate, and the
-  dialogs map their issues to a `Record<field, message>`, the same shape the
+- **`monitorInputSchema` and `reviewInputSchema` are in `shotef-schema.ts`, not
+  in their dialogs** — they are the shape a route handler will re-validate, and
+  the dialogs map their issues to a `Record<field, message>`, the same shape the
   other forms render from a server `422`.
 - **Neither state holds a `seed` reconcile** like `QuoteFeed` does, because
   nothing hands down a fresh `initial`. The day a `router.refresh()` does, they
   need one.
 
-It is still written to split the way the rest of the app does. `shotef.ts` is
-client-safe — no `server-only`, no `mongodb` — so when it grows a database the
-types and the pure date math stay put (or move to a `shotef-schema.ts`) and a
-`server-only` layer re-exports them, exactly like `quotes.ts`/`quote-schema.ts`.
-The pages already fix "now" on the server and pass `nowIso` down, so the wheel
-hydrates onto the person it rendered.
-
-Two things worth knowing about the math:
+Three things worth knowing about the math:
 
 - **The shift changes hands on Sunday, not on ישב״צ day.** It has its own
   anchor (`SHOTEF_ANCHOR`) and its own `currentShift`/`shiftIndex`, rather than
@@ -196,10 +216,23 @@ Two things worth knowing about the math:
 - **The countdown is to the handover, not to the start.** On duty, what matters
   is how much of the week is left, so the card counts down to
   `handoverOf(shift)`.
+- **The turn is `weeksElapsed % size`, so editing the roster moves everyone's
+  upcoming week** — the same accepted trade-off the ישב״צ rotation documents, and
+  it now bites for real, because the roster is editable. Past weeks are safe: a
+  review records who was actually on duty. `buildShifts` hands back `[]` for an
+  empty roster rather than a list of shifts with nobody on them — an unseeded
+  database has never had a member, so the callers must render that.
 
 The wheel itself is shared: `RotationWheel` (was `MeetupWheel`) draws both
 rotations and knows about neither — the icon at its hub is the only thing that
 says which one you are looking at.
+
+`scripts/seed.mjs --demo` seeds both rotations from one `ROSTER_SEED`, whose
+rows now carry a **fixed `_id`** applied through `$setOnInsert`: a fresh database
+always gives the same person the same `users._id`, which is what lets later demo
+content be written against a known id. A database that already holds them keeps
+the ids it minted, so everything downstream still reads `idByKey`, never the
+constant.
 
 ### It runs on an air-gapped network
 

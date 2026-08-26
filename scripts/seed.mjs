@@ -1,11 +1,12 @@
 /**
  * Creates the indexes the app relies on and — with --demo — inserts a handful
- * of sample quotes so the feed isn't empty on a fresh database.
+ * of sample quotes, the roster, the sample themes and both rotations, so no
+ * screen is empty on a fresh database.
  *
  *   node --env-file=.env.local scripts/seed.mjs
  *   node --env-file=.env.local scripts/seed.mjs --demo
  */
-import { MongoClient } from "mongodb";
+import { MongoClient, ObjectId } from "mongodb";
 
 const uri = process.env.MONGODB_URI;
 const dbName = process.env.MONGODB_DB ?? "zitutim";
@@ -54,24 +55,40 @@ const DEMO = [
 ];
 
 /**
- * The roster members a theme can name. Duplicated here rather than imported —
- * this is a plain `.mjs` script with no `@/lib` path alias, the same reason
- * `DEMO` above is not read from `quotes.ts`.
+ * The roster members a theme, a shift, a review or a certificate can name.
+ * Duplicated here rather than imported — this is a plain `.mjs` script with no
+ * `@/lib` path alias, the same reason `DEMO` above is not read from `quotes.ts`.
  *
- * Keyed on the objectGUID from `directory.ts`, so a themes-seeded row and the
- * same person signing in through LDAP land on one `users` row, not two. `key`
- * is the `team.ts` id the sample themes below reference.
+ * Keyed on an objectGUID, so a seeded row and the same person signing in
+ * through LDAP land on one `users` row, not two. `key` is the slug the sample
+ * content below references.
+ *
+ * `_id` is fixed rather than minted, so a fresh database always gives the same
+ * person the same `users._id`. That is what lets later demo content — the
+ * שוטף reviews and the hall of fame, whose fixtures still FK against these
+ * slugs — be written against a known id instead of one this run invented. It
+ * is applied through `$setOnInsert`, so a database that already holds these
+ * people keeps whatever ids it minted the first time; everything below reads
+ * `idByKey` rather than the constant for exactly that reason.
  */
 const ROSTER_SEED = [
-  { key: "noa", directoryId: "8a1f0c2e-4d3b-4a91-9f70-1c2d3e4f5a01", displayName: "נועה ברקת", title: "ראשת צוות", username: "noa.bareket", gender: "f" },
-  { key: "itay", directoryId: "1c9d5b74-2e60-4f18-b3a2-7d51e0c48b12", displayName: "איתי שרון", title: "שרת", username: "itay.sharon", gender: "m" },
-  { key: "shira", directoryId: "b6740f31-8c25-4d0a-9e63-5a29d7fb1c33", displayName: "שירה לוי", title: "לקוח", username: "shira.levi", gender: "f" },
-  { key: "daniel", directoryId: "3e82a5d0-77b9-4c46-8f11-6b0c94ae2d44", displayName: "דניאל עמר", title: "תשתיות", username: "daniel.amar", gender: "m" },
-  { key: "tamar", directoryId: "d05c3971-1a4e-4b82-97d5-2f6738ec9a55", displayName: "תמר רוזן", title: "בדיקות", username: "tamar.rozen", gender: "f" },
-  { key: "yonatan", directoryId: "77b1e2c8-9f30-4a57-8d24-3c81b05fa766", displayName: "יונתן כץ", title: "שרת", username: "yonatan.katz", gender: "m" },
-  { key: "maya", directoryId: "a4390d16-5b72-4e93-b108-9d47c2e6f877", displayName: "מאיה גלעד", title: "עיצוב מוצר", username: "maya.gilad", gender: "f" },
-  { key: "ori", directoryId: "62fd8b40-3c19-4a75-9b86-0e5721da3c88", displayName: "אורי בן־חיים", title: "דאטה", username: "ori.benhaim", gender: "m" },
+  { key: "noa", _id: "5eed00000000000000000001", directoryId: "8a1f0c2e-4d3b-4a91-9f70-1c2d3e4f5a01", displayName: "נועה ברקת", title: "ראשת צוות", username: "noa.bareket", gender: "f" },
+  { key: "itay", _id: "5eed00000000000000000002", directoryId: "1c9d5b74-2e60-4f18-b3a2-7d51e0c48b12", displayName: "איתי שרון", title: "שרת", username: "itay.sharon", gender: "m" },
+  { key: "shira", _id: "5eed00000000000000000003", directoryId: "b6740f31-8c25-4d0a-9e63-5a29d7fb1c33", displayName: "שירה לוי", title: "לקוח", username: "shira.levi", gender: "f" },
+  { key: "daniel", _id: "5eed00000000000000000004", directoryId: "3e82a5d0-77b9-4c46-8f11-6b0c94ae2d44", displayName: "דניאל עמר", title: "תשתיות", username: "daniel.amar", gender: "m" },
+  { key: "tamar", _id: "5eed00000000000000000005", directoryId: "d05c3971-1a4e-4b82-97d5-2f6738ec9a55", displayName: "תמר רוזן", title: "בדיקות", username: "tamar.rozen", gender: "f" },
+  { key: "yonatan", _id: "5eed00000000000000000006", directoryId: "77b1e2c8-9f30-4a57-8d24-3c81b05fa766", displayName: "יונתן כץ", title: "שרת", username: "yonatan.katz", gender: "m" },
+  { key: "maya", _id: "5eed00000000000000000007", directoryId: "a4390d16-5b72-4e93-b108-9d47c2e6f877", displayName: "מאיה גלעד", title: "עיצוב מוצר", username: "maya.gilad", gender: "f" },
+  { key: "ori", _id: "5eed00000000000000000008", directoryId: "62fd8b40-3c19-4a75-9b86-0e5721da3c88", displayName: "אורי בן־חיים", title: "דאטה", username: "ori.benhaim", gender: "m" },
 ];
+
+/**
+ * The שוטף rotation, in turn order — the same eight, since it is the same team
+ * taking a different week. It is a *second row* in the `rotation` collection
+ * (`_id: "shotef"`), not a second collection: the shape is identical and the
+ * singleton reasoning in `src/lib/rotation.ts` is worth having exactly once.
+ */
+const SHOTEF_ORDER = ["noa", "itay", "shira", "daniel", "tamar", "yonatan", "maya", "ori"];
 
 /** The sample themes, mirroring `themes.ts`. `key` fields map to ROSTER_SEED. */
 const THEMES_SEED = [
@@ -186,7 +203,11 @@ try {
             updatedAt: now,
             lastLoginAt: now,
           },
-          $setOnInsert: { directoryId: member.directoryId, createdAt: now },
+          $setOnInsert: {
+            _id: new ObjectId(member._id),
+            directoryId: member.directoryId,
+            createdAt: now,
+          },
         },
         { upsert: true, returnDocument: "after" },
       );
@@ -223,31 +244,43 @@ try {
       );
     }
 
-    // The rotation singleton: the same eight, in seeded order, each with the
-    // grammatical gender the directory has no field for. Addressed only through
-    // the fixed `_id`, and a no-op once it already holds members — so re-running
-    // the seed never clobbers an edited rotation.
+    // The two rotation singletons: the ישב״צ refreshment rotation and the שוטף
+    // on-call rotation, each the same eight in seeded order and each carrying
+    // the grammatical gender the directory has no field for. Both are addressed
+    // only through their fixed `_id`, and each is a no-op once it already holds
+    // members — so re-running the seed never clobbers an edited rotation, and
+    // seeding one is independent of the other.
     const rotation = db.collection("rotation");
-    const existingRotation = await rotation.findOne({ _id: "current" });
-    if (existingRotation?.members?.length > 0) {
-      console.log(
-        `Skipping rotation — already ${existingRotation.members.length} in the rotation.`,
-      );
-    } else {
+    const genderByKey = Object.fromEntries(
+      ROSTER_SEED.map((member) => [member.key, member.gender]),
+    );
+
+    for (const [id, label, order] of [
+      ["current", "the meetup rotation", ROSTER_SEED.map((member) => member.key)],
+      ["shotef", "the שוטף rotation", SHOTEF_ORDER],
+    ]) {
+      const existing = await rotation.findOne({ _id: id });
+      if (existing?.members?.length > 0) {
+        console.log(
+          `Skipping ${label} — already ${existing.members.length} members.`,
+        );
+        continue;
+      }
+
       await rotation.findOneAndUpdate(
-        { _id: "current" },
+        { _id: id },
         {
           $set: {
-            members: ROSTER_SEED.map((member) => ({
-              userId: idByKey[member.key],
-              gender: member.gender,
+            members: order.map((key) => ({
+              userId: idByKey[key],
+              gender: genderByKey[key],
             })),
             updatedAt: now,
           },
         },
         { upsert: true },
       );
-      console.log(`Seeded the rotation with ${ROSTER_SEED.length} members.`);
+      console.log(`Seeded ${label} with ${order.length} members.`);
     }
   }
 } finally {

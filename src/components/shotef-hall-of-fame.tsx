@@ -38,7 +38,7 @@ import {
   type AwardIcon,
   type SolvedMonitor,
   type Solver,
-} from "@/lib/shotef";
+} from "@/lib/shotef-schema";
 import { conjugate, type Member } from "@/lib/team";
 import { cn } from "@/lib/utils";
 
@@ -69,7 +69,7 @@ export function HallOfFame({
   // reconcile here like the quote feed and the themes view keep.
   const [monitors, setMonitors] = useState(initial);
   const [adding, setAdding] = useState(false);
-  const board = solverBoard(monitors);
+  const board = solverBoard(monitors, roster);
 
   return (
     <div className="space-y-4">
@@ -112,7 +112,7 @@ export function HallOfFame({
                 >
                   {/* Stretched, so both plaques on a shelf stand the same
                       height and their bases actually rest on it. */}
-                  <Plaque monitor={monitor} />
+                  <Plaque monitor={monitor} roster={roster} />
                 </div>
                 <Shelf
                   seam={alone ? undefined : opens ? "end" : "start"}
@@ -300,8 +300,14 @@ function Shelf({ seam }: { seam?: "start" | "end" }) {
  * corners than the cards elsewhere in the app, on purpose — the formality is
  * the point, and it is what separates a citation from a list item.
  */
-function Plaque({ monitor }: { monitor: SolvedMonitor }) {
-  const solvers = solversOf(monitor);
+function Plaque({
+  monitor,
+  roster,
+}: {
+  monitor: SolvedMonitor;
+  roster: Member[];
+}) {
+  const solvers = solversOf(monitor, roster);
   const Icon = SEAL_ICONS[monitor.icon];
 
   return (

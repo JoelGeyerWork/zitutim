@@ -30,7 +30,7 @@ import {
   reviewInputSchema,
   shotefOn,
   type ShotefReview,
-} from "@/lib/shotef";
+} from "@/lib/shotef-schema";
 import { type Member } from "@/lib/team";
 import { cn } from "@/lib/utils";
 

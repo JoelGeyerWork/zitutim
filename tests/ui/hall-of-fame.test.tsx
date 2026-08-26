@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
 import { HallOfFame } from "@/components/shotef-hall-of-fame";
-import type { SolvedMonitor } from "@/lib/shotef";
+import type { SolvedMonitor } from "@/lib/shotef-schema";
 import type { Member } from "@/lib/team";
 
 vi.mock("sonner", () => ({

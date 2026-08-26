@@ -24,13 +24,15 @@ import {
   solverBoard,
   solversOf,
   type SolvedMonitor,
-} from "@/lib/shotef";
+} from "@/lib/shotef-schema";
 import { rotate, type Member } from "@/lib/team";
 
 /**
  * A stand-in roster, like `team.test.ts` keeps: these are tests of the pure
- * shift math, which takes whatever list the caller hands it. The app's own
- * roster is hard-coded for now, and is checked separately below.
+ * shift math, which takes whatever list the caller hands it. The real on-call
+ * roster is the `_id: "shotef"` rotation document — see `shotef-rotation.test.ts`
+ * — while `SHOTEF_ROSTER` is only what the two fixture lists still point at, and
+ * is checked as such at the bottom of this file.
  */
 const ROSTER: Member[] = [
   { id: "a", name: "אלף", role: "role", gender: "f" },
@@ -117,6 +119,13 @@ describe("buildShifts", () => {
     ]);
     expect(shifts[1].date).toBe(handoverOf(shifts[0].date));
   });
+
+  // The roster is a database document now, and an unseeded one has never had a
+  // member. `week % 0` is NaN, so the old version handed back the requested
+  // number of shifts with no member on any of them.
+  it("hands back nothing at all when nobody is on the rotation", () => {
+    expect(buildShifts(now, 5, [])).toEqual([]);
+  });
 });
 
 describe("averageRating", () => {
@@ -165,11 +174,14 @@ describe("byNewest", () => {
 
 describe("solverBoard", () => {
   it("counts plaques per person, most first", () => {
-    const board = solverBoard([
-      plaque({ id: "1", solvedByIds: ["ori"] }),
-      plaque({ id: "2", solvedByIds: ["maya"] }),
-      plaque({ id: "3", solvedByIds: ["ori"] }),
-    ]);
+    const board = solverBoard(
+      [
+        plaque({ id: "1", solvedByIds: ["ori"] }),
+        plaque({ id: "2", solvedByIds: ["maya"] }),
+        plaque({ id: "3", solvedByIds: ["ori"] }),
+      ],
+      SHOTEF_ROSTER,
+    );
 
     expect(board.map((row) => [row.member.id, row.solved])).toEqual([
       ["ori", 2],
@@ -178,10 +190,13 @@ describe("solverBoard", () => {
   });
 
   it("breaks a tie on the newest save", () => {
-    const board = solverBoard([
-      plaque({ id: "1", solvedByIds: ["ori"], solvedAt: "2026-01-01T00:00:00.000Z" }),
-      plaque({ id: "2", solvedByIds: ["maya"], solvedAt: "2026-05-01T00:00:00.000Z" }),
-    ]);
+    const board = solverBoard(
+      [
+        plaque({ id: "1", solvedByIds: ["ori"], solvedAt: "2026-01-01T00:00:00.000Z" }),
+        plaque({ id: "2", solvedByIds: ["maya"], solvedAt: "2026-05-01T00:00:00.000Z" }),
+      ],
+      SHOTEF_ROSTER,
+    );
 
     expect(board[0].member.id).toBe("maya");
     expect(board[0].lastSolved).toBe("2026-05-01T00:00:00.000Z");
@@ -190,10 +205,13 @@ describe("solverBoard", () => {
   // A monitor keeps its plaque either way — the board is about people, and
   // someone off the roster has no row to put on it.
   it("drops a solver who is no longer on the roster", () => {
-    const board = solverBoard([
-      plaque({ id: "1", solvedByIds: ["who"] }),
-      plaque({ id: "2", solvedByIds: ["ori", "who"] }),
-    ]);
+    const board = solverBoard(
+      [
+        plaque({ id: "1", solvedByIds: ["who"] }),
+        plaque({ id: "2", solvedByIds: ["ori", "who"] }),
+      ],
+      SHOTEF_ROSTER,
+    );
 
     expect(board.map((row) => [row.member.id, row.solved])).toEqual([
       ["ori", 1],
@@ -201,10 +219,13 @@ describe("solverBoard", () => {
   });
 
   it("credits every name on a certificate", () => {
-    const board = solverBoard([
-      plaque({ id: "1", solvedByIds: ["ori", "maya", "tamar"] }),
-      plaque({ id: "2", solvedByIds: ["maya"] }),
-    ]);
+    const board = solverBoard(
+      [
+        plaque({ id: "1", solvedByIds: ["ori", "maya", "tamar"] }),
+        plaque({ id: "2", solvedByIds: ["maya"] }),
+      ],
+      SHOTEF_ROSTER,
+    );
 
     // maya leads on count; the two on one plaque tie on count *and* on date,
     // and keep the order they are written on the certificate.
@@ -218,7 +239,10 @@ describe("solverBoard", () => {
   // Counting the names rather than the certificates would let one typo hand
   // somebody two plaques for one save.
   it("counts a certificate once for a name written on it twice", () => {
-    const board = solverBoard([plaque({ id: "1", solvedByIds: ["ori", "ori"] })]);
+    const board = solverBoard(
+      [plaque({ id: "1", solvedByIds: ["ori", "ori"] })],
+      SHOTEF_ROSTER,
+    );
 
     expect(board).toEqual([
       expect.objectContaining({ solved: 1 }),
@@ -471,11 +495,11 @@ describe("newReview", () => {
 describe("the hard-coded content", () => {
   it("points every review and monitor at someone on the roster", () => {
     for (const review of SHOTEF_REVIEWS) {
-      expect(memberById(review.memberId), review.id).toBeDefined();
+      expect(memberById(review.memberId, SHOTEF_ROSTER), review.id).toBeDefined();
     }
     for (const monitor of HALL_OF_FAME) {
       expect(monitor.solvedByIds.length, monitor.id).toBeGreaterThan(0);
-      expect(solversOf(monitor), monitor.id).toHaveLength(
+      expect(solversOf(monitor, SHOTEF_ROSTER), monitor.id).toHaveLength(
         monitor.solvedByIds.length,
       );
     }

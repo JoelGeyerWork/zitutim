@@ -20,7 +20,7 @@ import {
   currentShift,
   handoverOf,
   shiftIndex,
-} from "@/lib/shotef";
+} from "@/lib/shotef-schema";
 import { conjugate, daysUntil, rotate, type Member } from "@/lib/team";
 import { cn } from "@/lib/utils";
 

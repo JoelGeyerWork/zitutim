@@ -29,7 +29,7 @@ import {
   newMonitor,
   type AwardIcon,
   type SolvedMonitor,
-} from "@/lib/shotef";
+} from "@/lib/shotef-schema";
 import { type Member } from "@/lib/team";
 import { cn } from "@/lib/utils";
 
