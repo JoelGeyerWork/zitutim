@@ -378,4 +378,43 @@ describe("ThemesView", () => {
 
     expect(screen.queryByText("עגלה")).not.toBeInTheDocument();
   });
+
+  it("hides load-more while the typed term has not been applied yet", async () => {
+    const tomato = makeTheme({ id: "1", theme: "עגבניה" });
+    const round = makeTheme({
+      id: "2",
+      theme: "עגול",
+      date: "2026-08-11T00:00:00.000Z",
+    });
+
+    fetchMock.mockImplementation(async (input: RequestInfo) => {
+      const url = new URL(String(input), "http://localhost");
+      const q = url.searchParams.get("q") ?? "";
+      if (q === "עגול") {
+        // Keep the new search in flight so the leftover window is the one
+        // the review called out: old "עג" results still on screen, requestId
+        // already bumped, עוד נושאים would otherwise stamp the old next page.
+        return new Promise(() => {});
+      }
+      return jsonResponse(page([tomato, round], { total: 3, hasMore: true }));
+    });
+
+    const user = userEvent.setup();
+    render(view({ initial: page([]) }));
+
+    await user.type(screen.getByLabelText("חיפוש נושאים"), "עג");
+    expect(
+      await screen.findByText("3 תוצאות עבור ״עג״"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "עוד נושאים" }),
+    ).toBeInTheDocument();
+
+    await user.type(screen.getByLabelText("חיפוש נושאים"), "ול");
+
+    expect(screen.queryByRole("button", { name: "עוד נושאים" })).toBeNull();
+    // Old results stay put (the theme string is split by the "עג" highlight).
+    expect(screen.getByText("3 תוצאות עבור ״עג״")).toBeInTheDocument();
+    expect(screen.getAllByRole("article")).toHaveLength(2);
+  });
 });
