@@ -178,6 +178,18 @@ describe("GET /api/themes", () => {
     expect(page.hasMore).toBe(false);
   });
 
+  it("filters by the q parameter", async () => {
+    await post(body());
+    await post(body({ date: "2026-08-11", theme: "מקסיקו", snacks: ["נאצ׳וס"] }));
+
+    const response = await GET(new Request(`${BASE}?q=${encodeURI("מקסיקו")}`));
+    const page = await response.json();
+    expect(page.themes.map((theme: { theme: string }) => theme.theme)).toEqual([
+      "מקסיקו",
+    ]);
+    expect(page.total).toBe(1);
+  });
+
   it("serves a single theme, 404 on a missing or malformed id", async () => {
     const created = await (await post(body())).json();
 

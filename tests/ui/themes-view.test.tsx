@@ -1,4 +1,6 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { toast } from "sonner";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ThemesView } from "@/components/themes-view";
@@ -6,6 +8,7 @@ import {
   makeStanding,
   makeTheme,
   makeThemeMember,
+  jsonResponse,
   respondWith,
 } from "./factories";
 import type { Standing, Theme, ThemeMember, ThemePage } from "@/lib/theme-schema";
@@ -44,8 +47,15 @@ function view(props: {
   );
 }
 
+let fetchMock: ReturnType<typeof vi.fn>;
+
+function requestedUrls(): string[] {
+  return fetchMock.mock.calls.map(([url]) => String(url));
+}
+
 beforeEach(() => {
-  vi.stubGlobal("fetch", vi.fn().mockImplementation(respondWith(page([]))));
+  fetchMock = vi.fn().mockImplementation(respondWith(page([])));
+  vi.stubGlobal("fetch", fetchMock);
 });
 
 describe("ThemesView", () => {
@@ -109,6 +119,18 @@ describe("ThemesView", () => {
     expect(screen.getByText("הכול עגול")).toBeInTheDocument();
   });
 
+  it("lays the history out two cards to a row from sm", () => {
+    const themes = [
+      makeTheme({ id: "1", theme: "הכול עגול" }),
+      makeTheme({ id: "2", theme: "מקסיקו", date: "2026-08-11T00:00:00.000Z" }),
+    ];
+    const { container } = render(view({ initial: page(themes) }));
+    const grid = container.querySelector(".sm\\:grid-cols-2");
+
+    expect(grid).not.toBeNull();
+    expect(grid?.querySelectorAll("article")).toHaveLength(2);
+  });
+
   it("reports the total and solved count from the stats prop", () => {
     render(
       view({
@@ -118,5 +140,242 @@ describe("ThemesView", () => {
     );
     expect(screen.getByText(/10 נושאים/)).toBeInTheDocument();
     expect(screen.getByText(/8 נוחשו/)).toBeInTheDocument();
+  });
+
+  it("exposes a search bar above the history and no clear button yet", () => {
+    render(view({ initial: page([makeTheme({ id: "1" })]) }));
+    expect(screen.getByLabelText("חיפוש נושאים")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "ניקוי החיפוש" })).toBeNull();
+  });
+
+  it("sends the typed term as ?q=", async () => {
+    const round = makeTheme({ id: "1", theme: "הכול עגול" });
+    const mexico = makeTheme({
+      id: "2",
+      theme: "מקסיקו",
+      date: "2026-08-11T00:00:00.000Z",
+    });
+    const user = userEvent.setup();
+    render(view({ initial: page([round, mexico]) }));
+
+    fetchMock.mockImplementation(respondWith(page([mexico])));
+    await user.type(screen.getByLabelText("חיפוש נושאים"), "מקסיקו");
+
+    await waitFor(() =>
+      expect(requestedUrls().at(-1)).toContain(
+        `q=${encodeURIComponent("מקסיקו")}`,
+      ),
+    );
+    expect(await screen.findByText("מקסיקו")).toBeInTheDocument();
+    expect(screen.queryByText("הכול עגול")).not.toBeInTheDocument();
+  });
+
+  it("shows an empty state naming the term", async () => {
+    const user = userEvent.setup();
+    render(view({ initial: page([makeTheme({ id: "1" })]) }));
+
+    fetchMock.mockImplementation(respondWith(page([])));
+    await user.type(screen.getByLabelText("חיפוש נושאים"), "בלתי אפשרי");
+
+    expect(
+      await screen.findByText(/אין תוצאות ל״בלתי אפשרי״/),
+    ).toBeInTheDocument();
+  });
+
+  it("clears the term and restores the initial list without fetching", async () => {
+    const round = makeTheme({ id: "1", theme: "הכול עגול" });
+    const mexico = makeTheme({
+      id: "2",
+      theme: "מקסיקו",
+      date: "2026-08-11T00:00:00.000Z",
+    });
+    const user = userEvent.setup();
+    render(view({ initial: page([round, mexico]) }));
+
+    fetchMock.mockImplementation(respondWith(page([mexico])));
+    await user.type(screen.getByLabelText("חיפוש נושאים"), "מקסיקו");
+    expect(await screen.findByText(/תוצאה אחת עבור/)).toBeInTheDocument();
+
+    fetchMock.mockClear();
+    await user.click(screen.getByRole("button", { name: "ניקוי החיפוש" }));
+
+    expect(screen.getByLabelText("חיפוש נושאים")).toHaveValue("");
+    expect(screen.getByText("הכול עגול")).toBeInTheDocument();
+    expect(screen.getByText("מקסיקו")).toBeInTheDocument();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("debounces typing into a single request", async () => {
+    const user = userEvent.setup();
+    render(view({ initial: page([makeTheme({ id: "1" })]) }));
+    fetchMock.mockClear();
+
+    await user.type(screen.getByLabelText("חיפוש נושאים"), "מקסיקו");
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("highlights the matched term in the results", async () => {
+    const mexico = makeTheme({ id: "2", theme: "מקסיקו" });
+    fetchMock.mockImplementation(respondWith(page([mexico])));
+    const user = userEvent.setup();
+    render(view({ initial: page([makeTheme({ id: "1" }), mexico]) }));
+
+    await user.type(screen.getByLabelText("חיפוש נושאים"), "מקסיקו");
+    await waitFor(() => {
+      const mark = document.querySelector("mark");
+      expect(mark?.textContent).toBe("מקסיקו");
+    });
+
+    // The title is `flex … gap-2`. Highlighted must be one flex item, or the
+    // gap lands between the empty split pieces around the mark.
+    const title = document.querySelector("article p.text-lg");
+    expect(title?.childElementCount).toBe(2);
+    expect(title?.querySelector(":scope > span")?.querySelector("mark")?.textContent).toBe(
+      "מקסיקו",
+    );
+  });
+
+  it("leaves the leaderboard in place while the history filters", async () => {
+    const standings = [
+      makeStanding({ id: "m2", name: "אורי בן־חיים", guesses: 5 }),
+    ];
+    const mexico = makeTheme({ id: "2", theme: "מקסיקו" });
+    fetchMock.mockImplementation(respondWith(page([mexico])));
+    const user = userEvent.setup();
+    render(
+      view({
+        initial: page([makeTheme({ id: "1" }), mexico]),
+        standings,
+      }),
+    );
+
+    await user.type(screen.getByLabelText("חיפוש נושאים"), "מקסיקו");
+    expect(
+      await screen.findByText("תוצאה אחת עבור ״מקסיקו״"),
+    ).toBeInTheDocument();
+    expect(screen.getByText("טבלת המנחשים")).toBeInTheDocument();
+    expect(screen.getByText("אורי בן־חיים")).toBeInTheDocument();
+  });
+
+  it("loads the next unfiltered page, skipping what is already shown", async () => {
+    const first = makeTheme({ id: "1", theme: "הכול עגול" });
+    const second = makeTheme({
+      id: "2",
+      theme: "מקסיקו",
+      date: "2026-08-11T00:00:00.000Z",
+    });
+    fetchMock.mockImplementation(respondWith(page([second], { total: 2 })));
+    const user = userEvent.setup();
+    render(view({ initial: page([first], { total: 2, hasMore: true }) }));
+
+    await user.click(screen.getByRole("button", { name: "עוד נושאים" }));
+
+    expect(await screen.findByText("מקסיקו")).toBeInTheDocument();
+    expect(requestedUrls()[0]).toContain("skip=1");
+    expect(requestedUrls()[0]).not.toContain("q=");
+  });
+
+  it("keeps q= when loading more search results, without duplicating", async () => {
+    const first = makeTheme({ id: "1", theme: "עגול אחד" });
+    const second = makeTheme({
+      id: "2",
+      theme: "עגול שניים",
+      date: "2026-08-11T00:00:00.000Z",
+    });
+    const user = userEvent.setup();
+    render(view({ initial: page([first, second]) }));
+
+    fetchMock.mockImplementation(
+      respondWith(page([first], { total: 2, hasMore: true })),
+    );
+    await user.type(screen.getByLabelText("חיפוש נושאים"), "עגול");
+    expect(
+      await screen.findByText("2 תוצאות עבור ״עגול״"),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("עגול שניים")).not.toBeInTheDocument();
+
+    // Server repeats the first hit alongside the new one; it must appear once.
+    fetchMock.mockImplementation(
+      respondWith(page([first, second], { total: 2, hasMore: false })),
+    );
+    await user.click(screen.getByRole("button", { name: "עוד נושאים" }));
+
+    await waitFor(() =>
+      expect(requestedUrls().at(-1)).toContain("skip=1"),
+    );
+    expect(screen.getAllByRole("article")).toHaveLength(2);
+    expect(requestedUrls().at(-1)).toContain(`q=${encodeURIComponent("עגול")}`);
+  });
+
+  it("reports a failed search instead of hanging on the previous list", async () => {
+    const user = userEvent.setup();
+    render(
+      view({ initial: page([makeTheme({ id: "1", theme: "הכול עגול" })]) }),
+    );
+
+    fetchMock.mockRejectedValue(new Error("offline"));
+    await user.type(screen.getByLabelText("חיפוש נושאים"), "מקסיקו");
+
+    expect(
+      await screen.findByText(/אין תוצאות ל״מקסיקו״/),
+    ).toBeInTheDocument();
+    expect(toast.error).toHaveBeenCalled();
+    expect(screen.queryByText("הכול עגול")).not.toBeInTheDocument();
+  });
+
+  it("does not merge a load-more page into a newer search", async () => {
+    const tomato = makeTheme({ id: "1", theme: "עגבניה" });
+    const round = makeTheme({
+      id: "2",
+      theme: "עגול",
+      date: "2026-08-11T00:00:00.000Z",
+    });
+    const extra = makeTheme({
+      id: "3",
+      theme: "עגלה",
+      date: "2026-08-04T00:00:00.000Z",
+    });
+
+    let releaseLoadMore: () => void = () => {};
+    const loadMoreGate = new Promise<void>((resolve) => {
+      releaseLoadMore = resolve;
+    });
+
+    fetchMock.mockImplementation(async (input: RequestInfo) => {
+      const url = new URL(String(input), "http://localhost");
+      const q = url.searchParams.get("q") ?? "";
+      if (url.searchParams.has("skip")) {
+        await loadMoreGate;
+        return jsonResponse(page([extra], { total: 3 }));
+      }
+      if (q === "עגול") return jsonResponse(page([round]));
+      return jsonResponse(page([tomato, round], { total: 3, hasMore: true }));
+    });
+
+    const user = userEvent.setup();
+    render(view({ initial: page([]) }));
+
+    await user.type(screen.getByLabelText("חיפוש נושאים"), "עג");
+    expect(
+      await screen.findByText("3 תוצאות עבור ״עג״"),
+    ).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "עוד נושאים" }));
+    await waitFor(() =>
+      expect(requestedUrls().some((url) => url.includes("skip="))).toBe(true),
+    );
+
+    await user.type(screen.getByLabelText("חיפוש נושאים"), "ול");
+    expect(
+      await screen.findByText("תוצאה אחת עבור ״עגול״"),
+    ).toBeInTheDocument();
+
+    releaseLoadMore();
+    // Let the stale page land (and be dropped) before asserting.
+    await waitFor(() => expect(screen.getAllByRole("article")).toHaveLength(1));
+
+    expect(screen.queryByText("עגלה")).not.toBeInTheDocument();
   });
 });
