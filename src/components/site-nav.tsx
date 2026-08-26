@@ -92,7 +92,7 @@ export function SiteNav() {
                     href={href}
                     aria-current={active ? "page" : undefined}
                     className={cn(
-                      "flex shrink-0 items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition-colors",
+                      "flex shrink-0 items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition-colors sm:gap-1.5 sm:px-2.5",
                       active
                         ? "bg-accent text-accent-foreground"
                         : "text-muted-foreground hover:bg-muted hover:text-foreground",

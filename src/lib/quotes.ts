@@ -12,7 +12,10 @@ import type { QuoteComment } from "@/lib/engagement-schema";
 import { getDb } from "@/lib/mongodb";
 import {
   PAGE_SIZE,
+  QUOTE_GAME_LENGTH,
+  QUOTE_GAME_OPTION_COUNT,
   type Quote,
+  type QuoteGameRound,
   type QuotePage,
   type QuoteValues,
   type SortOption,
@@ -136,6 +139,15 @@ const sortSpecs: Record<SortOption, Record<string, 1 | -1>> = {
   oldest: { saidAt: 1, createdAt: 1, _id: 1 },
   author: { author: 1, saidAt: -1, _id: -1 },
 };
+
+function shuffled<T>(values: readonly T[]): T[] {
+  const result = [...values];
+  for (let index = result.length - 1; index > 0; index--) {
+    const swapWith = Math.floor(Math.random() * (index + 1));
+    [result[index], result[swapWith]] = [result[swapWith], result[index]];
+  }
+  return result;
+}
 
 /**
  * Resolve counts, the current viewer's like and the latest-two preview in the
@@ -314,6 +326,57 @@ export async function getQuote(
     ])
     .toArray();
   return doc ? serialize(doc) : null;
+}
+
+/**
+ * Build the questions on the server so the first random order is also the one
+ * hydrated by the browser. The answer is sent to the client because this is a
+ * casual team game, not a security boundary or a persisted competition.
+ */
+export async function getQuoteGame(
+  roundCount = QUOTE_GAME_LENGTH,
+): Promise<QuoteGameRound[]> {
+  const collection = await quotes();
+  const authors = (await collection.distinct("author")).filter(
+    (author) => author.trim().length > 0,
+  );
+
+  if (authors.length < 2) return [];
+
+  const safeRoundCount = Math.min(
+    Math.max(1, Math.floor(roundCount) || QUOTE_GAME_LENGTH),
+    50,
+  );
+  const sampled = await collection
+    .aggregate<
+      Pick<QuoteDoc, "_id" | "text" | "author" | "saidAt" | "context">
+    >([
+      { $sample: { size: safeRoundCount } },
+      {
+        $project: {
+          text: 1,
+          author: 1,
+          saidAt: 1,
+          context: 1,
+        },
+      },
+    ])
+    .toArray();
+
+  return sampled.map((quote) => {
+    const distractors = shuffled(
+      authors.filter((author) => author !== quote.author),
+    ).slice(0, QUOTE_GAME_OPTION_COUNT - 1);
+
+    return {
+      id: quote._id.toHexString(),
+      text: quote.text,
+      saidAt: quote.saidAt.toISOString(),
+      context: quote.context,
+      correctAuthor: quote.author,
+      options: shuffled([quote.author, ...distractors]),
+    };
+  });
 }
 
 /**

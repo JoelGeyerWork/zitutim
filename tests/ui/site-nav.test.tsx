@@ -47,6 +47,21 @@ describe("SiteNav", () => {
     ).toHaveLength(1);
   });
 
+  it("shows the quote game as its own current tab", () => {
+    usePathname.mockReturnValue("/quotes/game");
+    render(<SiteNav />);
+
+    const tabs = within(screen.getByRole("navigation", { name: "ציטוטים" }));
+    expect(tabs.getByRole("link", { name: "מי אמר?" })).toHaveAttribute(
+      "href",
+      "/quotes/game",
+    );
+    expect(tabs.getByRole("link", { name: "מי אמר?" })).toHaveAttribute(
+      "aria-current",
+      "page",
+    );
+  });
+
   it("leaves the hub without a tab bar", () => {
     usePathname.mockReturnValue("/");
     render(<SiteNav />);

@@ -41,6 +41,18 @@ export interface QuotePage {
 }
 
 export const PAGE_SIZE = 15;
+export const QUOTE_GAME_LENGTH = 10;
+export const QUOTE_GAME_OPTION_COUNT = 4;
+
+/** One client-safe question in the "who said it?" game. */
+export interface QuoteGameRound {
+  id: string;
+  text: string;
+  saidAt: string;
+  context: string | null;
+  correctAuthor: string;
+  options: string[];
+}
 
 export const SORT_OPTIONS = ["added", "recent", "oldest", "author"] as const;
 export type SortOption = (typeof SORT_OPTIONS)[number];
