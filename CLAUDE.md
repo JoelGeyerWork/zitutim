@@ -182,6 +182,30 @@ lands in a stored name, and removing the **last** member is refused (409) — a
 rotation with nobody on it has no week to render. **Someone in both rotations is
 one `users` row**, since both point at the same `upsertRosterUser` identity.
 
+**One editor serves both rotations.** `RotationEditor` takes a required
+`copy: RotationCopy` — the REST base plus the nouns — and `MEETUP_COPY` /
+`SHOTEF_COPY` sit side by side in that file so a field added to one cannot be
+silently forgotten on the other. The three prepositional forms
+(`inRotation`/`toRotation`/`fromRotation`) are separate fields rather than
+derived from one stem because Hebrew folds the preposition into the definite
+article, and the two nouns disagree on grammatical gender (`שבו` vs `שבה`). The
+`copy` prop is deliberately **required, not defaulted**: which API a component
+POSTs to should not be implicit. `slots` is the structural
+`Turn = { date, weeksAway }`, which both `MeetupSlot` and `ShotefShift` satisfy.
+
+Two seams between the two, worth knowing before you assume they match:
+
+- **The shotef pencil is gated on `useSession()`; the meetup pencil is not.**
+  The shotef side follows this file's stated convention — hide a control whose
+  API answers `401` — and its empty state offers a `/login?next=%2Fshotef` link
+  so a signed-out visitor to a fresh database still has a way in. The meetup
+  pencil renders for everyone and lets the `401` bounce them. Making them agree
+  is one `useSession()` in `meetup-roulette.tsx`, not a change on the shotef side.
+- **`ShotefRoulette` reconciles a fresh `initialRoster` during render**, and
+  resets `winner`/`rotation`/`spinning` when it does — those index into a wheel
+  that just changed shape. `react-hooks/set-state-in-effect` is an error in this
+  config, so this is a render-time `seed` comparison, never an effect.
+
 The split follows quotes/themes exactly: **`src/lib/shotef-schema.ts` is
 client-safe** (every type, every Zod schema, every pure date/maths helper, every
 label map) and `src/lib/shotef.ts` is the `server-only` Mongo layer that
@@ -227,7 +251,8 @@ The wheel itself is shared: `RotationWheel` (was `MeetupWheel`) draws both
 rotations and knows about neither — the icon at its hub is the only thing that
 says which one you are looking at.
 
-`scripts/seed.mjs --demo` seeds both rotations from one `ROSTER_SEED`, whose
+`scripts/seed.mjs` creates the `shotef_reviews` and `shotef_monitors` indexes
+unconditionally, and `--demo` seeds both rotations from one `ROSTER_SEED`, whose
 rows now carry a **fixed `_id`** applied through `$setOnInsert`: a fresh database
 always gives the same person the same `users._id`, which is what lets later demo
 content be written against a known id. A database that already holds them keeps

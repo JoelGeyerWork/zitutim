@@ -5,7 +5,7 @@ import { CoffeeIcon, DicesIcon, MapPinIcon, PencilIcon } from "lucide-react";
 
 import { RotationWheel, sliceAngle } from "@/components/rotation-wheel";
 import { PersonAvatar } from "@/components/person-avatar";
-import { RotationEditor } from "@/components/rotation-editor";
+import { MEETUP_COPY, RotationEditor } from "@/components/rotation-editor";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { formatMeetupDate } from "@/lib/format";
@@ -256,6 +256,7 @@ export function MeetupRoulette({
           roster={roster}
           slots={buildRotation(now, queue.length, queue)}
           offset={offset}
+          copy={MEETUP_COPY}
         />
       ) : null}
     </div>

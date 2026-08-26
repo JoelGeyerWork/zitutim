@@ -2,7 +2,7 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { RotationEditor } from "@/components/rotation-editor";
+import { MEETUP_COPY, RotationEditor } from "@/components/rotation-editor";
 import { type RosterMember } from "@/lib/roster";
 import { type MeetupSlot } from "@/lib/team";
 import { jsonResponse } from "./factories";
@@ -45,6 +45,7 @@ function editor(queue: RosterMember[], offset = 0) {
       roster={queue}
       slots={slotsFor(queue)}
       offset={offset}
+      copy={MEETUP_COPY}
     />
   );
 }

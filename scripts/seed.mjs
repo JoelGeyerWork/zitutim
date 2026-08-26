@@ -104,6 +104,40 @@ const THEMES_SEED = [
   { date: "2026-06-09", broughtBy: "maya", theme: "הכול מהמכולת שלמטה", snacks: ["קרקרים", "גבינה צהובה", "זיתים", "לימונדה"], guessedBy: null },
 ];
 
+/**
+ * The weekly summaries, mirroring `shotef-schema.ts`. `member` is a ROSTER_SEED
+ * key, resolved through `idByKey` — never a hardcoded id, since the seeded `_id`
+ * is `$setOnInsert` and an existing database keeps the one it minted. Every
+ * `weekStart` is a Sunday: a shift is a whole Sunday-to-Saturday week.
+ */
+const SHOTEF_REVIEWS_SEED = [
+  { weekStart: "2026-08-16", member: "daniel", rating: 5, headline: "שבוע שקט שנגמר בשדרוג", body: "שתי תקלות קטנות, שתיהן נסגרו באותו יום. בין לבין דניאל ניקה את התראות הרעש שהצטברו בחודשים האחרונים — מאז יש חצי מהפינגים ואף אחד לא מתגעגע." },
+  { weekStart: "2026-08-09", member: "tamar", rating: 4, headline: "גל תקלות מהשחרור של יום שני", body: "השחרור הביא איתו גל פניות ביומיים. תמר תיעדה כל אחת, זיהתה שכולן אותו באג ופתחה תיקון אחד במקום להתמודד עם כל אחת לחוד. ירד כוכב רק כי ההודעה לצוות יצאה באיחור." },
+  { weekStart: "2026-08-02", member: "yonatan", rating: 3, headline: "שבוע בינוני, בעיקר בגלל התור", body: "הכול טופל בסוף — אבל חלק מהפניות חיכו יומיים כי לא היה ברור למי הן שייכות. הפתק שנשאר אחריו: להגדיר בעלות לפני שהתור מתמלא, לא אחרי." },
+  { weekStart: "2026-07-26", member: "shira", rating: 5, headline: "התקלה של הלקוח הגדול נסגרה תוך שעתיים", body: "פנייה דחופה נכנסה ברבע לחמש ביום רביעי. שירה שחזרה, מצאה, תיקנה ועדכנה את הלקוח לפני שהוא הספיק לשאול שוב. שאר השבוע היה שקט." },
+  { weekStart: "2026-07-19", member: "ori", rating: 2, headline: "שבוע קשה, ולא באשמת אף אחד", body: "שבוע עמוס, שתי התראות לילה ותקלת רשת שלא הייתה שלנו בכלל. אורי החזיק את הראש מעל המים, אבל מהשבוע הזה יצאנו עם מסקנה אחת: שוטף אחד לא מספיק בשבוע שחרור גדול." },
+  { weekStart: "2026-07-12", member: "maya", rating: 4, headline: "רוב הפניות בכלל לא היו באגים", body: "כמעט כל מה שנכנס היה שאלות שימוש. מאיה ענתה, ואז כתבה מהן דף עזרה קצר שמאז חוסך לנו את אותן שאלות בדיוק." },
+];
+
+/**
+ * The hall of fame, mirroring `shotef-schema.ts`. `solvedBy` holds ROSTER_SEED
+ * keys — a certificate names everyone who was on the call, which is why this is
+ * an array and not a single name.
+ */
+const MONITORS_SEED = [
+  { icon: "memory", monitor: "db-prod-01: RAM above 95%", solvedBy: ["ori", "daniel"], firstFiredAt: "2026-06-09", solvedAt: "2026-08-18", minutesToFix: 180, solution: "לא דליפה — שאילתת דוח חודשית רצה בלי אינדקס ומשכה את כל הטבלה לזיכרון. הוספנו אינדקס מורכב על tenant ועל created_at, וזמן הריצה ירד מארבע דקות לשתי שניות. הזיכרון חזר ל-40% ולא עלה מאז." },
+  { icon: "backup", monitor: "backup: last successful backup older than 48h", solvedBy: ["daniel"], firstFiredAt: "2026-08-08", solvedAt: "2026-08-11", minutesToFix: 300, solution: "הגיבוי נכשל בשקט שלושה לילות אחרי ששינינו שם של דיסק — הסקריפט המשיך לדווח הצלחה כי בדק רק שהוא רץ, לא שהוא כתב. תיקנו את הנתיב, החלפנו את הבדיקה בקוד היציאה של המשימה, וגם שחזרנו גיבוי אחד כדי לוודא שיש מה לשחזר." },
+  { icon: "loop", monitor: "ingest-queue: consumer lag > 10k", solvedBy: ["yonatan", "itay"], firstFiredAt: "2026-08-05", solvedAt: "2026-08-06", minutesToFix: 2160, solution: "צרכן אחד נתקע על הודעה פגומה וניסה אותה שוב ושוב בלולאה אינסופית. הוספנו תור מכתבים־מתים אחרי שלושה ניסיונות, והפעם גם התראה על התור הזה — כדי שהודעה פגומה תהיה שקופה במקום להיות שקטה." },
+  { icon: "certificate", monitor: "gateway: TLS certificate expires in 3 days", solvedBy: ["daniel"], firstFiredAt: "2026-07-26", solvedAt: "2026-07-29", minutesToFix: 60, solution: "חידוש ידני שאף אחד לא נזכר בו. חידשנו, ואז החלפנו את הזיכרון האנושי בקרון שמחדש 30 יום מראש ומדווח לערוץ. ההתראה נשארה — היא עכשיו רשת ביטחון ולא לוח שנה." },
+  { icon: "fire", monitor: "api: 5xx rate above 2% for 5m", solvedBy: ["itay", "yonatan"], firstFiredAt: "2026-07-21", solvedAt: "2026-07-21", minutesToFix: 11, solution: "שחרור שהוסיף שדה חובה לבקשה בלי לעדכן את האפליקציה בנייד. החזרנו לאחור תוך אחת־עשרה דקות, ואז שחררנו מחדש כששני הצדדים מסונכרנים. מאז שדה חובה חדש עובר קודם דרך שלב שבו הוא עדיין אופציונלי." },
+  { icon: "latency", monitor: "web: p95 latency above 2s", solvedBy: ["itay", "maya"], firstFiredAt: "2026-05-20", solvedAt: "2026-07-06", minutesToFix: 240, solution: "וידג׳ט חדש בדף הבית שאל את מסד הנתונים פעם אחת לכל שורה שהוא הציג — שמונים שאילתות בטעינה אחת. איחדנו אותן לשאילתה אחת, וה-p95 חזר מ-2.4 שניות ל-400 מילישניות." },
+  { icon: "disk", monitor: "app-03: disk usage above 90%", solvedBy: ["tamar"], firstFiredAt: "2026-06-16", solvedAt: "2026-06-30", minutesToFix: 120, solution: "לוגים בלי סבב. פינינו, הגדרנו logrotate יומי עם שמירה לשבועיים, והורדנו את רמת הלוג של הבריאות מ-debug ל-info. תפוסת הדיסק יציבה על 55%." },
+  { icon: "pipeline", monitor: "etl: nightly export failed", solvedBy: ["ori"], firstFiredAt: "2026-06-13", solvedAt: "2026-06-22", minutesToFix: 90, solution: "המקור הוסיף עמודה, והטוען שלנו נפל על סכימה שלא הכיר. עכשיו הוא סופג עמודות שאינן מוכרות לו במקום ליפול, ומדווח עליהן בבוקר — טעינה שנכשלת היא בעיה, טעינה שמפתיעה היא רק ידיעה." },
+  { icon: "network", monitor: "auth: LDAP bind timeouts", solvedBy: ["noa", "daniel"], firstFiredAt: "2026-06-10", solvedAt: "2026-06-11", minutesToFix: 240, solution: "לא אנחנו — בקר תחום אחד מתוך שלושה יצא מהאוויר, והקליינט המשיך לנסות דווקא אותו. פנינו לתשתיות, ובינתיים קיצרנו את הטיים־אאוט וסידרנו מעבר לבקר הבא ברשימה. הכניסה נשארה עובדת גם כשבקר נופל." },
+  { icon: "cache", monitor: "cache: hit rate below 60%", solvedBy: ["maya"], firstFiredAt: "2026-01-12", solvedAt: "2026-05-24", minutesToFix: 1440, solution: "כל המפתחות פגו באותה שנייה בדיוק, ואז כולם רצו יחד למסד הנתונים. פיזרנו את תוקף המפתחות באקראי בעד עשר אחוז, וההצלחה חזרה ל-94%." },
+  { icon: "index", monitor: "search: index rebuild stuck for 6h", solvedBy: ["ori", "tamar"], firstFiredAt: "2025-03-02", solvedAt: "2026-05-10", minutesToFix: 150, solution: "בנייה מחדש שרצה על אותו מסמך פגום עד אינסוף. דילגנו עליו, המשכנו את הבנייה, ואז הוספנו לה יומן התקדמות — מאז בנייה תקועה נראית תקועה תוך דקות במקום תוך חצי יום." },
+];
+
 const client = new MongoClient(uri);
 
 try {
@@ -152,8 +186,23 @@ try {
     { key: { authorId: 1 } },
   ]);
 
+  await db.collection("shotef_reviews").createIndexes([
+    // One week, one summary. The 409 is caught off this index rather than off a
+    // findOne first: a pre-check races two people writing up the same week.
+    { key: { weekStart: -1 }, unique: true },
+  ]);
+
+  await db.collection("shotef_monitors").createIndexes([
+    // The wall reads newest-save-first, and ends in _id for a total order.
+    { key: { solvedAt: -1, _id: -1 } },
+    // The podium groups plaques by this.
+    { key: { solvedByIds: 1 } },
+    // "the quickest save on the wall" is one indexed scan, not a collection one.
+    { key: { minutesToFix: 1 } },
+  ]);
+
   console.log(
-    `Indexes ready on ${dbName}: quotes, users, login_attempts, themes, quote_likes, quote_comments`,
+    `Indexes ready on ${dbName}: quotes, users, login_attempts, themes, quote_likes, quote_comments, shotef_reviews, shotef_monitors`,
   );
 
   if (process.argv.includes("--demo")) {
@@ -281,6 +330,55 @@ try {
         { upsert: true },
       );
       console.log(`Seeded ${label} with ${order.length} members.`);
+    }
+
+    // The שוטף section's own two collections. Both read `idByKey` rather than
+    // the fixed `_id`s in ROSTER_SEED: those are `$setOnInsert`, so a database
+    // that already held these people kept the ids it minted.
+    const existingReviews = await db.collection("shotef_reviews").countDocuments();
+    if (existingReviews > 0) {
+      console.log(
+        `Skipping demo shotef reviews — ${existingReviews} already present.`,
+      );
+    } else {
+      await db.collection("shotef_reviews").insertMany(
+        SHOTEF_REVIEWS_SEED.map((review) => ({
+          // Parsed as UTC midnight, which is how the app stores and renders it.
+          weekStart: new Date(review.weekStart),
+          memberId: idByKey[review.member],
+          rating: review.rating,
+          headline: review.headline,
+          body: review.body,
+          // Seeded, so nobody typed them in — same shape as a pre-auth quote.
+          addedBy: null,
+          addedById: null,
+          createdAt: now,
+        })),
+      );
+      console.log(`Seeded ${SHOTEF_REVIEWS_SEED.length} demo shotef reviews.`);
+    }
+
+    const existingMonitors = await db.collection("shotef_monitors").countDocuments();
+    if (existingMonitors > 0) {
+      console.log(
+        `Skipping the hall of fame — ${existingMonitors} certificates already present.`,
+      );
+    } else {
+      await db.collection("shotef_monitors").insertMany(
+        MONITORS_SEED.map((monitor, index) => ({
+          icon: monitor.icon,
+          monitor: monitor.monitor,
+          solution: monitor.solution,
+          solvedByIds: monitor.solvedBy.map((key) => idByKey[key]),
+          firstFiredAt: new Date(monitor.firstFiredAt),
+          solvedAt: new Date(monitor.solvedAt),
+          minutesToFix: monitor.minutesToFix,
+          addedBy: null,
+          addedById: null,
+          createdAt: new Date(now.getTime() + index * 1000),
+        })),
+      );
+      console.log(`Seeded ${MONITORS_SEED.length} hall-of-fame certificates.`);
     }
   }
 } finally {

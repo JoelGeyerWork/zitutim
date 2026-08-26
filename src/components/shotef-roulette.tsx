@@ -1,27 +1,33 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import {
   DicesIcon,
   ClockIcon,
   HashIcon,
   LifeBuoyIcon,
+  PencilIcon,
   SirenIcon,
 } from "lucide-react";
 
 import { PersonAvatar } from "@/components/person-avatar";
 import { RotationWheel, sliceAngle } from "@/components/rotation-wheel";
+import { RotationEditor, SHOTEF_COPY } from "@/components/rotation-editor";
+import { useSession } from "@/components/session-provider";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { formatDayMonth, formatWeekRange } from "@/lib/format";
+import { type RosterMember } from "@/lib/roster";
 import {
   SHOTEF,
   buildShifts,
   currentShift,
   handoverOf,
   shiftIndex,
+  type ShotefShift,
 } from "@/lib/shotef-schema";
-import { conjugate, daysUntil, rotate, type Member } from "@/lib/team";
+import { conjugate, daysUntil, rotate } from "@/lib/team";
 import { cn } from "@/lib/utils";
 
 const SPIN_MS = 3800;
@@ -29,25 +35,49 @@ const SPIN_MS = 3800;
 const SPIN_TURNS = 5;
 
 export function ShotefRoulette({
-  roster,
+  initialRoster,
   nowIso,
 }: {
-  /** The on-call order. Hard-coded for now; a prop so the page owns the source. */
-  roster: Member[];
+  /** The on-call order, in stored order, resolved off the server page. */
+  initialRoster: RosterMember[];
   /** "Now" is fixed by the server so the first client render matches it. */
   nowIso: string;
 }) {
   const now = new Date(nowIso);
 
+  // Display state only: the routes behind the editor answer 401 on their own,
+  // and that is the enforcement. Hiding the pencil just spares a signed-out
+  // reader a dialog every control in which bounces them to the login page.
+  const user = useSession();
+
   const [winner, setWinner] = useState(0);
   const [rotation, setRotation] = useState(0);
   const [duration, setDuration] = useState(0);
   const [spinning, setSpinning] = useState(false);
+  const [editing, setEditing] = useState(false);
 
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => () => clearTimeout(timer.current ?? undefined), []);
 
+  // The editor mutates through the API and then `router.refresh()`, which
+  // re-runs the server page and hands down a fresh `initialRoster`. Reconciled
+  // during render (not an effect — `react-hooks/set-state-in-effect` is an
+  // error here): `winner` and `rotation` are positions on a wheel that just
+  // changed shape, so they must not outlive the list they index into.
+  const [seed, setSeed] = useState(initialRoster);
+  if (seed !== initialRoster) {
+    setSeed(initialRoster);
+    setWinner(0);
+    setRotation(0);
+    setDuration(0);
+    setSpinning(false);
+  }
+
+  const roster = initialRoster;
+
   // The queue as the anchored schedule has it, whoever is on duty now first.
+  // The editor takes the stable `roster` prop and derives this itself, so its
+  // optimistic order re-seeds only when the server hands down a new list.
   const offset = shiftIndex(currentShift(now), roster.length);
   const queue = rotate(roster, offset);
 
@@ -75,10 +105,51 @@ export function ShotefRoulette({
     }, spinMs);
   }
 
-  // One full lap, so everyone can see when their own week comes round.
-  const shifts = buildShifts(now, queue.length, rotate(queue, winner));
+  // One full lap, so everyone can see when their own week comes round. Empty
+  // on an unseeded database, which is a legitimate state and not a fault — a
+  // rotation nobody has been added to yet has no week to draw.
+  const shifts =
+    queue.length > 0 ? buildShifts(now, queue.length, rotate(queue, winner)) : [];
   const thisWeek = shifts[0];
   const upcoming = shifts.slice(1);
+
+  if (!thisWeek) {
+    // Nobody in the rotation is a state the page has to render, not an error:
+    // a fresh database has never had a member, and the editor is the only way
+    // it ever gets one.
+    return (
+      <>
+        <div className="bg-card rounded-2xl border p-8 text-center shadow-sm">
+          <LifeBuoyIcon className="text-muted-foreground mx-auto size-8" />
+          <p className="text-muted-foreground mt-3 text-sm text-balance">
+            עדיין אין אף אחד בתורנות.
+          </p>
+          {user ? (
+            <Button className="mt-4" onClick={() => setEditing(true)}>
+              הוספת אנשים לתורנות
+            </Button>
+          ) : (
+            // Signed out there is nothing to open — every control in the dialog
+            // would be refused — so the way in is the login page itself.
+            <Link
+              href="/login?next=%2Fshotef"
+              className={cn(buttonVariants(), "mt-4")}
+            >
+              כניסה כדי להוסיף
+            </Link>
+          )}
+        </div>
+
+        <Editor
+          open={editing}
+          onOpenChange={setEditing}
+          roster={roster}
+          shifts={[]}
+          offset={offset}
+        />
+      </>
+    );
+  }
 
   return (
     <div className="space-y-4">
@@ -165,11 +236,22 @@ export function ShotefRoulette({
             icon={LifeBuoyIcon}
           />
 
-          <div className="mt-6 flex justify-center">
+          <div className="mt-6 flex items-center justify-center gap-2">
             <Button onClick={spin} disabled={spinning} size="lg" className="gap-2">
               <DicesIcon className={cn("size-4", spinning && "animate-spin")} />
               {spinning ? "מסתובב…" : "סובבו את הגלגל"}
             </Button>
+            {user ? (
+              <Button
+                variant="outline"
+                size="lg"
+                disabled={spinning}
+                onClick={() => setEditing(true)}
+                aria-label="עריכת התורנות"
+              >
+                <PencilIcon className="size-4" />
+              </Button>
+            ) : null}
           </div>
 
           <p className="text-muted-foreground mt-3 text-center text-xs text-balance">
@@ -212,7 +294,48 @@ export function ShotefRoulette({
           ))}
         </ol>
       </section>
+
+      <Editor
+        open={editing}
+        onOpenChange={setEditing}
+        roster={roster}
+        // A week belongs to its position in the list, so the editor is handed
+        // the schedule as it stands — not the post-spin one the card shows.
+        shifts={buildShifts(now, queue.length, queue)}
+        offset={offset}
+      />
     </div>
+  );
+}
+
+/**
+ * The roster editor, bound to this rotation. Mounted only while open, so each
+ * visit starts from the list itself rather than wherever the last one ended.
+ */
+function Editor({
+  open,
+  onOpenChange,
+  roster,
+  shifts,
+  offset,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  roster: RosterMember[];
+  shifts: ShotefShift[];
+  offset: number;
+}) {
+  if (!open) return null;
+
+  return (
+    <RotationEditor
+      open
+      onOpenChange={onOpenChange}
+      roster={roster}
+      slots={shifts}
+      offset={offset}
+      copy={SHOTEF_COPY}
+    />
   );
 }
 
