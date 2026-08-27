@@ -304,6 +304,80 @@ describe("listThemes", () => {
     }
     expect(new Set(seen).size).toBe(9);
   });
+
+  it("searches the theme text", async () => {
+    await create({ date: "2026-08-18", theme: "הכול עגול" });
+    await create({ date: "2026-08-11", theme: "מקסיקו" });
+
+    const page = await listThemes({ search: "מקסיקו" });
+    expect(page.themes).toHaveLength(1);
+    expect(page.themes[0].theme).toBe("מקסיקו");
+    expect(page.total).toBe(1);
+  });
+
+  it.each([
+    ["snacks", "דונאטס"],
+    ["broughtBy", "נועה"],
+    ["guessedBy", "תמר"],
+  ])("searches %s too", async (_field, term) => {
+    await create({
+      date: "2026-08-18",
+      theme: "הכול עגול",
+      snacks: ["בייגלה", "דונאטס"],
+      guessedById: userId["תמר רוזן"],
+    });
+    await create({
+      date: "2026-08-11",
+      theme: "מקסיקו",
+      snacks: ["נאצ׳וס"],
+      broughtById: userId["אורי בן־חיים"],
+    });
+
+    const page = await listThemes({ search: term });
+    expect(page.themes).toHaveLength(1);
+    expect(page.themes[0].theme).toBe("הכול עגול");
+  });
+
+  it("ignores case", async () => {
+    await create({ date: "2026-08-18", theme: "Mexico" });
+    const page = await listThemes({ search: "mexico" });
+    expect(page.themes.map((theme) => theme.theme)).toEqual(["Mexico"]);
+  });
+
+  it("treats regex metacharacters as literal text", async () => {
+    // Unescaped, ".*" would match every theme in the collection.
+    await create({ date: "2026-08-18", theme: "הכול עגול" });
+    const page = await listThemes({ search: ".*" });
+    expect(page.total).toBe(0);
+
+    await create({ date: "2026-08-11", theme: "אמר .* בכוונה" });
+    await expect(listThemes({ search: ".*" })).resolves.toMatchObject({
+      total: 1,
+    });
+  });
+
+  it("trims the search term and ignores a blank one", async () => {
+    await create({ date: "2026-08-18", theme: "הכול עגול" });
+    await create({ date: "2026-08-11", theme: "מקסיקו" });
+
+    await expect(listThemes({ search: "  מקסיקו  " })).resolves.toMatchObject({
+      total: 1,
+    });
+    await expect(listThemes({ search: "   " })).resolves.toMatchObject({
+      total: 2,
+    });
+  });
+
+  it("counts matches, not the page, when searching", async () => {
+    await create({ date: "2026-08-18", theme: "הכול עגול" });
+    await create({ date: "2026-08-11", theme: "עגול גם כאן" });
+    await create({ date: "2026-08-04", theme: "מקסיקו" });
+
+    const page = await listThemes({ search: "עגול", limit: 1 });
+    expect(page.themes).toHaveLength(1);
+    expect(page.total).toBe(2);
+    expect(page.hasMore).toBe(true);
+  });
 });
 
 describe("getThemeStats", () => {

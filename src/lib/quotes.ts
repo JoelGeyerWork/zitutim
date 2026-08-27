@@ -12,7 +12,11 @@ import type { QuoteComment } from "@/lib/engagement-schema";
 import { getDb } from "@/lib/mongodb";
 import {
   PAGE_SIZE,
+  QUOTE_GAME_LENGTH,
+  QUOTE_GAME_OPTION_COUNT,
+  shuffled,
   type Quote,
+  type QuoteGameRound,
   type QuotePage,
   type QuoteValues,
   type SortOption,
@@ -314,6 +318,60 @@ export async function getQuote(
     ])
     .toArray();
   return doc ? serialize(doc) : null;
+}
+
+/**
+ * Build the questions on the server so the first random order is also the one
+ * hydrated by the browser. The answer is sent to the client because this is a
+ * casual team game, not a security boundary or a persisted competition.
+ */
+export async function getQuoteGame(
+  roundCount = QUOTE_GAME_LENGTH,
+): Promise<QuoteGameRound[]> {
+  const collection = await quotes();
+  const authors = (await collection.distinct("author")).filter(
+    (author) => author.trim().length > 0,
+  );
+
+  if (authors.length < 2) return [];
+
+  const safeRoundCount = Math.min(
+    Math.max(1, Math.floor(roundCount) || QUOTE_GAME_LENGTH),
+    50,
+  );
+  const sampled = await collection
+    .aggregate<
+      Pick<QuoteDoc, "_id" | "text" | "author" | "saidAt" | "context">
+    >([
+      // Same non-empty rule as `authors` above, so a leftover blank name cannot
+      // be drawn as a question after being dropped from the option pool.
+      { $match: { author: { $regex: /\S/ } } },
+      { $sample: { size: safeRoundCount } },
+      {
+        $project: {
+          text: 1,
+          author: 1,
+          saidAt: 1,
+          context: 1,
+        },
+      },
+    ])
+    .toArray();
+
+  return sampled.map((quote) => {
+    const distractors = shuffled(
+      authors.filter((author) => author !== quote.author),
+    ).slice(0, QUOTE_GAME_OPTION_COUNT - 1);
+
+    return {
+      id: quote._id.toHexString(),
+      text: quote.text,
+      saidAt: quote.saidAt.toISOString(),
+      context: quote.context,
+      correctAuthor: quote.author,
+      options: shuffled([quote.author, ...distractors]),
+    };
+  });
 }
 
 /**

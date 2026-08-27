@@ -34,6 +34,7 @@ export async function GET(request: Request) {
 
   try {
     const page = await listThemes({
+      search: params.get("q") ?? undefined,
       skip: Number(params.get("skip")) || 0,
       limit: Number(params.get("limit")) || THEME_PAGE_SIZE,
     });

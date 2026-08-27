@@ -1,6 +1,6 @@
 import "server-only";
 
-import { ObjectId, type Collection } from "mongodb";
+import { ObjectId, type Collection, type Filter } from "mongodb";
 
 import { getDb } from "@/lib/mongodb";
 import { getRotation } from "@/lib/rotation";
@@ -81,11 +81,36 @@ async function usersCollection(): Promise<Collection<UserDoc>> {
  */
 const SORT: Record<string, 1 | -1> = { date: -1, _id: -1 };
 
+/** Escape a user string so it can go inside a RegExp literally. */
+function escapeRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 export async function listThemes({
+  search,
   skip = 0,
   limit = THEME_PAGE_SIZE,
-}: { skip?: number; limit?: number } = {}): Promise<ThemePage> {
+}: {
+  search?: string;
+  skip?: number;
+  limit?: number;
+} = {}): Promise<ThemePage> {
   const collection = await themes();
+  const filter: Filter<ThemeDoc> = {};
+
+  const term = search?.trim();
+  if (term) {
+    const pattern = new RegExp(escapeRegex(term), "i");
+    // Snapshots, not FKs — names are what people type, and snacks live on the
+    // theme itself. Matching through `broughtById` would miss a renamed person
+    // and skip the snacks entirely. Same reason `addedBy` is searched as text.
+    filter.$or = [
+      { theme: pattern },
+      { snacks: pattern },
+      { broughtBy: pattern },
+      { guessedBy: pattern },
+    ];
+  }
 
   const safeSkip = Math.max(0, Math.floor(skip) || 0);
   const safeLimit = Math.min(
@@ -94,8 +119,8 @@ export async function listThemes({
   );
 
   const [docs, total] = await Promise.all([
-    collection.find({}).sort(SORT).skip(safeSkip).limit(safeLimit).toArray(),
-    collection.countDocuments(),
+    collection.find(filter).sort(SORT).skip(safeSkip).limit(safeLimit).toArray(),
+    collection.countDocuments(filter),
   ]);
 
   return {
