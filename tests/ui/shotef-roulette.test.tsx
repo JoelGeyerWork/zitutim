@@ -95,23 +95,28 @@ describe("ShotefRoulette", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("sends a signed-out visitor to the login page from the empty state", () => {
+  // The empty state is what a fresh database shows everyone, so the way out of
+  // it cannot be gated: the editor's own calls answer 401 and send them to
+  // login. A separate login link here would be a second door to the same place.
+  it("offers the empty state's add button to a signed-out visitor", () => {
     renderWheel([], { signedIn: false });
 
-    const link = screen.getByRole("link", { name: "כניסה כדי להוסיף" });
-    expect(link).toHaveAttribute("href", "/login?next=%2Fshotef");
     expect(
-      screen.queryByRole("button", { name: "הוספת אנשים לתורנות" }),
-    ).not.toBeInTheDocument();
+      screen.getByRole("button", { name: "הוספת אנשים לתורנות" }),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /כניסה/ })).toBeNull();
   });
 
-  it("hides the editor from a signed-out visitor — the API is the enforcement", () => {
+  // Drawn for everyone, like the meetup pencil beside it — the 401 behind it is
+  // the enforcement, and this is the only affordance saying the roster is
+  // editable at all.
+  it("draws the pencil for a signed-out visitor too", () => {
     renderWheel(ROSTER, { signedIn: false });
 
     expect(screen.getByRole("button", { name: "סובבו את הגלגל" })).toBeInTheDocument();
     expect(
-      screen.queryByRole("button", { name: "עריכת התורנות" }),
-    ).not.toBeInTheDocument();
+      screen.getByRole("button", { name: "עריכת התורנות" }),
+    ).toBeInTheDocument();
   });
 
   it("opens the on-call roster behind the pencil, in its own words", async () => {

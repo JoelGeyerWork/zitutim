@@ -88,10 +88,16 @@ describe("ShotefReviews", () => {
     expect(screen.getByText(DEPARTED)).toBeInTheDocument();
   });
 
-  it("hides the add button from a signed-out reader", () => {
+  // Deliberately drawn signed out too. The POST answers 401 and the dialog
+  // sends them to login — which is the only way a signed-out reader discovers
+  // that summarising a week exists. Hiding it left a populated page with no way
+  // in at all, and the 401 is the enforcement either way.
+  it("offers the add button to a signed-out reader as well", () => {
     open(null);
 
-    expect(screen.queryByRole("button", { name: /סיכום חדש/ })).toBeNull();
+    expect(
+      screen.getByRole("button", { name: /סיכום חדש/ }),
+    ).toBeInTheDocument();
     // The summaries themselves stay public, like every other read here.
     expect(screen.getByText("שבוע של תור ריק")).toBeInTheDocument();
   });

@@ -263,7 +263,7 @@ describe("DELETE /api/quotes/:id", () => {
 });
 
 describe("authentication", () => {
-  const EXPECTED = { error: "צריך להתחבר כדי לשנות את הקיר" };
+  const EXPECTED = { error: "צריך להתחבר כדי לשנות משהו כאן" };
 
   it.each([
     ["no cookie at all", null],

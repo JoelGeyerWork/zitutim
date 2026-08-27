@@ -228,7 +228,7 @@ describe("PUT /api/shotef/rotation/order", () => {
 });
 
 describe("authentication and origin", () => {
-  const UNAUTHORIZED = { error: "צריך להתחבר כדי לשנות את הקיר" };
+  const UNAUTHORIZED = { error: "צריך להתחבר כדי לשנות משהו כאן" };
 
   it("rejects POST without a session, before parsing the body", async () => {
     // Session precedes parse: a malformed body still answers 401, not 400/422.

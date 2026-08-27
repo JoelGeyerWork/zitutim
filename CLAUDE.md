@@ -194,14 +194,19 @@ article, and the two nouns disagree on grammatical gender (`שבו` vs `שבה`)
 POSTs to should not be implicit. `slots` is the structural
 `Turn = { date, weeksAway }`, which both `MeetupSlot` and `ShotefShift` satisfy.
 
-Two seams between the two, worth knowing before you assume they match:
+Two things worth knowing about the pair:
 
-- **The shotef pencil is gated on `useSession()`; the meetup pencil is not.**
-  The shotef side follows this file's stated convention — hide a control whose
-  API answers `401` — and its empty state offers a `/login?next=%2Fshotef` link
-  so a signed-out visitor to a fresh database still has a way in. The meetup
-  pencil renders for everyone and lets the `401` bounce them. Making them agree
-  is one `useSession()` in `meetup-roulette.tsx`, not a change on the shotef side.
+- **Every write control in this section is drawn for everyone**, signed in or
+  not — the two pencils, "סיכום חדש" and "תעודה חדשה" — and the `401` behind it
+  bounces the caller to `/login`. They were briefly gated on `useSession()`,
+  which reads like the safer choice and is the worse one: the control is the
+  only thing telling a signed-out reader that summarising a week or hanging a
+  certificate is possible at all, so hiding it leaves a populated page with no
+  way in and no hint there is one. The enforcement was never the button; it is
+  the route. This matches `meetup-roulette.tsx`, which never gated its pencil.
+  Consequently the empty states carry **no login link of their own** — the
+  button above them already leads there, and two doors to one place is one too
+  many.
 - **`ShotefRoulette` reconciles a fresh `initialRoster` during render**, and
   resets `winner`/`rotation`/`spinning` when it does — those index into a wheel
   that just changed shape. `react-hooks/set-state-in-effect` is an error in this

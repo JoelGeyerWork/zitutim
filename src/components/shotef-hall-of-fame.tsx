@@ -1,7 +1,6 @@
 "use client";
 
 import { useState } from "react";
-import Link from "next/link";
 import {
   AwardIcon as AwardRibbonIcon,
   BellRingIcon,
@@ -24,8 +23,7 @@ import {
 
 import { MonitorFormDialog } from "@/components/monitor-form-dialog";
 import { PersonAvatar } from "@/components/person-avatar";
-import { useSession } from "@/components/session-provider";
-import { Button, buttonVariants } from "@/components/ui/button";
+import { Button } from "@/components/ui/button";
 import {
   formatDaySpan,
   formatDuration,
@@ -69,11 +67,6 @@ export function HallOfFame({
    *  Not who is on an existing plaque: that arrives resolved from `users`. */
   roster: Member[];
 }) {
-  // Display state only: `POST /api/shotef/monitors` answers 401 on its own and
-  // that is the enforcement. Hiding the button spares a signed-out reader a
-  // form whose submit would only bounce them to the login page.
-  const user = useSession();
-
   const [wall, setWall] = useState(initial);
   const [adding, setAdding] = useState(false);
 
@@ -120,12 +113,12 @@ export function HallOfFame({
           <h2 className="text-muted-foreground text-xs font-semibold">
             כל ההישגים
           </h2>
-          {user ? (
-            <Button size="sm" onClick={() => setAdding(true)} className="gap-1.5">
-              <PlusIcon className="size-4" />
-              תעודה חדשה
-            </Button>
-          ) : null}
+          {/* Drawn for everyone, signed in or not — see `shotef-reviews.tsx`.
+              The POST answers 401 and the dialog sends them to login. */}
+          <Button size="sm" onClick={() => setAdding(true)} className="gap-1.5">
+            <PlusIcon className="size-4" />
+            תעודה חדשה
+          </Button>
         </div>
 
         {monitors.length === 0 ? (
@@ -134,16 +127,6 @@ export function HallOfFame({
             <p className="text-muted-foreground mt-3 text-sm text-balance">
               עדיין אין תעודה על הקיר.
             </p>
-            {!user ? (
-              // Signed out the button above is not drawn, so the way in is the
-              // login page itself.
-              <Link
-                href="/login?next=%2Fshotef%2Fhall-of-fame"
-                className={cn(buttonVariants(), "mt-4")}
-              >
-                כניסה כדי לתלות תעודה
-              </Link>
-            ) : null}
           </div>
         ) : (
           /*

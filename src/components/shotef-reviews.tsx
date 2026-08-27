@@ -1,13 +1,11 @@
 "use client";
 
 import { useState } from "react";
-import Link from "next/link";
 import { ClipboardListIcon, PlusIcon, StarIcon } from "lucide-react";
 
 import { PersonAvatar } from "@/components/person-avatar";
 import { ReviewFormDialog } from "@/components/review-form-dialog";
-import { useSession } from "@/components/session-provider";
-import { Button, buttonVariants } from "@/components/ui/button";
+import { Button } from "@/components/ui/button";
 import { formatWeekRange, plural } from "@/lib/format";
 import {
   averageRating,
@@ -33,11 +31,6 @@ export function ShotefReviews({
   /** "Now" is fixed by the server, so the week picker offers the same weeks. */
   nowIso: string;
 }) {
-  // Display state only: `POST /api/shotef/reviews` answers 401 on its own and
-  // that is the enforcement. Hiding the button spares a signed-out reader a
-  // form whose submit would only bounce them to the login page.
-  const user = useSession();
-
   const [list, setList] = useState(initial);
   const [adding, setAdding] = useState(false);
 
@@ -90,12 +83,15 @@ export function ShotefReviews({
           <h2 className="text-muted-foreground text-xs font-semibold">
             שבוע אחרי שבוע
           </h2>
-          {user ? (
-            <Button size="sm" onClick={() => setAdding(true)} className="gap-1.5">
-              <PlusIcon className="size-4" />
-              סיכום חדש
-            </Button>
-          ) : null}
+          {/* Drawn for everyone, signed in or not. The POST answers 401 and
+              the dialog sends them to the login page, which is the only way a
+              signed-out reader learns that summarising a week is a thing they
+              could do — hiding it leaves a populated page with no way in at
+              all. Same choice the meetup editor makes. */}
+          <Button size="sm" onClick={() => setAdding(true)} className="gap-1.5">
+            <PlusIcon className="size-4" />
+            סיכום חדש
+          </Button>
         </div>
 
         {list.reviews.length === 0 ? (
@@ -104,16 +100,6 @@ export function ShotefReviews({
             <p className="text-muted-foreground mt-3 text-sm text-balance">
               עדיין אין שבוע מסוכם.
             </p>
-            {!user ? (
-              // Signed out the button above is not drawn, so the way in is the
-              // login page itself.
-              <Link
-                href="/login?next=%2Fshotef%2Freviews"
-                className={cn(buttonVariants(), "mt-4")}
-              >
-                כניסה כדי לסכם
-              </Link>
-            ) : null}
           </div>
         ) : (
           // Sorted here rather than trusted from the server: an optimistic card

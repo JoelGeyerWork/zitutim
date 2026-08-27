@@ -275,10 +275,13 @@ describe("HallOfFame", () => {
     expect(refresh).not.toHaveBeenCalled();
   });
 
-  it("hides the add button from a signed-out reader", () => {
+  // Drawn signed out too — see the matching note in `shotef-reviews.test.tsx`.
+  it("offers the add button to a signed-out reader as well", () => {
     open(wall(), null);
 
-    expect(screen.queryByRole("button", { name: /תעודה חדשה/ })).toBeNull();
+    expect(
+      screen.getByRole("button", { name: /תעודה חדשה/ }),
+    ).toBeInTheDocument();
   });
 
   /**
@@ -297,13 +300,18 @@ describe("HallOfFame", () => {
 
   // A fresh database has no certificates, and a signed-out visitor to one needs
   // a way in — the add button above is not drawn for them.
-  it("offers the login page on an empty wall when signed out", () => {
+  // A fresh database, read by someone signed out: the empty state says so and
+  // the add button above it is still the way in. It no longer carries a login
+  // link of its own — the button is drawn for everyone now, so the link would
+  // be a second door to the same place.
+  it("still offers a way in on an empty wall when signed out", () => {
     open({ monitors: [], board: [], fastest: null, solverCount: 0 }, null);
 
     expect(screen.getByText("עדיין אין תעודה על הקיר.")).toBeInTheDocument();
     expect(
-      screen.getByRole("link", { name: "כניסה כדי לתלות תעודה" }),
-    ).toHaveAttribute("href", "/login?next=%2Fshotef%2Fhall-of-fame");
+      screen.getByRole("button", { name: /תעודה חדשה/ }),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /כניסה/ })).toBeNull();
   });
 
   it("names no fastest fix on an empty wall rather than inventing one", () => {

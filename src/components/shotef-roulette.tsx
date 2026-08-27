@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import Link from "next/link";
 import {
   DicesIcon,
   ClockIcon,
@@ -14,9 +13,8 @@ import {
 import { PersonAvatar } from "@/components/person-avatar";
 import { RotationWheel, sliceAngle } from "@/components/rotation-wheel";
 import { RotationEditor, SHOTEF_COPY } from "@/components/rotation-editor";
-import { useSession } from "@/components/session-provider";
 import { Badge } from "@/components/ui/badge";
-import { Button, buttonVariants } from "@/components/ui/button";
+import { Button } from "@/components/ui/button";
 import { formatDayMonth, formatWeekRange } from "@/lib/format";
 import { type RosterMember } from "@/lib/roster";
 import {
@@ -44,11 +42,6 @@ export function ShotefRoulette({
   nowIso: string;
 }) {
   const now = new Date(nowIso);
-
-  // Display state only: the routes behind the editor answer 401 on their own,
-  // and that is the enforcement. Hiding the pencil just spares a signed-out
-  // reader a dialog every control in which bounces them to the login page.
-  const user = useSession();
 
   const [winner, setWinner] = useState(0);
   const [rotation, setRotation] = useState(0);
@@ -124,20 +117,12 @@ export function ShotefRoulette({
           <p className="text-muted-foreground mt-3 text-sm text-balance">
             עדיין אין אף אחד בתורנות.
           </p>
-          {user ? (
-            <Button className="mt-4" onClick={() => setEditing(true)}>
-              הוספת אנשים לתורנות
-            </Button>
-          ) : (
-            // Signed out there is nothing to open — every control in the dialog
-            // would be refused — so the way in is the login page itself.
-            <Link
-              href="/login?next=%2Fshotef"
-              className={cn(buttonVariants(), "mt-4")}
-            >
-              כניסה כדי להוסיף
-            </Link>
-          )}
+          {/* Drawn for everyone: the editor's own calls answer 401 and send
+              them to login, and a fresh database otherwise shows a signed-out
+              visitor a dead end. */}
+          <Button className="mt-4" onClick={() => setEditing(true)}>
+            הוספת אנשים לתורנות
+          </Button>
         </div>
 
         <Editor
@@ -241,17 +226,15 @@ export function ShotefRoulette({
               <DicesIcon className={cn("size-4", spinning && "animate-spin")} />
               {spinning ? "מסתובב…" : "סובבו את הגלגל"}
             </Button>
-            {user ? (
-              <Button
-                variant="outline"
-                size="lg"
-                disabled={spinning}
-                onClick={() => setEditing(true)}
-                aria-label="עריכת התורנות"
-              >
-                <PencilIcon className="size-4" />
-              </Button>
-            ) : null}
+            <Button
+              variant="outline"
+              size="lg"
+              disabled={spinning}
+              onClick={() => setEditing(true)}
+              aria-label="עריכת התורנות"
+            >
+              <PencilIcon className="size-4" />
+            </Button>
           </div>
 
           <p className="text-muted-foreground mt-3 text-center text-xs text-balance">
