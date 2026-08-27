@@ -1,7 +1,9 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import {
+  AwardIcon as AwardRibbonIcon,
   BellRingIcon,
   CpuIcon,
   PlusIcon,
@@ -22,7 +24,8 @@ import {
 
 import { MonitorFormDialog } from "@/components/monitor-form-dialog";
 import { PersonAvatar } from "@/components/person-avatar";
-import { Button } from "@/components/ui/button";
+import { useSession } from "@/components/session-provider";
+import { Button, buttonVariants } from "@/components/ui/button";
 import {
   formatDaySpan,
   formatDuration,
@@ -32,14 +35,14 @@ import {
 import {
   alertingDays,
   byNewest,
-  fastestFix,
-  solverBoard,
   solversOf,
   type AwardIcon,
+  type MonitorSolver,
+  type MonitorWall,
   type SolvedMonitor,
   type Solver,
 } from "@/lib/shotef-schema";
-import { conjugate, type Member } from "@/lib/team";
+import { type Member } from "@/lib/team";
 import { cn } from "@/lib/utils";
 
 /** What the fix was about, as a face on the seal. */
@@ -61,19 +64,50 @@ export function HallOfFame({
   initial,
   roster,
 }: {
-  initial: SolvedMonitor[];
+  initial: MonitorWall;
+  /** The on-call rotation — who the add dialog may name on a new certificate.
+   *  Not who is on an existing plaque: that arrives resolved from `users`. */
   roster: Member[];
 }) {
-  // Local only: a new certificate lives in this tab until the section grows a
-  // database. Nothing hands down a fresh `initial`, so there is no `seed`
-  // reconcile here like the quote feed and the themes view keep.
-  const [monitors, setMonitors] = useState(initial);
+  // Display state only: `POST /api/shotef/monitors` answers 401 on its own and
+  // that is the enforcement. Hiding the button spares a signed-out reader a
+  // form whose submit would only bounce them to the login page.
+  const user = useSession();
+
+  const [wall, setWall] = useState(initial);
   const [adding, setAdding] = useState(false);
-  const board = solverBoard(monitors, roster);
+
+  // The dialog posts and then `router.refresh()`, which re-runs the server page
+  // and hands down a fresh `initial`. Reconciled during render, not in an
+  // effect — `react-hooks/set-state-in-effect` is an error in this config.
+  const [seed, setSeed] = useState(initial);
+  if (seed !== initial) {
+    setSeed(initial);
+    setWall(initial);
+  }
+
+  const { monitors, board, fastest } = wall;
+
+  /**
+   * The saved certificate, hung before the refresh behind it lands.
+   *
+   * Only the wall moves. `board` and `fastest` are counted across the whole
+   * collection by the database and there is deliberately no pure second
+   * spelling of either here — folding one in by hand would be re-deriving an
+   * aggregate from the list this component happens to hold, which is the exact
+   * thing `getSolverBoard` exists to avoid. They arrive a moment later with the
+   * `router.refresh()`, which re-seeds all three at once.
+   */
+  function added(monitor: SolvedMonitor) {
+    setWall((current) => ({
+      ...current,
+      monitors: [monitor, ...current.monitors],
+    }));
+  }
 
   return (
     <div className="space-y-4">
-      <TrophyCase monitors={monitors} board={board} />
+      <TrophyCase monitors={monitors} board={board} fastest={fastest} />
       {board.length > 1 ? <Podium board={board} /> : null}
 
       <section className="space-y-3">
@@ -81,46 +115,60 @@ export function HallOfFame({
           <h2 className="text-muted-foreground text-xs font-semibold">
             כל ההישגים
           </h2>
-          {/* Not gated on a session like the other sections' add buttons:
-              there is nothing to authorise yet, since this writes to React
-              state and no further. It takes the gate when it takes an API. */}
-          <Button size="sm" onClick={() => setAdding(true)} className="gap-1.5">
-            <PlusIcon className="size-4" />
-            תעודה חדשה
-          </Button>
+          {user ? (
+            <Button size="sm" onClick={() => setAdding(true)} className="gap-1.5">
+              <PlusIcon className="size-4" />
+              תעודה חדשה
+            </Button>
+          ) : null}
         </div>
 
-        {/*
-          Two to a shelf. The columns are set flush against each other and the
-          cards keep their distance with their own padding instead of a grid
-          gap, so the two shelves meet at the column boundary and read as one
-          board. Below `sm` there is one column, and every plaque gets a shelf
-          of its own — which is also what the last plaque of an odd wall gets.
-        */}
-        <ol className="grid gap-y-7 sm:grid-cols-2 sm:gap-x-0">
-          {byNewest(monitors).map((monitor, index, wall) => {
-            // Which column the plaque stands in, and whether it is the odd one
-            // out at the end of the wall — which keeps a whole shelf, borders
-            // and corners intact, rather than half of one.
-            const opens = index % 2 === 0;
-            const alone = opens && index === wall.length - 1;
+        {monitors.length === 0 ? (
+          <div className="bg-card rounded-2xl border p-8 text-center shadow-sm">
+            <AwardRibbonIcon className="text-muted-foreground mx-auto size-8" />
+            <p className="text-muted-foreground mt-3 text-sm text-balance">
+              עדיין אין תעודה על הקיר.
+            </p>
+            {!user ? (
+              // Signed out the button above is not drawn, so the way in is the
+              // login page itself.
+              <Link
+                href="/login?next=%2Fshotef%2Fhall-of-fame"
+                className={cn(buttonVariants(), "mt-4")}
+              >
+                כניסה כדי לתלות תעודה
+              </Link>
+            ) : null}
+          </div>
+        ) : (
+          /*
+            Two to a shelf. The columns are set flush against each other and the
+            cards keep their distance with their own padding instead of a grid
+            gap, so the two shelves meet at the column boundary and read as one
+            board. Below `sm` there is one column, and every plaque gets a shelf
+            of its own — which is also what the last plaque of an odd wall gets.
+          */
+          <ol className="grid gap-y-7 sm:grid-cols-2 sm:gap-x-0">
+            {byNewest(monitors).map((monitor, index, ordered) => {
+              // Which column the plaque stands in, and whether it is the odd
+              // one out at the end of the wall — which keeps a whole shelf,
+              // borders and corners intact, rather than half of one.
+              const opens = index % 2 === 0;
+              const alone = opens && index === ordered.length - 1;
 
-            return (
-              <li key={monitor.id} className="flex flex-col">
-                <div
-                  className={cn("flex-1", opens ? "sm:pe-2" : "sm:ps-2")}
-                >
-                  {/* Stretched, so both plaques on a shelf stand the same
-                      height and their bases actually rest on it. */}
-                  <Plaque monitor={monitor} roster={roster} />
-                </div>
-                <Shelf
-                  seam={alone ? undefined : opens ? "end" : "start"}
-                />
-              </li>
-            );
-          })}
-        </ol>
+              return (
+                <li key={monitor.id} className="flex flex-col">
+                  <div className={cn("flex-1", opens ? "sm:pe-2" : "sm:ps-2")}>
+                    {/* Stretched, so both plaques on a shelf stand the same
+                        height and their bases actually rest on it. */}
+                    <Plaque monitor={monitor} />
+                  </div>
+                  <Shelf seam={alone ? undefined : opens ? "end" : "start"} />
+                </li>
+              );
+            })}
+          </ol>
+        )}
       </section>
 
       {/* Mounted only while open, so each visit starts from an empty form. */}
@@ -128,7 +176,7 @@ export function HallOfFame({
         <MonitorFormDialog
           open
           onOpenChange={setAdding}
-          onAdd={(monitor) => setMonitors((current) => [monitor, ...current])}
+          onAdded={added}
           roster={roster}
         />
       ) : null}
@@ -140,11 +188,14 @@ export function HallOfFame({
 function TrophyCase({
   monitors,
   board,
+  fastest,
 }: {
   monitors: SolvedMonitor[];
   board: Solver[];
+  /** Both aggregates are the database's answer over the whole wall, not a
+   *  reduction over `monitors` — see `getSolverBoard`. */
+  fastest: SolvedMonitor | null;
 }) {
-  const fastest = fastestFix(monitors);
   const leader = board[0];
 
   return (
@@ -300,14 +351,10 @@ function Shelf({ seam }: { seam?: "start" | "end" }) {
  * corners than the cards elsewhere in the app, on purpose — the formality is
  * the point, and it is what separates a citation from a list item.
  */
-function Plaque({
-  monitor,
-  roster,
-}: {
-  monitor: SolvedMonitor;
-  roster: Member[];
-}) {
-  const solvers = solversOf(monitor, roster);
+function Plaque({ monitor }: { monitor: SolvedMonitor }) {
+  // No roster: the names came resolved from `users`, so a plaque keeps every
+  // recipient after they leave the on-call rotation.
+  const solvers = solversOf(monitor);
   const Icon = SEAL_ICONS[monitor.icon];
 
   return (
@@ -375,8 +422,13 @@ function Plaque({
               />
               {formatDuration(monitor.minutesToFix)}
             </dd>
+            {/* Passive, and deliberately not "פתר"/"פתרה" conjugated to the
+                recipient: Hebrew needs a gender for that, gender lives on the
+                rotation document rather than on the `users` row a certificate
+                joins to, and a plaque must read the same whether or not its
+                recipient is still on the rotation. */}
             <dt className="text-muted-foreground mt-0.5 text-[10px] tracking-widest">
-              {solvedVerb(solvers)} תוך
+              נפתר תוך
             </dt>
           </div>
         </dl>
@@ -418,24 +470,12 @@ function Plaque({
   );
 }
 
-/** Nobody on the roster answers for this one any more. */
-const UNKNOWN: Member = {
-  id: "unknown",
-  name: "לא ידוע",
-  role: "",
-  gender: "m",
-};
-
 /**
- * "פתר" / "פתרה" / "פתרו". Hebrew conjugates the verb to the subject, and the
- * past-tense plural is the same for either gender — so more than one name needs
- * no decision about whose gender wins.
+ * The `users` row a certificate names is gone — which nothing here does, since
+ * leaving the rotation does not delete the user. Named rather than left blank
+ * so a plaque never signs off on nobody.
  */
-function solvedVerb(solvers: Member[]): string {
-  if (solvers.length === 0) return "נפתר";
-  if (solvers.length === 1) return conjugate(solvers[0], "פתר", "פתרה");
-  return "פתרו";
-}
+const UNKNOWN: MonitorSolver = { id: "unknown", name: "לא ידוע" };
 
 /** The four corner marks of the ruled frame, as logical border pairs. */
 const CORNERS = [

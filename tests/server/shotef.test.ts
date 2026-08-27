@@ -1,28 +1,21 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  HALL_OF_FAME,
   HANDOVER_WEEKDAY,
-  SHOTEF_REVIEWS,
-  SHOTEF_ROSTER,
   alertingDays,
   averageRating,
   buildShifts,
   byNewest,
   currentShift,
-  fastestFix,
   handoverOf,
-  memberById,
   byWeek,
   closedWeeks,
   monitorInputSchema,
-  newMonitor,
-  newReview,
   reviewInputSchema,
   shiftIndex,
   shotefOn,
-  solverBoard,
   solversOf,
+  type ShotefReview,
   type SolvedMonitor,
 } from "@/lib/shotef-schema";
 import { rotate, type Member } from "@/lib/team";
@@ -30,9 +23,13 @@ import { rotate, type Member } from "@/lib/team";
 /**
  * A stand-in roster, like `team.test.ts` keeps: these are tests of the pure
  * shift math, which takes whatever list the caller hands it. The real on-call
- * roster is the `_id: "shotef"` rotation document — see `shotef-rotation.test.ts`
- * — while `SHOTEF_ROSTER` is only what the two fixture lists still point at, and
- * is checked as such at the bottom of this file.
+ * roster is the `_id: "shotef"` rotation document — see `shotef-rotation.test.ts`.
+ *
+ * Everything in this file is a *pure* helper, and nothing here reaches a
+ * database any more. The two fixture lists these tests used to be built on are
+ * gone with the collections that replaced them: the wall, the podium, the
+ * fastest fix and both create paths are covered against real documents in
+ * `shotef-monitors.test.ts` and `shotef-reviews.test.ts`.
  */
 const ROSTER: Member[] = [
   { id: "a", name: "אלף", role: "role", gender: "f" },
@@ -128,13 +125,25 @@ describe("buildShifts", () => {
   });
 });
 
+/** A summary with only the fields a given test cares about spelled out. */
+const review = (over: Partial<ShotefReview> = {}): ShotefReview => ({
+  id: "w-1",
+  weekStart: "2026-08-16T00:00:00.000Z",
+  memberId: "6b0000000000000000000001",
+  memberName: "\u05de\u05d0\u05d9\u05d4 \u05d2\u05dc\u05e2\u05d3",
+  rating: 4,
+  headline: "\u05e9\u05d1\u05d5\u05e2 \u05e9\u05dc \u05ea\u05d5\u05e8 \u05e8\u05d9\u05e7",
+  body: "\u05e9\u05ea\u05d9 \u05e4\u05e0\u05d9\u05d5\u05ea \u05d1\u05dc\u05d1\u05d3, \u05d5\u05e9\u05ea\u05d9\u05d4\u05df \u05e0\u05e1\u05d2\u05e8\u05d5 \u05dc\u05e4\u05e0\u05d9 \u05d4\u05e6\u05d4\u05e8\u05d9\u05d9\u05dd.",
+  ...over,
+});
+
 describe("averageRating", () => {
   it("averages to one decimal", () => {
     expect(
       averageRating([
-        { ...SHOTEF_REVIEWS[0], rating: 5 },
-        { ...SHOTEF_REVIEWS[0], rating: 4 },
-        { ...SHOTEF_REVIEWS[0], rating: 4 },
+        review({ rating: 5 }),
+        review({ rating: 4 }),
+        review({ rating: 4 }),
       ]),
     ).toBe(4.3);
   });
@@ -144,9 +153,22 @@ describe("averageRating", () => {
   });
 });
 
-/** A plaque with only the fields a given test cares about spelled out. */
-const plaque = (over: Partial<SolvedMonitor>): SolvedMonitor => ({
-  ...HALL_OF_FAME[0],
+/**
+ * A plaque with only the fields a given test cares about spelled out.
+ *
+ * Its solvers are `{ id, name }` pairs the way the server hands them down,
+ * already resolved out of `users` — a certificate carries every name on it
+ * whether or not that person is still on the on-call rotation.
+ */
+const plaque = (over: Partial<SolvedMonitor> = {}): SolvedMonitor => ({
+  id: "m-1",
+  icon: "memory",
+  monitor: "db-prod-01: RAM above 95%",
+  solution: "\u05e9\u05d0\u05d9\u05dc\u05ea\u05ea \u05d3\u05d5\u05d7 \u05d1\u05dc\u05d9 \u05d0\u05d9\u05e0\u05d3\u05e7\u05e1 \u05de\u05e9\u05db\u05d4 \u05d0\u05ea \u05db\u05dc \u05d4\u05d8\u05d1\u05dc\u05d4 \u05dc\u05d6\u05d9\u05db\u05e8\u05d5\u05df.",
+  solvedBy: [{ id: "6b0000000000000000000001", name: "\u05d0\u05d5\u05e8\u05d9 \u05d1\u05df\u05be\u05d7\u05d9\u05d9\u05dd" }],
+  firstFiredAt: "2026-06-09T00:00:00.000Z",
+  solvedAt: "2026-08-18T00:00:00.000Z",
+  minutesToFix: 180,
   ...over,
 });
 
@@ -172,81 +194,44 @@ describe("byNewest", () => {
   });
 });
 
-describe("solverBoard", () => {
-  it("counts plaques per person, most first", () => {
-    const board = solverBoard(
-      [
-        plaque({ id: "1", solvedByIds: ["ori"] }),
-        plaque({ id: "2", solvedByIds: ["maya"] }),
-        plaque({ id: "3", solvedByIds: ["ori"] }),
-      ],
-      SHOTEF_ROSTER,
+describe("solversOf", () => {
+  it("keeps every name on the certificate, in the order it is written", () => {
+    const solvers = solversOf(
+      plaque({
+        solvedBy: [
+          { id: "u1", name: "\u05d0\u05d5\u05e8\u05d9" },
+          { id: "u2", name: "\u05de\u05d0\u05d9\u05d4" },
+        ],
+      }),
     );
 
-    expect(board.map((row) => [row.member.id, row.solved])).toEqual([
-      ["ori", 2],
-      ["maya", 1],
-    ]);
+    expect(solvers.map((solver) => solver.name)).toEqual(["\u05d0\u05d5\u05e8\u05d9", "\u05de\u05d0\u05d9\u05d4"]);
   });
 
-  it("breaks a tie on the newest save", () => {
-    const board = solverBoard(
-      [
-        plaque({ id: "1", solvedByIds: ["ori"], solvedAt: "2026-01-01T00:00:00.000Z" }),
-        plaque({ id: "2", solvedByIds: ["maya"], solvedAt: "2026-05-01T00:00:00.000Z" }),
-      ],
-      SHOTEF_ROSTER,
+  /**
+   * Nothing consults a roster here any more — §8. A plaque is a record of
+   * something that happened, so it renders every recipient whether or not they
+   * are still on the on-call rotation; the podium is the part the rotation
+   * still gates, and that is `getSolverBoard`.
+   */
+  it("names somebody the on-call rotation has never heard of", () => {
+    const solvers = solversOf(
+      plaque({ solvedBy: [{ id: "gone", name: "\u05e8\u05d5\u05e2\u05d9 \u05d0\u05e9\u05db\u05e0\u05d6\u05d9" }] }),
     );
 
-    expect(board[0].member.id).toBe("maya");
-    expect(board[0].lastSolved).toBe("2026-05-01T00:00:00.000Z");
+    expect(solvers).toEqual([{ id: "gone", name: "\u05e8\u05d5\u05e2\u05d9 \u05d0\u05e9\u05db\u05e0\u05d6\u05d9" }]);
   });
 
-  // A monitor keeps its plaque either way — the board is about people, and
-  // someone off the roster has no row to put on it.
-  it("drops a solver who is no longer on the roster", () => {
-    const board = solverBoard(
-      [
-        plaque({ id: "1", solvedByIds: ["who"] }),
-        plaque({ id: "2", solvedByIds: ["ori", "who"] }),
-      ],
-      SHOTEF_ROSTER,
-    );
+  // Only a document written before the schema deduped can arrive doubled, and
+  // the view keys its list on the id — so folding it out is not optional.
+  it("folds out a name written twice on one certificate", () => {
+    const twice = { id: "u1", name: "\u05d0\u05d5\u05e8\u05d9" };
 
-    expect(board.map((row) => [row.member.id, row.solved])).toEqual([
-      ["ori", 1],
-    ]);
+    expect(solversOf(plaque({ solvedBy: [twice, twice] }))).toEqual([twice]);
   });
 
-  it("credits every name on a certificate", () => {
-    const board = solverBoard(
-      [
-        plaque({ id: "1", solvedByIds: ["ori", "maya", "tamar"] }),
-        plaque({ id: "2", solvedByIds: ["maya"] }),
-      ],
-      SHOTEF_ROSTER,
-    );
-
-    // maya leads on count; the two on one plaque tie on count *and* on date,
-    // and keep the order they are written on the certificate.
-    expect(board.map((row) => [row.member.id, row.solved])).toEqual([
-      ["maya", 2],
-      ["ori", 1],
-      ["tamar", 1],
-    ]);
-  });
-
-  // Counting the names rather than the certificates would let one typo hand
-  // somebody two plaques for one save.
-  it("counts a certificate once for a name written on it twice", () => {
-    const board = solverBoard(
-      [plaque({ id: "1", solvedByIds: ["ori", "ori"] })],
-      SHOTEF_ROSTER,
-    );
-
-    expect(board).toEqual([
-      expect.objectContaining({ solved: 1 }),
-    ]);
+  it("has nobody to name on a certificate with an empty list", () => {
+    expect(solversOf(plaque({ solvedBy: [] }))).toEqual([]);
   });
 });
 
@@ -273,22 +258,6 @@ describe("alertingDays", () => {
         }),
       ),
     ).toBe(0);
-  });
-});
-
-describe("fastestFix", () => {
-  it("finds the quickest save", () => {
-    const fastest = fastestFix([
-      plaque({ id: "1", minutesToFix: 300 }),
-      plaque({ id: "2", minutesToFix: 11 }),
-      plaque({ id: "3", minutesToFix: 90 }),
-    ]);
-
-    expect(fastest?.id).toBe("2");
-  });
-
-  it("has nothing to name on an empty wall", () => {
-    expect(fastestFix([])).toBeUndefined();
   });
 });
 
@@ -344,38 +313,11 @@ describe("monitorInputSchema", () => {
   });
 });
 
-describe("newMonitor", () => {
-  const input = monitorInputSchema.parse({
-    monitor: "redis-02: evicted keys above 1k/min",
-    icon: "cache",
-    solution: "הכפלנו את מגבלת הזיכרון והוצאנו את המפתחות הגדולים.",
-    solvedByIds: ["maya"],
-    firstFiredAt: "2026-07-01",
-    solvedAt: "2026-08-20",
-    minutesToFix: 240,
-  });
-
-  // The wall's date maths and formatters all read UTC midnight, like `saidAt`.
-  it("stores both dates at UTC midnight", () => {
-    const monitor = newMonitor(input);
-
-    expect(monitor.firstFiredAt).toBe("2026-07-01T00:00:00.000Z");
-    expect(monitor.solvedAt).toBe("2026-08-20T00:00:00.000Z");
-    expect(alertingDays(monitor)).toBe(50);
-  });
-
-  it("gives every plaque an id of its own, so a list can key by it", () => {
-    expect(newMonitor(input).id).not.toBe(newMonitor(input).id);
-  });
-});
-
 describe("byWeek", () => {
   it("puts the newest week first, whatever order they arrived in", () => {
-    const weeks = ["2026-07-05", "2026-08-16", "2026-07-26"].map((week) => ({
-      ...SHOTEF_REVIEWS[0],
-      id: week,
-      weekStart: `${week}T00:00:00.000Z`,
-    }));
+    const weeks = ["2026-07-05", "2026-08-16", "2026-07-26"].map((week) =>
+      review({ id: week, weekStart: `${week}T00:00:00.000Z` }),
+    );
 
     expect(byWeek(weeks).map((review) => review.id)).toEqual([
       "2026-08-16",
@@ -467,84 +409,5 @@ describe("reviewInputSchema", () => {
 
   it("refuses a week with nobody on duty", () => {
     expect(issueOn({ memberId: "" })?.message).toBe("צריך לבחור מי היה השוטף");
-  });
-});
-
-describe("newReview", () => {
-  const input = reviewInputSchema.parse({
-    weekStart: "2026-08-16",
-    memberId: "daniel",
-    rating: 4,
-    headline: "שבוע של תור ריק",
-    body: "שתי פניות בלבד, ושתיהן נסגרו לפני הצהריים.",
-  });
-
-  // Same rule as every other date here: stored at UTC midnight, because the
-  // formatters read UTC.
-  it("stores the week at UTC midnight", () => {
-    expect(newReview(input).weekStart).toBe("2026-08-16T00:00:00.000Z");
-  });
-
-  it("gives every summary an id of its own, so a list can key by it", () => {
-    expect(newReview(input).id).not.toBe(newReview(input).id);
-  });
-});
-
-// The fixtures are what the three screens render today, so a typo in an id
-// would show up only as "לא ידוע" on a card.
-describe("the hard-coded content", () => {
-  it("points every review and monitor at someone on the roster", () => {
-    for (const review of SHOTEF_REVIEWS) {
-      expect(memberById(review.memberId, SHOTEF_ROSTER), review.id).toBeDefined();
-    }
-    for (const monitor of HALL_OF_FAME) {
-      expect(monitor.solvedByIds.length, monitor.id).toBeGreaterThan(0);
-      expect(solversOf(monitor, SHOTEF_ROSTER), monitor.id).toHaveLength(
-        monitor.solvedByIds.length,
-      );
-    }
-  });
-
-  it("opens every reviewed week on a Sunday", () => {
-    for (const review of SHOTEF_REVIEWS) {
-      expect(new Date(review.weekStart).getUTCDay(), review.id).toBe(
-        HANDOVER_WEEKDAY,
-      );
-    }
-  });
-
-  it("keeps every rating inside the 0–5 scale", () => {
-    for (const review of SHOTEF_REVIEWS) {
-      expect(review.rating).toBeGreaterThanOrEqual(0);
-      expect(review.rating).toBeLessThanOrEqual(5);
-    }
-  });
-
-  it("gives every plaque a monitor to name it and a positive time to fix", () => {
-    for (const monitor of HALL_OF_FAME) {
-      expect(monitor.monitor, monitor.id).not.toBe("");
-      expect(monitor.minutesToFix, monitor.id).toBeGreaterThan(0);
-    }
-  });
-
-  // A monitor cannot be solved before it first fired, and the certificate
-  // renders the span between the two.
-  it("fires every monitor before it is silenced", () => {
-    for (const monitor of HALL_OF_FAME) {
-      expect(
-        monitor.firstFiredAt <= monitor.solvedAt,
-        monitor.id,
-      ).toBe(true);
-    }
-  });
-
-  it("has no duplicate ids to key a list by", () => {
-    const ids = [
-      ...SHOTEF_ROSTER.map((member) => member.id),
-      ...SHOTEF_REVIEWS.map((review) => review.id),
-      ...HALL_OF_FAME.map((monitor) => monitor.id),
-    ];
-
-    expect(new Set(ids).size).toBe(ids.length);
   });
 });

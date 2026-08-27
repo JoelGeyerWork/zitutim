@@ -1,17 +1,19 @@
 "use client";
 
 import { useState } from "react";
-import { PlusIcon, StarIcon } from "lucide-react";
+import Link from "next/link";
+import { ClipboardListIcon, PlusIcon, StarIcon } from "lucide-react";
 
 import { PersonAvatar } from "@/components/person-avatar";
 import { ReviewFormDialog } from "@/components/review-form-dialog";
-import { Button } from "@/components/ui/button";
+import { useSession } from "@/components/session-provider";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { formatWeekRange, plural } from "@/lib/format";
 import {
   averageRating,
   byWeek,
-  memberById,
   type ShotefReview,
+  type ShotefReviewList,
 } from "@/lib/shotef-schema";
 import { type Member } from "@/lib/team";
 import { cn } from "@/lib/utils";
@@ -24,36 +26,63 @@ export function ShotefReviews({
   roster,
   nowIso,
 }: {
-  initial: ShotefReview[];
+  initial: ShotefReviewList;
+  /** The on-call rotation — who the add dialog may name. Not who past weeks
+   *  belong to: a summary carries its own resolved name. */
   roster: Member[];
   /** "Now" is fixed by the server, so the week picker offers the same weeks. */
   nowIso: string;
 }) {
-  // Local only: a new summary lives in this tab until the section grows a
-  // database. Nothing hands down a fresh `initial`, so there is no `seed`
-  // reconcile here like the quote feed keeps.
-  const [reviews, setReviews] = useState(initial);
+  // Display state only: `POST /api/shotef/reviews` answers 401 on its own and
+  // that is the enforcement. Hiding the button spares a signed-out reader a
+  // form whose submit would only bounce them to the login page.
+  const user = useSession();
+
+  const [list, setList] = useState(initial);
   const [adding, setAdding] = useState(false);
-  const average = averageRating(reviews);
+
+  // The dialog posts and then `router.refresh()`, which re-runs the server page
+  // and hands down a fresh `initial`. Reconciled during render, not in an
+  // effect — `react-hooks/set-state-in-effect` is an error in this config.
+  const [seed, setSeed] = useState(initial);
+  if (seed !== initial) {
+    setSeed(initial);
+    setList(initial);
+  }
+
+  /**
+   * The saved record, shown before the refresh behind it lands. Optimistic
+   * rather than waiting on the round trip, and the totals move with it — a new
+   * card above an unchanged average reads as a bug.
+   */
+  function added(review: ShotefReview) {
+    setList((current) => {
+      const reviews = [review, ...current.reviews];
+      // Safe to recompute in the client only because the list is every review
+      // there is; the moment it grows a `limit`, the server's `average` is the
+      // only honest one.
+      return { reviews, total: reviews.length, average: averageRating(reviews) };
+    });
+  }
 
   return (
     <div className="space-y-4">
       <section className="bg-card flex flex-wrap items-center justify-between gap-3 rounded-2xl border p-5 shadow-sm">
         <div>
           <p className="text-2xl font-bold tabular-nums">
-            {average.toFixed(1)}
+            {list.average.toFixed(1)}
             <span className="text-muted-foreground text-base font-medium">
               {" "}
               מתוך {MAX_STARS}
             </span>
           </p>
           <p className="text-muted-foreground mt-1 text-sm">
-            {plural(reviews.length, "שבוע אחד מסוכם", "שבועות מסוכמים")}
+            {plural(list.total, "שבוע אחד מסוכם", "שבועות מסוכמים")}
           </p>
         </div>
         {/* Rounded down deliberately: a 3.8 that shows four full stars claims a
             week nobody gave. */}
-        <Stars rating={Math.floor(average)} className="size-5" />
+        <Stars rating={Math.floor(list.average)} className="size-5" />
       </section>
 
       <section className="space-y-3">
@@ -61,20 +90,39 @@ export function ShotefReviews({
           <h2 className="text-muted-foreground text-xs font-semibold">
             שבוע אחרי שבוע
           </h2>
-          {/* Not gated on a session like the other sections' add buttons: this
-              writes to React state and no further. It takes the gate when it
-              takes an API. */}
-          <Button size="sm" onClick={() => setAdding(true)} className="gap-1.5">
-            <PlusIcon className="size-4" />
-            סיכום חדש
-          </Button>
+          {user ? (
+            <Button size="sm" onClick={() => setAdding(true)} className="gap-1.5">
+              <PlusIcon className="size-4" />
+              סיכום חדש
+            </Button>
+          ) : null}
         </div>
 
-        {/* Sorted here rather than trusted from the fixtures: a summary can be
-            written for any week that has closed, not only the latest one. */}
-        {byWeek(reviews).map((review) => (
-          <ReviewCard key={review.id} review={review} roster={roster} />
-        ))}
+        {list.reviews.length === 0 ? (
+          <div className="bg-card rounded-2xl border p-8 text-center shadow-sm">
+            <ClipboardListIcon className="text-muted-foreground mx-auto size-8" />
+            <p className="text-muted-foreground mt-3 text-sm text-balance">
+              עדיין אין שבוע מסוכם.
+            </p>
+            {!user ? (
+              // Signed out the button above is not drawn, so the way in is the
+              // login page itself.
+              <Link
+                href="/login?next=%2Fshotef%2Freviews"
+                className={cn(buttonVariants(), "mt-4")}
+              >
+                כניסה כדי לסכם
+              </Link>
+            ) : null}
+          </div>
+        ) : (
+          // Sorted here rather than trusted from the server: an optimistic card
+          // is prepended, and a summary can be written for any closed week, not
+          // only the latest one.
+          byWeek(list.reviews).map((review) => (
+            <ReviewCard key={review.id} review={review} />
+          ))
+        )}
       </section>
 
       {/* Mounted only while open, so each visit starts from an empty form. */}
@@ -82,8 +130,8 @@ export function ShotefReviews({
         <ReviewFormDialog
           open
           onOpenChange={setAdding}
-          onAdd={(review) => setReviews((current) => [review, ...current])}
-          reviews={reviews}
+          onAdded={added}
+          reviews={list.reviews}
           roster={roster}
           nowIso={nowIso}
         />
@@ -92,17 +140,12 @@ export function ShotefReviews({
   );
 }
 
-function ReviewCard({
-  review,
-  roster,
-}: {
-  review: ShotefReview;
-  roster: Member[];
-}) {
-  // A member who has left the roster keeps their week — the review is of the
-  // week, and the name on it is the only identity it needs.
-  const member = memberById(review.memberId, roster);
-  const name = member?.name ?? "לא ידוע";
+function ReviewCard({ review }: { review: ShotefReview }) {
+  // The name is resolved from `users` on the server, not looked up in the
+  // current rotation: leaving the rotation must not blank out a week somebody
+  // actually worked. Empty means the `users` row itself is gone, which it
+  // never is.
+  const name = review.memberName || "לא ידוע";
 
   return (
     <article className="bg-card rounded-2xl border p-5 shadow-sm">

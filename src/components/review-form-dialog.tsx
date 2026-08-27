@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { usePathname, useRouter } from "next/navigation";
 import { StarIcon } from "lucide-react";
 import { toast } from "sonner";
 
@@ -26,7 +27,6 @@ import { formatWeekRange } from "@/lib/format";
 import {
   RATING_LABELS,
   closedWeeks,
-  newReview,
   reviewInputSchema,
   shotefOn,
   type ShotefReview,
@@ -39,6 +39,9 @@ const WEEKS_OFFERED = 12;
 
 const MAX_STARS = 5;
 
+/** The week is taken. Rendered on that field, since that is what to change. */
+const WEEK_TAKEN = "כבר יש סיכום לשבוע הזה";
+
 type Values = {
   weekStart: string;
   memberId: string;
@@ -50,20 +53,23 @@ type Values = {
 export function ReviewFormDialog({
   open,
   onOpenChange,
-  onAdd,
+  onAdded,
   reviews,
   roster,
   nowIso,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  /** Local only: the page holds the new card, nothing is posted anywhere. */
-  onAdd: (review: ShotefReview) => void;
+  /** The record the server created, so the list can show it before the refresh. */
+  onAdded: (review: ShotefReview) => void;
   /** What is already written, so the same week isn't offered twice. */
   reviews: ShotefReview[];
+  /** The on-call rotation: who may be named as this week's shotef. */
   roster: Member[];
   nowIso: string;
 }) {
+  const router = useRouter();
+  const pathname = usePathname();
   // A week gets one summary. Dropping the taken ones from the list is the whole
   // duplicate check — there is no id to collide on and nothing to reject.
   const taken = new Set(reviews.map((review) => review.weekStart.slice(0, 10)));
@@ -82,6 +88,7 @@ export function ReviewFormDialog({
     };
   });
   const [errors, setErrors] = useState<Record<string, string>>({});
+  const [saving, setSaving] = useState(false);
 
   function set<K extends keyof Values>(key: K, value: Values[K]) {
     setValues((current) => ({ ...current, [key]: value }));
@@ -126,9 +133,12 @@ export function ReviewFormDialog({
     clearError("memberId");
   }
 
-  function handleSubmit(event: React.FormEvent) {
+  async function handleSubmit(event: React.FormEvent) {
     event.preventDefault();
+    if (saving) return;
 
+    // Checked here for responsiveness only — the route re-validates with this
+    // same schema and its 422 is the authority.
     const parsed = reviewInputSchema.safeParse(values);
 
     if (!parsed.success) {
@@ -143,9 +153,50 @@ export function ReviewFormDialog({
       return;
     }
 
-    onAdd(newReview(parsed.data));
-    toast.success("השבוע סוכם");
-    onOpenChange(false);
+    setSaving(true);
+    try {
+      const response = await fetch("/api/shotef/reviews", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(parsed.data),
+      });
+
+      const payload = await response.json().catch(() => null);
+
+      // The session can lapse while the form is open, so send them somewhere
+      // they can do something about it rather than just reporting failure.
+      if (response.status === 401) {
+        toast.error(payload?.error ?? "פג תוקף החיבור");
+        router.push(`/login?next=${encodeURIComponent(pathname)}`);
+        return;
+      }
+
+      // Reachable even though the picker hides taken weeks: somebody else may
+      // have filed this one since the page was loaded. Refresh behind it, so
+      // the week drops out of the picker and their summary appears.
+      if (response.status === 409) {
+        setErrors({ weekStart: payload?.error ?? WEEK_TAKEN });
+        toast.error(payload?.error ?? WEEK_TAKEN);
+        router.refresh();
+        return;
+      }
+
+      if (!response.ok) {
+        if (payload?.issues) setErrors(payload.issues);
+        toast.error(payload?.error ?? "לא הצלחנו לשמור את הסיכום");
+        return;
+      }
+
+      // Shown at once, then re-seeded by the refresh — see `ShotefReviews`.
+      onAdded(payload as ShotefReview);
+      toast.success("השבוע סוכם");
+      router.refresh();
+      onOpenChange(false);
+    } catch {
+      toast.error("אין חיבור לשרת");
+    } finally {
+      setSaving(false);
+    }
   }
 
   return (
@@ -154,11 +205,16 @@ export function ReviewFormDialog({
         <DialogHeader>
           <DialogTitle>סיכום שבוע</DialogTitle>
           <DialogDescription>
-            איך עבר השבוע של השוטף. נשמר רק בדפדפן הזה, עד שיהיה לזה מסד נתונים.
+            איך עבר השבוע של השוטף. נשמר לכולם, סיכום אחד לכל שבוע.
           </DialogDescription>
         </DialogHeader>
 
-        {weeks.length === 0 ? (
+        {roster.length === 0 ? (
+          <p className="text-muted-foreground py-4 text-sm text-balance">
+            אין אף אחד בתורנות, אז אין למי לייחס את השבוע. מוסיפים אנשים בעמוד
+            התורנות, ואז חוזרים לכאן.
+          </p>
+        ) : weeks.length === 0 ? (
           <p className="text-muted-foreground py-4 text-sm text-balance">
             כל השבועות האחרונים כבר מסוכמים. השבוע שרץ עכשיו יהיה זמין לסיכום
             ביום ראשון, כשהתורנות תעבור.
@@ -266,8 +322,8 @@ export function ReviewFormDialog({
               >
                 ביטול
               </Button>
-              <Button type="submit" size="lg">
-                פרסום הסיכום
+              <Button type="submit" size="lg" disabled={saving}>
+                {saving ? "שומר…" : "פרסום הסיכום"}
               </Button>
             </div>
           </form>

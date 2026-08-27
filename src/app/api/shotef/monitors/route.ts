@@ -3,9 +3,7 @@ import { NextResponse } from "next/server";
 import { fieldErrors } from "@/lib/api";
 import {
   createMonitor,
-  getFastestFix,
-  getSolverBoard,
-  listMonitors,
+  getHallOfFame,
   monitorInputSchema,
   resolveSolvers,
 } from "@/lib/shotef-monitors";
@@ -23,15 +21,13 @@ export const dynamic = "force-dynamic";
  * them. Both are computed across the whole collection rather than left to a
  * caller to reduce out of `monitors`, so a client that one day holds only part
  * of the wall still shows a podium that is true of all of it.
+ *
+ * Deliberately public, and deliberately the same `getHallOfFame` the page reads
+ * — a refetch cannot come back shaped differently from the server render.
  */
 export async function GET() {
   try {
-    const [monitors, board, fastest] = await Promise.all([
-      listMonitors(),
-      getSolverBoard(),
-      getFastestFix(),
-    ]);
-    return NextResponse.json({ monitors, board, fastest: fastest ?? null });
+    return NextResponse.json(await getHallOfFame());
   } catch (error) {
     console.error("GET /api/shotef/monitors failed", error);
     return NextResponse.json(
@@ -77,10 +73,14 @@ export async function POST(request: Request) {
   }
 
   try {
-    const monitor = await createMonitor(parsed.data, {
-      id: session.id,
-      name: session.name,
-    });
+    // The clerk is the session, never the body: who *solved* it is
+    // `solvedByIds`, and who typed the certificate in is a separate fact. The
+    // resolved solvers are handed on so the write path reads `users` once.
+    const monitor = await createMonitor(
+      parsed.data,
+      { id: session.id, name: session.name },
+      solvers.solvers,
+    );
     return NextResponse.json(monitor, { status: 201 });
   } catch (error) {
     console.error("POST /api/shotef/monitors failed", error);

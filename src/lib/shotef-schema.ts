@@ -9,8 +9,11 @@
  * so server code can use the one import.
  *
  * None of the helpers below know a roster: membership is the `rotation`
- * collection now, so `memberById`, `solversOf` and `solverBoard` are handed the
- * roster they are to resolve against rather than closing over a list.
+ * collection now, so whatever still resolves a person against it is handed the
+ * roster rather than closing over a list. The wall no longer resolves anybody
+ * here at all — a certificate arrives carrying its solvers' names, joined from
+ * `users` by the server, so a plaque keeps every name on it after its
+ * recipients leave the rotation.
  */
 
 import { z } from "zod";
@@ -43,26 +46,6 @@ export const SHOTEF = {
   /** Outside these, it is whoever is awake — the on-call slot is not a pager. */
   hours: "08:00–19:00",
 } as const;
-
-/**
- * The roster the two *fixture* lists below point at — and nothing else.
- *
- * The on-call rotation itself is the `_id: "shotef"` document in the `rotation`
- * collection now (see `shotef.ts`), so the wheel and the hub read it from
- * there. This list survives only because `SHOTEF_REVIEWS` and `HALL_OF_FAME`
- * still FK against its slug ids; it goes when they move into the seed, and
- * nothing new should reference it.
- */
-export const SHOTEF_ROSTER: Member[] = [
-  { id: "noa", name: "נועה ברקת", role: "ראשת צוות", gender: "f" },
-  { id: "itay", name: "איתי שרון", role: "שרת", gender: "m" },
-  { id: "shira", name: "שירה לוי", role: "לקוח", gender: "f" },
-  { id: "daniel", name: "דניאל עמר", role: "תשתיות", gender: "m" },
-  { id: "tamar", name: "תמר רוזן", role: "בדיקות", gender: "f" },
-  { id: "yonatan", name: "יונתן כץ", role: "שרת", gender: "m" },
-  { id: "maya", name: "מאיה גלעד", role: "עיצוב מוצר", gender: "f" },
-  { id: "ori", name: "אורי בן־חיים", role: "דאטה", gender: "m" },
-];
 
 export type ShotefShift = {
   /** UTC midnight of the Sunday the shift opens — same shape as `saidAt`. */
@@ -125,8 +108,17 @@ export type ShotefReview = {
   id: string;
   /** UTC midnight of the Sunday that opened the week under review. */
   weekStart: string;
-  /** Index into `SHOTEF_ROSTER` by `id` — a real FK once this is stored. */
+  /** The shotef whose week it was, as a `users._id` hex string. */
   memberId: string;
+  /**
+   * That person's name, resolved from `users` on read — never stored on the
+   * review. A summary is a record of a week that happened, so it must not lose
+   * its author the day they leave the on-call rotation; and resolving rather
+   * than snapshotting means a rename in AD reaches every past week at once.
+   * Same reasoning as `quote_comments`, which stores `authorId` and no name.
+   * Empty only if the `users` row somehow vanished — the view says "לא ידוע".
+   */
+  memberName: string;
   /** 0–5. Zero is a real score: a week that went badly and is worth recording. */
   rating: number;
   /** One line, the way the week is remembered. */
@@ -134,57 +126,18 @@ export type ShotefReview = {
   body: string;
 };
 
-/** Newest week first — the list is read top-down and rarely scrolled far. */
-export const SHOTEF_REVIEWS: ShotefReview[] = [
-  {
-    id: "w-2026-08-16",
-    weekStart: "2026-08-16T00:00:00.000Z",
-    memberId: "daniel",
-    rating: 5,
-    headline: "שבוע שקט שנגמר בשדרוג",
-    body: "שתי תקלות קטנות, שתיהן נסגרו באותו יום. בין לבין דניאל ניקה את התראות הרעש שהצטברו בחודשים האחרונים — מאז יש חצי מהפינגים ואף אחד לא מתגעגע.",
-  },
-  {
-    id: "w-2026-08-09",
-    weekStart: "2026-08-09T00:00:00.000Z",
-    memberId: "tamar",
-    rating: 4,
-    headline: "גל תקלות מהשחרור של יום שני",
-    body: "השחרור הביא איתו גל פניות ביומיים. תמר תיעדה כל אחת, זיהתה שכולן אותו באג ופתחה תיקון אחד במקום להתמודד עם כל אחת לחוד. ירד כוכב רק כי ההודעה לצוות יצאה באיחור.",
-  },
-  {
-    id: "w-2026-08-02",
-    weekStart: "2026-08-02T00:00:00.000Z",
-    memberId: "yonatan",
-    rating: 3,
-    headline: "שבוע בינוני, בעיקר בגלל התור",
-    body: "הכול טופל בסוף — אבל חלק מהפניות חיכו יומיים כי לא היה ברור למי הן שייכות. הפתק שנשאר אחריו: להגדיר בעלות לפני שהתור מתמלא, לא אחרי.",
-  },
-  {
-    id: "w-2026-07-26",
-    weekStart: "2026-07-26T00:00:00.000Z",
-    memberId: "shira",
-    rating: 5,
-    headline: "התקלה של הלקוח הגדול נסגרה תוך שעתיים",
-    body: "פנייה דחופה נכנסה ברבע לחמש ביום רביעי. שירה שחזרה, מצאה, תיקנה ועדכנה את הלקוח לפני שהוא הספיק לשאול שוב. שאר השבוע היה שקט.",
-  },
-  {
-    id: "w-2026-07-19",
-    weekStart: "2026-07-19T00:00:00.000Z",
-    memberId: "ori",
-    rating: 2,
-    headline: "שבוע קשה, ולא באשמת אף אחד",
-    body: "שבוע עמוס, שתי התראות לילה ותקלת רשת שלא הייתה שלנו בכלל. אורי החזיק את הראש מעל המים, אבל מהשבוע הזה יצאנו עם מסקנה אחת: שוטף אחד לא מספיק בשבוע שחרור גדול.",
-  },
-  {
-    id: "w-2026-07-12",
-    weekStart: "2026-07-12T00:00:00.000Z",
-    memberId: "maya",
-    rating: 4,
-    headline: "רוב הפניות בכלל לא היו באגים",
-    body: "כמעט כל מה שנכנס היה שאלות שימוש. מאיה ענתה, ואז כתבה מהן דף עזרה קצר שמאז חוסך לנו את אותן שאלות בדיוק.",
-  },
-];
+/**
+ * What the reviews page reads: the list plus the aggregate that heads it.
+ *
+ * Here rather than in the `server-only` half because the page hands the whole
+ * thing to a client component, which may not import `shotef-reviews.ts`.
+ */
+export type ShotefReviewList = {
+  reviews: ShotefReview[];
+  total: number;
+  /** Mean stars across **every** review, to one decimal. Zero when there are none. */
+  average: number;
+};
 
 /**
  * The face on the certificate's seal. The key is mapped to an icon in the view
@@ -222,6 +175,22 @@ export const AWARD_ICON_LABELS: Record<AwardIcon, string> = {
   index: "אינדקס",
 };
 
+/**
+ * One name on a certificate, resolved from `users` when the wall is read.
+ *
+ * A name rather than an id alone, and resolved on read rather than snapshotted:
+ * this is the `quote_comments` rule. `users` rows are never deleted — leaving
+ * the on-call rotation does not remove the user — so the name is always
+ * resolvable, a rename in the directory reaches every plaque at once, and a
+ * certificate cannot lose a recipient because the roster changed after it was
+ * earned.
+ */
+export type MonitorSolver = {
+  /** `users._id` as a hex string — the same row a theme or a review points at. */
+  id: string;
+  name: string;
+};
+
 /** A monitor that fired, and what it took to make it stop. */
 export type SolvedMonitor = {
   id: string;
@@ -235,12 +204,17 @@ export type SolvedMonitor = {
   /** How it was actually solved. The point of the whole page. */
   solution: string;
   /**
-   * Everyone whose name goes on the certificate, by `SHOTEF_ROSTER` id. Most
-   * pages were not silenced alone — the shotef holds the ticket, but whoever
-   * knew the subsystem is usually on the call too, and a wall that credits only
-   * one of them is a wall people stop trusting.
+   * Everyone whose name goes on the certificate, already resolved to a name by
+   * the server. Most pages were not silenced alone — the shotef holds the
+   * ticket, but whoever knew the subsystem is usually on the call too, and a
+   * wall that credits only one of them is a wall people stop trusting.
+   *
+   * Resolved rather than stored as bare ids the view has to look up in the
+   * rotation: the rotation is who is on call *now*, and a plaque that consults
+   * it loses a name the day its recipient leaves. The rotation gates the wheel
+   * and the podium, which is all it is the right authority for.
    */
-  solvedByIds: string[];
+  solvedBy: MonitorSolver[];
   /**
    * UTC midnight of the day the monitor first fired. Half the story of a
    * plaque is how long the thing was allowed to scream before anybody fixed
@@ -256,146 +230,22 @@ export type SolvedMonitor = {
   minutesToFix: number;
 };
 
-/** Newest first — the order the wall reads in. */
-export const HALL_OF_FAME: SolvedMonitor[] = [
-  {
-    id: "m-db-ram",
-    icon: "memory",
-    monitor: "db-prod-01: RAM above 95%",
-    solution:
-      "לא דליפה — שאילתת דוח חודשית רצה בלי אינדקס ומשכה את כל הטבלה לזיכרון. הוספנו אינדקס מורכב על tenant ועל created_at, וזמן הריצה ירד מארבע דקות לשתי שניות. הזיכרון חזר ל-40% ולא עלה מאז.",
-    solvedByIds: ["ori", "daniel"],
-    firstFiredAt: "2026-06-09T00:00:00.000Z",
-    solvedAt: "2026-08-18T00:00:00.000Z",
-    minutesToFix: 180,
-  },
-  {
-    id: "m-backup-stale",
-    icon: "backup",
-    monitor: "backup: last successful backup older than 48h",
-    solution:
-      "הגיבוי נכשל בשקט שלושה לילות אחרי ששינינו שם של דיסק — הסקריפט המשיך לדווח הצלחה כי בדק רק שהוא רץ, לא שהוא כתב. תיקנו את הנתיב, החלפנו את הבדיקה בקוד היציאה של המשימה, וגם שחזרנו גיבוי אחד כדי לוודא שיש מה לשחזר.",
-    solvedByIds: ["daniel"],
-    firstFiredAt: "2026-08-08T00:00:00.000Z",
-    solvedAt: "2026-08-11T00:00:00.000Z",
-    minutesToFix: 300,
-  },
-  {
-    id: "m-queue-lag",
-    icon: "loop",
-    monitor: "ingest-queue: consumer lag > 10k",
-    solution:
-      "צרכן אחד נתקע על הודעה פגומה וניסה אותה שוב ושוב בלולאה אינסופית. הוספנו תור מכתבים־מתים אחרי שלושה ניסיונות, והפעם גם התראה על התור הזה — כדי שהודעה פגומה תהיה שקופה במקום להיות שקטה.",
-    solvedByIds: ["yonatan", "itay"],
-    firstFiredAt: "2026-08-05T00:00:00.000Z",
-    solvedAt: "2026-08-06T00:00:00.000Z",
-    minutesToFix: 2160,
-  },
-  {
-    id: "m-tls-expiry",
-    icon: "certificate",
-    monitor: "gateway: TLS certificate expires in 3 days",
-    solution:
-      "חידוש ידני שאף אחד לא נזכר בו. חידשנו, ואז החלפנו את הזיכרון האנושי בקרון שמחדש 30 יום מראש ומדווח לערוץ. ההתראה נשארה — היא עכשיו רשת ביטחון ולא לוח שנה.",
-    solvedByIds: ["daniel"],
-    firstFiredAt: "2026-07-26T00:00:00.000Z",
-    solvedAt: "2026-07-29T00:00:00.000Z",
-    minutesToFix: 60,
-  },
-  {
-    id: "m-5xx-spike",
-    icon: "fire",
-    monitor: "api: 5xx rate above 2% for 5m",
-    solution:
-      "שחרור שהוסיף שדה חובה לבקשה בלי לעדכן את האפליקציה בנייד. החזרנו לאחור תוך אחת־עשרה דקות, ואז שחררנו מחדש כששני הצדדים מסונכרנים. מאז שדה חובה חדש עובר קודם דרך שלב שבו הוא עדיין אופציונלי.",
-    solvedByIds: ["itay", "yonatan"],
-    firstFiredAt: "2026-07-21T00:00:00.000Z",
-    solvedAt: "2026-07-21T00:00:00.000Z",
-    minutesToFix: 11,
-  },
-  {
-    id: "m-p95-latency",
-    icon: "latency",
-    monitor: "web: p95 latency above 2s",
-    solution:
-      "וידג׳ט חדש בדף הבית שאל את מסד הנתונים פעם אחת לכל שורה שהוא הציג — שמונים שאילתות בטעינה אחת. איחדנו אותן לשאילתה אחת, וה-p95 חזר מ-2.4 שניות ל-400 מילישניות.",
-    solvedByIds: ["itay", "maya"],
-    firstFiredAt: "2026-05-20T00:00:00.000Z",
-    solvedAt: "2026-07-06T00:00:00.000Z",
-    minutesToFix: 240,
-  },
-  {
-    id: "m-disk-logs",
-    icon: "disk",
-    monitor: "app-03: disk usage above 90%",
-    solution:
-      "לוגים בלי סבב. פינינו, הגדרנו logrotate יומי עם שמירה לשבועיים, והורדנו את רמת הלוג של הבריאות מ-debug ל-info. תפוסת הדיסק יציבה על 55%.",
-    solvedByIds: ["tamar"],
-    firstFiredAt: "2026-06-16T00:00:00.000Z",
-    solvedAt: "2026-06-30T00:00:00.000Z",
-    minutesToFix: 120,
-  },
-  {
-    id: "m-etl-nightly",
-    icon: "pipeline",
-    monitor: "etl: nightly export failed",
-    solution:
-      "המקור הוסיף עמודה, והטוען שלנו נפל על סכימה שלא הכיר. עכשיו הוא סופג עמודות שאינן מוכרות לו במקום ליפול, ומדווח עליהן בבוקר — טעינה שנכשלת היא בעיה, טעינה שמפתיעה היא רק ידיעה.",
-    solvedByIds: ["ori"],
-    firstFiredAt: "2026-06-13T00:00:00.000Z",
-    solvedAt: "2026-06-22T00:00:00.000Z",
-    minutesToFix: 90,
-  },
-  {
-    id: "m-ldap-timeouts",
-    icon: "network",
-    monitor: "auth: LDAP bind timeouts",
-    solution:
-      "לא אנחנו — בקר תחום אחד מתוך שלושה יצא מהאוויר, והקליינט המשיך לנסות דווקא אותו. פנינו לתשתיות, ובינתיים קיצרנו את הטיים־אאוט וסידרנו מעבר לבקר הבא ברשימה. הכניסה נשארה עובדת גם כשבקר נופל.",
-    solvedByIds: ["noa", "daniel"],
-    firstFiredAt: "2026-06-10T00:00:00.000Z",
-    solvedAt: "2026-06-11T00:00:00.000Z",
-    minutesToFix: 240,
-  },
-  {
-    id: "m-cache-stampede",
-    icon: "cache",
-    monitor: "cache: hit rate below 60%",
-    solution:
-      "כל המפתחות פגו באותה שנייה בדיוק, ואז כולם רצו יחד למסד הנתונים. פיזרנו את תוקף המפתחות באקראי בעד עשר אחוז, וההצלחה חזרה ל-94%.",
-    solvedByIds: ["maya"],
-    firstFiredAt: "2026-01-12T00:00:00.000Z",
-    solvedAt: "2026-05-24T00:00:00.000Z",
-    minutesToFix: 1440,
-  },
-  {
-    id: "m-search-index",
-    icon: "index",
-    monitor: "search: index rebuild stuck for 6h",
-    solution:
-      "בנייה מחדש שרצה על אותו מסמך פגום עד אינסוף. דילגנו עליו, המשכנו את הבנייה, ואז הוספנו לה יומן התקדמות — מאז בנייה תקועה נראית תקועה תוך דקות במקום תוך חצי יום.",
-    solvedByIds: ["ori", "tamar"],
-    firstFiredAt: "2025-03-02T00:00:00.000Z",
-    solvedAt: "2026-05-10T00:00:00.000Z",
-    minutesToFix: 150,
-  },
-];
-
 /**
- * Everyone named on a certificate, in the order they are written on it. Anyone
- * off the roster drops out rather than appearing nameless — the certificate is
- * still theirs, it just cannot say so.
+ * Everyone named on a certificate, in the order they are written on it.
+ *
+ * No roster: a plaque is a record of something that happened, and every name on
+ * it renders whether or not that person is still on the on-call rotation. All
+ * this does is fold out a name written twice — the schema dedupes before a
+ * write, so only a document that predates it can arrive doubled, and the view
+ * keys its list on the id.
  */
-export function solversOf(monitor: SolvedMonitor, roster: Member[]): Member[] {
-  return [...new Set(monitor.solvedByIds)].flatMap((id) => {
-    const member = memberById(id, roster);
-    return member ? [member] : [];
+export function solversOf(monitor: SolvedMonitor): MonitorSolver[] {
+  const seen = new Set<string>();
+  return monitor.solvedBy.filter((solver) => {
+    if (seen.has(solver.id)) return false;
+    seen.add(solver.id);
+    return true;
   });
-}
-
-/** The roster row a review or a monitor points at, or undefined once removed. */
-export function memberById(id: string, roster: Member[]): Member | undefined {
-  return roster.find((member) => member.id === id);
 }
 
 /** Average stars across the reviews, to one decimal. Zero when there are none. */
@@ -469,21 +319,6 @@ export const reviewInputSchema = z.object({
 export type ReviewInput = z.infer<typeof reviewInputSchema>;
 
 /**
- * A validated input as a card on the page. Like `newMonitor`, the id is minted
- * here only because nothing stores these yet.
- */
-export function newReview(input: ReviewInput): ShotefReview {
-  return {
-    id: `w-local-${crypto.randomUUID()}`,
-    weekStart: `${input.weekStart}T00:00:00.000Z`,
-    memberId: input.memberId,
-    rating: input.rating,
-    headline: input.headline,
-    body: input.body,
-  };
-}
-
-/**
  * Newest first. Nothing on this wall outranks anything else — a monitor that
  * woke someone at 03:00 and one that only ever annoyed us are both a thing
  * somebody finished — so the only ordering left is when it was finished.
@@ -492,7 +327,20 @@ export function byNewest(monitors: SolvedMonitor[]): SolvedMonitor[] {
   return [...monitors].sort((a, b) => b.solvedAt.localeCompare(a.solvedAt));
 }
 
-/** One row of the board: who has their name on how many plaques. */
+/**
+ * One row of the podium: who has their name on how many plaques.
+ *
+ * Only the type is here. The board itself is `getSolverBoard` in
+ * `shotef-monitors.ts`, counted across the whole collection by the database —
+ * the `getStandings` rule, and for the same reason: a leaderboard reduced over
+ * whatever list a client happens to hold is silently wrong the day that list
+ * stops being all of it, and a hall of fame only ever grows. There is no pure
+ * second spelling of it to keep in agreement.
+ *
+ * `member` is a `Member`, not a `MonitorSolver`, because the podium *is* the
+ * current rotation ranked — it carries the role and the gender a plaque cannot,
+ * since those live on the rotation document rather than on the `users` row.
+ */
 export type Solver = {
   member: Member;
   solved: number;
@@ -501,50 +349,29 @@ export type Solver = {
 };
 
 /**
- * The people behind the wall, most plaques first. Anyone no longer on the
- * roster drops out rather than appearing nameless — their monitors keep their
- * plaques, which is where the record actually lives.
+ * What the hall-of-fame page reads: the wall plus the two numbers beside it.
+ *
+ * Here rather than in the `server-only` half, for the same reason
+ * `ShotefReviewList` is: the page hands the whole thing to a client component,
+ * which may not import `shotef-monitors.ts`.
+ *
+ * Both aggregates are collection-wide and arrive already computed — the client
+ * has no pure second spelling of either, deliberately, so there is nothing to
+ * keep in agreement and no way for the podium to be a reduction over a partial
+ * list.
  */
-export function solverBoard(monitors: SolvedMonitor[], roster: Member[]): Solver[] {
-  const board = new Map<string, Solver>();
-
-  for (const monitor of monitors) {
-    // Through a Set, so a name written twice on one certificate still counts
-    // for one plaque — it is the certificates that are being counted here.
-    for (const member of solversOf(monitor, roster)) {
-      const row = board.get(member.id);
-      if (row) {
-        row.solved += 1;
-        if (monitor.solvedAt > row.lastSolved) row.lastSolved = monitor.solvedAt;
-      } else {
-        board.set(member.id, {
-          member,
-          solved: 1,
-          lastSolved: monitor.solvedAt,
-        });
-      }
-    }
-  }
-
-  return [...board.values()].sort(
-    (a, b) => b.solved - a.solved || b.lastSolved.localeCompare(a.lastSolved),
-  );
-}
+export type MonitorWall = {
+  monitors: SolvedMonitor[];
+  board: Solver[];
+  /** Null on an empty wall — there is no quickest save to name. */
+  fastest: SolvedMonitor | null;
+};
 
 /** Whole days the monitor was firing before it was finally silenced. */
 export function alertingDays(monitor: SolvedMonitor): number {
   const from = new Date(monitor.firstFiredAt).getTime();
   const to = new Date(monitor.solvedAt).getTime();
   return Math.max(0, Math.round((to - from) / (24 * 60 * 60 * 1000)));
-}
-
-/** The quickest save on the wall, or undefined on an empty one. */
-export function fastestFix(monitors: SolvedMonitor[]): SolvedMonitor | undefined {
-  return monitors.reduce<SolvedMonitor | undefined>(
-    (best, monitor) =>
-      !best || monitor.minutesToFix < best.minutesToFix ? monitor : best,
-    undefined,
-  );
 }
 
 /**
@@ -588,20 +415,3 @@ export const monitorInputSchema = z
   });
 
 export type MonitorInput = z.infer<typeof monitorInputSchema>;
-
-/**
- * A validated input as a plaque on the wall. The id is generated here because
- * nothing stores these yet — when something does, it will hand back its own.
- */
-export function newMonitor(input: MonitorInput): SolvedMonitor {
-  return {
-    id: `m-local-${crypto.randomUUID()}`,
-    icon: input.icon,
-    monitor: input.monitor,
-    solution: input.solution,
-    solvedByIds: input.solvedByIds,
-    firstFiredAt: `${input.firstFiredAt}T00:00:00.000Z`,
-    solvedAt: `${input.solvedAt}T00:00:00.000Z`,
-    minutesToFix: input.minutesToFix,
-  };
-}

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { usePathname, useRouter } from "next/navigation";
 import { toast } from "sonner";
 
 import { Field } from "@/components/field";
@@ -26,7 +27,6 @@ import {
   AWARD_ICONS,
   AWARD_ICON_LABELS,
   monitorInputSchema,
-  newMonitor,
   type AwardIcon,
   type SolvedMonitor,
 } from "@/lib/shotef-schema";
@@ -74,17 +74,21 @@ function emptyValues(): Values {
 export function MonitorFormDialog({
   open,
   onOpenChange,
-  onAdd,
+  onAdded,
   roster,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  /** Local only: the wall holds the new plaque, nothing is posted anywhere. */
-  onAdd: (monitor: SolvedMonitor) => void;
+  /** The record the server created, so the wall can show it before the refresh. */
+  onAdded: (monitor: SolvedMonitor) => void;
+  /** The on-call rotation: who may be named on a certificate from this form. */
   roster: Member[];
 }) {
+  const router = useRouter();
+  const pathname = usePathname();
   const [values, setValues] = useState<Values>(emptyValues);
   const [errors, setErrors] = useState<Record<string, string>>({});
+  const [saving, setSaving] = useState(false);
 
   function set<K extends keyof Values>(key: K, value: Values[K]) {
     setValues((current) => ({ ...current, [key]: value }));
@@ -114,8 +118,20 @@ export function MonitorFormDialog({
     });
   }
 
-  function handleSubmit(event: React.FormEvent) {
+  /**
+   * The two spans are one control on screen, so their error has to land on it.
+   * Applied to the server's issues as well as the local ones: the route
+   * re-validates with the same schema and keys its 422 the same way, and an
+   * error rendered under a field the form does not draw is invisible.
+   */
+  function onAmount(issues: Record<string, string>): Record<string, string> {
+    if (!issues.minutesToFix) return issues;
+    return { ...issues, amount: issues.minutesToFix };
+  }
+
+  async function handleSubmit(event: React.FormEvent) {
     event.preventDefault();
+    if (saving) return;
 
     const amount = Number(values.amount);
     const parsed = monitorInputSchema.safeParse({
@@ -134,22 +150,53 @@ export function MonitorFormDialog({
 
     if (!parsed.success) {
       // Keyed by field name, the same shape the other forms render from a
-      // server 422 — so this dialog needs no second error convention.
+      // server 422 — so this dialog needs no second error convention. Checked
+      // here for responsiveness only; the route re-validates with this same
+      // schema and its 422 is the authority.
       const issues: Record<string, string> = {};
       for (const issue of parsed.error.issues) {
         const key = String(issue.path[0] ?? "monitor");
         issues[key] ??= issue.message;
       }
-      // The two spans are one control here, so their error has to land on it.
-      if (issues.minutesToFix) issues.amount = issues.minutesToFix;
-      setErrors(issues);
+      setErrors(onAmount(issues));
       return;
     }
 
-    onAdd(newMonitor(parsed.data));
-    toast.success("התעודה נתלתה על הקיר");
-    setValues(emptyValues());
-    onOpenChange(false);
+    setSaving(true);
+    try {
+      const response = await fetch("/api/shotef/monitors", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(parsed.data),
+      });
+
+      const payload = await response.json().catch(() => null);
+
+      // The session can lapse while the form is open, so send them somewhere
+      // they can do something about it rather than just reporting failure.
+      if (response.status === 401) {
+        toast.error(payload?.error ?? "פג תוקף החיבור");
+        router.push(`/login?next=${encodeURIComponent(pathname)}`);
+        return;
+      }
+
+      if (!response.ok) {
+        if (payload?.issues) setErrors(onAmount(payload.issues));
+        toast.error(payload?.error ?? "לא הצלחנו לשמור את התעודה");
+        return;
+      }
+
+      // Shown at once, then re-seeded by the refresh — see `HallOfFame`.
+      onAdded(payload as SolvedMonitor);
+      toast.success("התעודה נתלתה על הקיר");
+      setValues(emptyValues());
+      router.refresh();
+      onOpenChange(false);
+    } catch {
+      toast.error("אין חיבור לשרת");
+    } finally {
+      setSaving(false);
+    }
   }
 
   return (
@@ -158,162 +205,168 @@ export function MonitorFormDialog({
         <DialogHeader>
           <DialogTitle>תעודה חדשה</DialogTitle>
           <DialogDescription>
-            איזה מוניטור השתקתם, ואיך. נשמר רק בדפדפן הזה, עד שיהיה לזה מסד
-            נתונים.
+            איזה מוניטור השתקתם, ואיך. נשמר לכולם, ונתלה על הקיר.
           </DialogDescription>
         </DialogHeader>
 
-        <form onSubmit={handleSubmit} className="space-y-5">
-          <Field
-            id="monitor"
-            label="שם המוניטור"
-            hint="כמו שהוא כתוב במערכת ההתראות"
-            error={errors.monitor}
-          >
-            <Input
-              id="monitor"
-              dir="ltr"
-              value={values.monitor}
-              onChange={(event) => set("monitor", event.target.value)}
-              maxLength={120}
-              placeholder="db-prod-01: RAM above 95%"
-              autoComplete="off"
-              className="font-mono"
-              aria-invalid={Boolean(errors.monitor)}
-            />
-          </Field>
-
-          <Field id="solution" label="איך פתרנו" error={errors.solution}>
-            <Textarea
-              id="solution"
-              value={values.solution}
-              onChange={(event) => set("solution", event.target.value)}
-              maxLength={1200}
-              rows={5}
-              placeholder="מה באמת גרם לזה, ומה עשיתם כדי שזה לא יחזור"
-              aria-invalid={Boolean(errors.solution)}
-            />
-          </Field>
-
-          {/* Every name on the certificate. A page is rarely silenced alone. */}
-          <Field id="solvers" label="מי פתר" error={errors.solvedByIds}>
-            <div id="solvers" className="flex flex-wrap gap-2">
-              {roster.map((member) => {
-                const picked = values.solvedByIds.includes(member.id);
-                return (
-                  <Button
-                    key={member.id}
-                    type="button"
-                    size="sm"
-                    variant={picked ? "default" : "outline"}
-                    aria-pressed={picked}
-                    onClick={() => toggleSolver(member.id)}
-                    className={cn(!picked && "text-muted-foreground")}
-                  >
-                    {member.name}
-                  </Button>
-                );
-              })}
-            </div>
-          </Field>
-
-          <div className="grid gap-5 sm:grid-cols-2">
+        {roster.length === 0 ? (
+          <p className="text-muted-foreground py-4 text-sm text-balance">
+            אין אף אחד בתורנות, אז אין למי להעניק את התעודה. מוסיפים אנשים בעמוד
+            התורנות, ואז חוזרים לכאן.
+          </p>
+        ) : (
+          <form onSubmit={handleSubmit} className="space-y-5">
             <Field
-              id="firstFiredAt"
-              label="מתי התחיל לצעוק"
-              error={errors.firstFiredAt}
+              id="monitor"
+              label="שם המוניטור"
+              hint="כמו שהוא כתוב במערכת ההתראות"
+              error={errors.monitor}
             >
               <Input
+                id="monitor"
+                dir="ltr"
+                value={values.monitor}
+                onChange={(event) => set("monitor", event.target.value)}
+                maxLength={120}
+                placeholder="db-prod-01: RAM above 95%"
+                autoComplete="off"
+                className="font-mono"
+                aria-invalid={Boolean(errors.monitor)}
+              />
+            </Field>
+
+            <Field id="solution" label="איך פתרנו" error={errors.solution}>
+              <Textarea
+                id="solution"
+                value={values.solution}
+                onChange={(event) => set("solution", event.target.value)}
+                maxLength={1200}
+                rows={5}
+                placeholder="מה באמת גרם לזה, ומה עשיתם כדי שזה לא יחזור"
+                aria-invalid={Boolean(errors.solution)}
+              />
+            </Field>
+
+            {/* Every name on the certificate. A page is rarely silenced alone. */}
+            <Field id="solvers" label="מי פתר" error={errors.solvedByIds}>
+              <div id="solvers" className="flex flex-wrap gap-2">
+                {roster.map((member) => {
+                  const picked = values.solvedByIds.includes(member.id);
+                  return (
+                    <Button
+                      key={member.id}
+                      type="button"
+                      size="sm"
+                      variant={picked ? "default" : "outline"}
+                      aria-pressed={picked}
+                      onClick={() => toggleSolver(member.id)}
+                      className={cn(!picked && "text-muted-foreground")}
+                    >
+                      {member.name}
+                    </Button>
+                  );
+                })}
+              </div>
+            </Field>
+
+            <div className="grid gap-5 sm:grid-cols-2">
+              <Field
                 id="firstFiredAt"
-                type="date"
-                value={values.firstFiredAt}
-                onChange={(event) => set("firstFiredAt", event.target.value)}
-                aria-invalid={Boolean(errors.firstFiredAt)}
-                className="[&::-webkit-calendar-picker-indicator]:cursor-pointer"
-              />
-            </Field>
-
-            <Field id="solvedAt" label="מתי הושתק" error={errors.solvedAt}>
-              <Input
-                id="solvedAt"
-                type="date"
-                value={values.solvedAt}
-                onChange={(event) => set("solvedAt", event.target.value)}
-                aria-invalid={Boolean(errors.solvedAt)}
-                className="[&::-webkit-calendar-picker-indicator]:cursor-pointer"
-              />
-            </Field>
-          </div>
-
-          <div className="grid gap-5 sm:grid-cols-2">
-            <Field id="amount" label="כמה זמן לקח לתקן" error={errors.amount}>
-              <div className="flex gap-2">
+                label="מתי התחיל לצעוק"
+                error={errors.firstFiredAt}
+              >
                 <Input
-                  id="amount"
-                  type="number"
-                  inputMode="numeric"
-                  min={1}
-                  value={values.amount}
-                  onChange={(event) => set("amount", event.target.value)}
-                  placeholder="3"
-                  aria-invalid={Boolean(errors.amount)}
+                  id="firstFiredAt"
+                  type="date"
+                  value={values.firstFiredAt}
+                  onChange={(event) => set("firstFiredAt", event.target.value)}
+                  aria-invalid={Boolean(errors.firstFiredAt)}
+                  className="[&::-webkit-calendar-picker-indicator]:cursor-pointer"
                 />
+              </Field>
+
+              <Field id="solvedAt" label="מתי הושתק" error={errors.solvedAt}>
+                <Input
+                  id="solvedAt"
+                  type="date"
+                  value={values.solvedAt}
+                  onChange={(event) => set("solvedAt", event.target.value)}
+                  aria-invalid={Boolean(errors.solvedAt)}
+                  className="[&::-webkit-calendar-picker-indicator]:cursor-pointer"
+                />
+              </Field>
+            </div>
+
+            <div className="grid gap-5 sm:grid-cols-2">
+              <Field id="amount" label="כמה זמן לקח לתקן" error={errors.amount}>
+                <div className="flex gap-2">
+                  <Input
+                    id="amount"
+                    type="number"
+                    inputMode="numeric"
+                    min={1}
+                    value={values.amount}
+                    onChange={(event) => set("amount", event.target.value)}
+                    placeholder="3"
+                    aria-invalid={Boolean(errors.amount)}
+                  />
+                  <Select
+                    value={values.unit}
+                    onValueChange={(value) => set("unit", value as Unit)}
+                  >
+                    <SelectTrigger aria-label="יחידת זמן" className="w-28">
+                      {/* Base UI renders the raw value unless told how to label it. */}
+                      <SelectValue>
+                        {(value: Unit) => UNITS[value].label}
+                      </SelectValue>
+                    </SelectTrigger>
+                    <SelectContent>
+                      {Object.entries(UNITS).map(([unit, { label }]) => (
+                        <SelectItem key={unit} value={unit}>
+                          {label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </Field>
+
+              <Field id="icon" label="חותם" error={errors.icon}>
                 <Select
-                  value={values.unit}
-                  onValueChange={(value) => set("unit", value as Unit)}
+                  value={values.icon}
+                  onValueChange={(value) => set("icon", value as AwardIcon)}
                 >
-                  <SelectTrigger aria-label="יחידת זמן" className="w-28">
-                    {/* Base UI renders the raw value unless told how to label it. */}
+                  <SelectTrigger id="icon" className="w-full">
                     <SelectValue>
-                      {(value: Unit) => UNITS[value].label}
+                      {(value: AwardIcon) => AWARD_ICON_LABELS[value]}
                     </SelectValue>
                   </SelectTrigger>
                   <SelectContent>
-                    {Object.entries(UNITS).map(([unit, { label }]) => (
-                      <SelectItem key={unit} value={unit}>
-                        {label}
+                    {AWARD_ICONS.map((icon) => (
+                      <SelectItem key={icon} value={icon}>
+                        {AWARD_ICON_LABELS[icon]}
                       </SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
-              </div>
-            </Field>
+              </Field>
+            </div>
 
-            <Field id="icon" label="חותם" error={errors.icon}>
-              <Select
-                value={values.icon}
-                onValueChange={(value) => set("icon", value as AwardIcon)}
+            <div className="flex flex-col-reverse gap-2 pt-1 sm:flex-row sm:justify-end">
+              <Button
+                type="button"
+                variant="outline"
+                size="lg"
+                onClick={() => onOpenChange(false)}
               >
-                <SelectTrigger id="icon" className="w-full">
-                  <SelectValue>
-                    {(value: AwardIcon) => AWARD_ICON_LABELS[value]}
-                  </SelectValue>
-                </SelectTrigger>
-                <SelectContent>
-                  {AWARD_ICONS.map((icon) => (
-                    <SelectItem key={icon} value={icon}>
-                      {AWARD_ICON_LABELS[icon]}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </Field>
-          </div>
-
-          <div className="flex flex-col-reverse gap-2 pt-1 sm:flex-row sm:justify-end">
-            <Button
-              type="button"
-              variant="outline"
-              size="lg"
-              onClick={() => onOpenChange(false)}
-            >
-              ביטול
-            </Button>
-            <Button type="submit" size="lg">
-              תליית התעודה
-            </Button>
-          </div>
-        </form>
+                ביטול
+              </Button>
+              <Button type="submit" size="lg" disabled={saving}>
+                {saving ? "שומר…" : "תליית התעודה"}
+              </Button>
+            </div>
+          </form>
+        )}
       </DialogContent>
     </Dialog>
   );

@@ -22,7 +22,7 @@ vi.mock("next/navigation", () => ({
 const NOW = "2026-08-26T09:00:00.000Z";
 
 /**
- * Deliberately not the `SHOTEF_ROSTER` fixture names — the point of the whole
+ * Deliberately not the seed's names — the point of the whole
  * change is that these come off the `rotation` collection, so a test that used
  * the fixture would pass just as well if the wiring were reverted.
  */

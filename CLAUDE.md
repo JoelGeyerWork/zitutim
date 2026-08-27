@@ -157,11 +157,12 @@ can drift from the DB rotation if the two lists of the same eight ever diverge.
 It is a smaller seam than two rosters, and collapsing `TEAM` into the rotation is
 what finally closes it.
 
-### שוטף: the rotation is stored, the other two tabs are not yet
+### שוטף: all three tabs are stored
 
-The on-call section is being moved off fixtures one tab at a time. **The
-rotation is done**; the weekly reviews and the hall of fame are still hard-coded
-and still write no further than React state.
+The on-call section was moved off fixtures one tab at a time, and none are
+left: the rotation, the weekly reviews (`shotef_reviews`) and the hall of fame
+(`shotef_monitors`) are all persisted, all session-gated on write, and all
+seeded by `--demo`.
 
 **The rotation is a second row in the `rotation` collection**, `_id: "shotef"`,
 not a collection of its own. `rotation.ts` takes a `RotationKey` on every
@@ -211,25 +212,54 @@ client-safe** (every type, every Zod schema, every pure date/maths helper, every
 label map) and `src/lib/shotef.ts` is the `server-only` Mongo layer that
 re-exports it. **Client components must import from `@/lib/shotef-schema`** —
 pulling `@/lib/shotef` into a `"use client"` file drags the Mongo driver into the
-browser bundle. `memberById`, `solversOf` and `solverBoard` take the roster as an
-argument now rather than closing over a list, since membership is a database
-read.
+browser bundle.
 
-What is still fixtures, and what to keep when it moves:
+#### A person is resolved from `users`, never from the rotation
 
-- `SHOTEF_REVIEWS` and `HALL_OF_FAME` live in `shotef-schema.ts` and FK against
-  **`SHOTEF_ROSTER`'s slug ids**, which is the only reason that list still
-  exists. Nothing else may reference it; it goes when they do.
-- **Their add buttons are not session-gated**, unlike every other section's. The
-  gate elsewhere hides a control whose API answers `401`; there is still nothing
-  to authorise. Each takes the gate when it takes a write path.
-- **`monitorInputSchema` and `reviewInputSchema` are in `shotef-schema.ts`, not
-  in their dialogs** — they are the shape a route handler will re-validate, and
-  the dialogs map their issues to a `Record<field, message>`, the same shape the
-  other forms render from a server `422`.
-- **Neither state holds a `seed` reconcile** like `QuoteFeed` does, because
-  nothing hands down a fresh `initial`. The day a `router.refresh()` does, they
-  need one.
+This is the rule the reviews and the wall are built on, and getting it wrong is
+invisible until somebody leaves the roster.
+
+A review stores `memberId` and a certificate stores `solvedBy` as `users._id`
+references, and **the Mongo layer joins to `users` to hand the view a name**.
+Resolving a person by searching the *current* on-call rotation — which is what
+`memberById(id, roster)` and the old roster-taking `solversOf` did — means every
+past summary they wrote reads "לא ידוע" the day they come off the roster, and
+their name vanishes from certificates they earned. A week that happened does not
+stop having had someone on duty.
+
+**Resolved on read, not snapshotted.** `users` rows are never deleted — leaving a
+rotation is not leaving the directory — so the name is always there, and a rename
+in AD reaches every past week at once. Same call as `quote_comments`, which
+stores `authorId` and no name; themes snapshot `broughtBy` instead only because
+it is one of the regex-searched fields.
+
+The rotation is still the authority for exactly two things: whose week it is, and
+who the podium ranks. **The podium drops people who are off the rotation and a
+plaque never does** — the leaderboard is of the current team, the certificate is
+of what happened. That asymmetry is deliberate; it has a test.
+
+One casualty worth knowing: the plaque used to conjugate "פתר/פתרה/פתרו" from the
+solver's gender. Gender lives on the *rotation document*, not the `users` row, so
+an off-rotation recipient has none — reintroducing that lookup would undo the
+rule above. The wall says the passive **"נפתר תוך"** instead.
+
+Three more things the two list tabs share:
+
+- **The aggregates are computed in the database**, not reduced over the loaded
+  page: the reviews' `average`, and the wall's `board` and `fastest`. Both lists
+  are unpaginated today, so an in-memory reduce would be exact — and would
+  silently start describing one screenful the day anyone adds a `limit`. Same
+  reasoning as `getStandings`.
+- **An optimistic add moves only what the client can honestly recompute.** The
+  new review updates the list *and* the average, because the client holds every
+  review there is. The new certificate moves the wall but **not** the podium or
+  the fastest fix; those re-arrive with the `router.refresh()` behind it.
+- **`monitorInputSchema` and `reviewInputSchema` live in `shotef-schema.ts`, not
+  in their dialogs** — they are the shape the route handler re-validates, and
+  each dialog renders both its own issues and the server's `422` from one
+  `Record<field, message>`. `MonitorFormDialog` remaps `minutesToFix` onto its
+  `amount` field for **both** sources: the route keys its 422 to a field the
+  form does not draw.
 
 Three things worth knowing about the math:
 
@@ -251,8 +281,9 @@ The wheel itself is shared: `RotationWheel` (was `MeetupWheel`) draws both
 rotations and knows about neither — the icon at its hub is the only thing that
 says which one you are looking at.
 
-`scripts/seed.mjs` creates the `shotef_reviews` and `shotef_monitors` indexes
-unconditionally, and `--demo` seeds both rotations from one `ROSTER_SEED`, whose
+`scripts/seed.mjs` creates the `shotef_reviews` (unique on `weekStart` — one
+week, one summary, enforced by the index and surfaced as a `409` rather than by
+a racy pre-check) and `shotef_monitors` indexes unconditionally, and `--demo` seeds both rotations from one `ROSTER_SEED`, whose
 rows now carry a **fixed `_id`** applied through `$setOnInsert`: a fresh database
 always gives the same person the same `users._id`, which is what lets later demo
 content be written against a known id. A database that already holds them keeps

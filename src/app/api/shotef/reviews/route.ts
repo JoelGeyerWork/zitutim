@@ -9,9 +9,9 @@ import {
 } from "@/lib/session";
 import {
   createShotefReview,
+  findReviewMember,
   getShotefReviews,
   reviewInputSchema,
-  reviewMemberExists,
 } from "@/lib/shotef-reviews";
 
 export const dynamic = "force-dynamic";
@@ -64,8 +64,10 @@ export async function POST(request: Request) {
   }
 
   // A member id that resolves to nobody is invalid input, not a server fault —
-  // the schema only knows the field is a non-empty string.
-  if (!(await reviewMemberExists(parsed.data.memberId))) {
+  // the schema only knows the field is a non-empty string. Resolved rather than
+  // merely checked, so the created record can name them without a second read.
+  const member = await findReviewMember(parsed.data.memberId);
+  if (!member) {
     return NextResponse.json(
       { error: "יש שדות לא תקינים", issues: { memberId: "לא נמצא ברשימה" } },
       { status: 422 },
@@ -75,7 +77,7 @@ export async function POST(request: Request) {
   try {
     // The author is the session, never the body: whose *week* it was is
     // `memberId`, and who wrote it up is a separate fact.
-    const review = await createShotefReview(parsed.data, {
+    const review = await createShotefReview(parsed.data, member, {
       id: session.id,
       name: session.name,
     });

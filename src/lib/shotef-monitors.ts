@@ -7,6 +7,8 @@ import { getShotefRotation } from "@/lib/shotef";
 import {
   type AwardIcon,
   type MonitorInput,
+  type MonitorSolver,
+  type MonitorWall,
   type SolvedMonitor,
   type Solver,
 } from "@/lib/shotef-schema";
@@ -66,18 +68,50 @@ export interface MonitorDoc {
  * field for them, and the wall credits the solvers rather than the clerk. They
  * are stored anyway, the way a quote records who logged it — the day the wall
  * wants a "הוסיף/ה" line the data is already there rather than starting empty.
+ *
+ * `names` resolves the stored ids; an id it has no entry for is dropped rather
+ * than rendered nameless. That can only happen if a `users` row disappeared,
+ * which nothing here does — leaving the rotation does not delete the user, and
+ * that is exactly why the wall joins to `users` instead of to the rotation.
  */
-function serialize(doc: MonitorDoc): SolvedMonitor {
+function serialize(doc: MonitorDoc, names: Map<string, string>): SolvedMonitor {
   return {
     id: doc._id.toHexString(),
     icon: doc.icon,
     monitor: doc.monitor,
     solution: doc.solution,
-    solvedByIds: doc.solvedByIds.map((id) => id.toHexString()),
+    solvedBy: doc.solvedByIds.flatMap((id) => {
+      const hex = id.toHexString();
+      const name = names.get(hex);
+      return name ? [{ id: hex, name }] : [];
+    }),
     firstFiredAt: doc.firstFiredAt.toISOString(),
     solvedAt: doc.solvedAt.toISOString(),
     minutesToFix: doc.minutesToFix,
   };
+}
+
+/**
+ * Current display names for every id named on `docs`, in one query.
+ *
+ * Resolved on read rather than snapshotted onto the certificate — the
+ * `quote_comments` rule: a rename in the directory reaches every plaque at
+ * once, and there is no stale copy of a name to go looking for. One `$in` over
+ * the union rather than a lookup per plaque, so a wall of any size is two
+ * commands.
+ */
+async function resolveNames(docs: MonitorDoc[]): Promise<Map<string, string>> {
+  const ids = [
+    ...new Set(docs.flatMap((doc) => doc.solvedByIds.map((id) => id.toHexString()))),
+  ];
+  if (ids.length === 0) return new Map();
+
+  const rows = await (await usersCollection())
+    .find({ _id: { $in: ids.map((id) => new ObjectId(id)) } })
+    .project<{ _id: ObjectId; displayName: string }>({ displayName: 1 })
+    .toArray();
+
+  return new Map(rows.map((row) => [row._id.toHexString(), row.displayName]));
 }
 
 async function monitors(): Promise<Collection<MonitorDoc>> {
@@ -105,24 +139,31 @@ const SORT: Record<string, 1 | -1> = { solvedAt: -1, _id: -1 };
 export async function listMonitors(): Promise<SolvedMonitor[]> {
   const collection = await monitors();
   const docs = await collection.find({}).sort(SORT).toArray();
-  return docs.map(serialize);
+  const names = await resolveNames(docs);
+  return docs.map((doc) => serialize(doc, names));
 }
 
 /**
- * Check that every name on the certificate is somebody this app knows.
+ * Check that every name on the certificate is somebody this app knows, and
+ * resolve it while we are there.
  *
  * A hex id that resolves to no user is invalid input, not a server fault — so
  * this reports an issue the route surfaces as a 422 rather than writing a
  * dangling reference and leaving the wall to render a plaque with nobody on it.
+ * The names come back in the order they were written on the certificate, so the
+ * created record can be handed straight back without a second lookup.
  *
  * Membership of the on-call rotation is deliberately *not* required: most pages
  * are not silenced alone, and whoever knew the subsystem is often not the shotef
  * — the certificate can credit anyone in `users`. The podium is the part that
- * only ranks the roster, which is `solverBoard`'s documented behaviour.
+ * only ranks the roster, which is `getSolverBoard`'s documented behaviour.
  */
 export async function resolveSolvers(
   solvedByIds: string[],
-): Promise<{ ok: true } | { ok: false; issues: Record<string, string> }> {
+): Promise<
+  | { ok: true; solvers: MonitorSolver[] }
+  | { ok: false; issues: Record<string, string> }
+> {
   const unknown = { ok: false as const, issues: { solvedByIds: "אחד מהשמות לא נמצא ברשימה" } };
 
   // Guarded before constructing: `new ObjectId` throws on a malformed string,
@@ -131,17 +172,28 @@ export async function resolveSolvers(
 
   const rows = await (await usersCollection())
     .find({ _id: { $in: solvedByIds.map((id) => new ObjectId(id)) } })
-    .project({ _id: 1 })
+    .project<{ _id: ObjectId; displayName: string }>({ displayName: 1 })
     .toArray();
 
   // The schema has already deduped, so a short count means someone is missing.
   if (rows.length !== solvedByIds.length) return unknown;
-  return { ok: true };
+
+  const byId = new Map(rows.map((row) => [row._id.toHexString(), row.displayName]));
+  return {
+    ok: true,
+    solvers: solvedByIds.map((id) => ({ id, name: byId.get(id)! })),
+  };
 }
 
+/**
+ * `solvers` is what `resolveSolvers` already looked up while validating the
+ * input — passed in rather than resolved again, so the write path reads `users`
+ * once.
+ */
 export async function createMonitor(
   input: MonitorInput,
   actor: MonitorActor,
+  solvers: MonitorSolver[],
 ): Promise<SolvedMonitor> {
   const collection = await monitors();
   const doc: Omit<MonitorDoc, "_id"> = {
@@ -160,7 +212,11 @@ export async function createMonitor(
   };
 
   const result = await collection.insertOne(doc as MonitorDoc);
-  return serialize({ ...doc, _id: result.insertedId });
+  // The names are the ones just validated, not a second read of `users`.
+  return serialize(
+    { ...doc, _id: result.insertedId },
+    new Map(solvers.map((solver) => [solver.id, solver.name])),
+  );
 }
 
 interface SolverGroup {
@@ -174,16 +230,16 @@ interface SolverGroup {
  *
  * This is the `getStandings` rule, for the same reason: an aggregate reduced
  * over whatever the client happens to hold is silently wrong the day the list
- * stops being the whole collection, and a hall of fame only ever grows. The
- * pure `solverBoard` in `shotef-schema.ts` stays — it is what the client folds
- * an optimistic new certificate into — and a test pins the two to the same
- * answer over the same data so they cannot drift.
+ * stops being the whole collection, and a hall of fame only ever grows. There
+ * is deliberately no pure second spelling left in `shotef-schema.ts` — one
+ * answer to "who leads the wall" is one answer to keep correct.
  *
- * Anyone no longer on the rotation drops out rather than appearing nameless,
- * exactly as `solverBoard` documents: their plaques keep their names, which is
- * where the record actually lives. Note this differs from `getStandings`, which
- * can keep an ex-guesser through the display-name snapshot on the theme — a
- * certificate has no such snapshot to fall back on.
+ * Anyone no longer on the rotation drops out rather than appearing nameless.
+ * That is the half of §8 the rotation is still the right authority for: the
+ * podium ranks the *current* team, while their plaques keep their names, which
+ * is where the record actually lives. It also has no choice — `Solver` carries
+ * a role and a gender, and both live on the rotation document rather than on
+ * the `users` row a certificate joins to.
  */
 export async function getSolverBoard(): Promise<Solver[]> {
   const collection = await monitors();
@@ -242,8 +298,9 @@ export async function getSolverBoard(): Promise<Solver[]> {
 
 /**
  * The quickest save on the wall, across the whole collection for the same reason
- * the board is. The tie-break mirrors the pure `fastestFix` reading a
- * newest-first wall: on equal minutes the more recent save wins.
+ * the board is. On equal minutes the more recent save wins — the order a
+ * newest-first wall would have picked out anyway — and `_id` closes the sort so
+ * two identical saves cannot swap places between reads.
  */
 export async function getFastestFix(): Promise<SolvedMonitor | undefined> {
   const collection = await monitors();
@@ -252,5 +309,22 @@ export async function getFastestFix(): Promise<SolvedMonitor | undefined> {
     .sort({ minutesToFix: 1, solvedAt: -1, _id: -1 })
     .limit(1)
     .toArray();
-  return doc ? serialize(doc) : undefined;
+  return doc ? serialize(doc, await resolveNames([doc])) : undefined;
+}
+
+/**
+ * Everything the hall-of-fame page renders, in the fewest round trips.
+ *
+ * The page and `GET /api/shotef/monitors` both read *this*, rather than each
+ * assembling the three calls themselves — a client that refetches after a write
+ * must not be able to get a differently-shaped wall than the one the server
+ * rendered.
+ */
+export async function getHallOfFame(): Promise<MonitorWall> {
+  const [monitorList, board, fastest] = await Promise.all([
+    listMonitors(),
+    getSolverBoard(),
+    getFastestFix(),
+  ]);
+  return { monitors: monitorList, board, fastest: fastest ?? null };
 }

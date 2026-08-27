@@ -4,11 +4,12 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { getDb } from "@/lib/mongodb";
 import {
   createShotefReview,
+  findReviewMember,
   getReviewStats,
   getShotefReviews,
   listShotefReviews,
-  reviewMemberExists,
   type ReviewActor,
+  type ReviewMember,
   type ShotefReviewDoc,
 } from "@/lib/shotef-reviews";
 import { type ReviewInput } from "@/lib/shotef-schema";
@@ -57,6 +58,16 @@ function input(overrides: Partial<ReviewInput> = {}): ReviewInput {
   };
 }
 
+/** The resolved row the route hands the create, keyed by display name. */
+function member(name = "דניאל עמר"): ReviewMember {
+  return { id: idByName[name], name };
+}
+
+/** `createShotefReview(input(), member(), AUTHOR)`, which is most of the file. */
+function create(overrides: Partial<ReviewInput> = {}, name?: string) {
+  return createShotefReview(input(overrides), member(name), AUTHOR);
+}
+
 beforeEach(async () => {
   const db = await getDb();
   await db.collection("shotef_reviews").deleteMany({});
@@ -66,7 +77,7 @@ beforeEach(async () => {
 
 describe("createShotefReview", () => {
   it("stores weekStart at UTC midnight and memberId as an ObjectId", async () => {
-    const review = await createShotefReview(input(), AUTHOR);
+    const review = await create();
 
     expect(review.id).toMatch(/^[a-f0-9]{24}$/);
     expect(review.weekStart).toBe("2026-08-16T00:00:00.000Z");
@@ -85,7 +96,7 @@ describe("createShotefReview", () => {
   });
 
   it("records who typed it in from the actor, never from the input", async () => {
-    const review = await createShotefReview(input(), AUTHOR);
+    const review = await create();
 
     const db = await getDb();
     const doc = await db
@@ -101,7 +112,7 @@ describe("createShotefReview", () => {
   });
 
   it("keeps a rating of zero, which is a real score", async () => {
-    const review = await createShotefReview(input({ rating: 0 }), AUTHOR);
+    const review = await create({ rating: 0 });
     expect(review.rating).toBe(0);
 
     const stored = await listShotefReviews();
@@ -114,11 +125,11 @@ describe("createShotefReview", () => {
       .collection("shotef_reviews")
       .createIndex({ weekStart: -1 }, { unique: true });
 
-    await createShotefReview(input(), AUTHOR);
+    await create();
     await expect(
-      createShotefReview(
-        input({ memberId: idByName["תמר רוזן"], headline: "אותו שבוע, סיפור אחר" }),
-        AUTHOR,
+      create(
+        { memberId: idByName["תמר רוזן"], headline: "אותו שבוע, סיפור אחר" },
+        "תמר רוזן",
       ),
     ).rejects.toMatchObject({ code: 11000 });
 
@@ -130,9 +141,9 @@ describe("createShotefReview", () => {
 
 describe("listShotefReviews", () => {
   it("reads newest week first, whatever order they were written in", async () => {
-    await createShotefReview(input({ weekStart: "2026-08-02" }), AUTHOR);
-    await createShotefReview(input({ weekStart: "2026-08-16" }), AUTHOR);
-    await createShotefReview(input({ weekStart: "2026-08-09" }), AUTHOR);
+    await create({ weekStart: "2026-08-02" });
+    await create({ weekStart: "2026-08-16" });
+    await create({ weekStart: "2026-08-09" });
 
     const list = await listShotefReviews();
     expect(list.map((review) => review.weekStart)).toEqual([
@@ -155,7 +166,7 @@ describe("getReviewStats", () => {
       ["2026-08-02", 3],
       ["2026-07-26", 5],
     ] as const) {
-      await createShotefReview(input({ weekStart: week, rating }), AUTHOR);
+      await create({ weekStart: week, rating });
     }
 
     // 17 / 4 = 4.25 → 4.3, the same rounding `averageRating` applies.
@@ -163,8 +174,8 @@ describe("getReviewStats", () => {
   });
 
   it("counts a zero rating rather than skipping it", async () => {
-    await createShotefReview(input({ weekStart: "2026-08-16", rating: 0 }), AUTHOR);
-    await createShotefReview(input({ weekStart: "2026-08-09", rating: 4 }), AUTHOR);
+    await create({ weekStart: "2026-08-16", rating: 0 });
+    await create({ weekStart: "2026-08-09", rating: 4 });
 
     await expect(getReviewStats()).resolves.toEqual({ total: 2, average: 2 });
   });
@@ -176,8 +187,8 @@ describe("getReviewStats", () => {
 
 describe("getShotefReviews", () => {
   it("returns the list and the aggregate together", async () => {
-    await createShotefReview(input({ weekStart: "2026-08-16", rating: 5 }), AUTHOR);
-    await createShotefReview(input({ weekStart: "2026-08-09", rating: 2 }), AUTHOR);
+    await create({ weekStart: "2026-08-16", rating: 5 });
+    await create({ weekStart: "2026-08-09", rating: 2 });
 
     const page = await getShotefReviews();
     expect(page.reviews).toHaveLength(2);
@@ -186,13 +197,19 @@ describe("getShotefReviews", () => {
   });
 });
 
-describe("reviewMemberExists", () => {
-  it("is true for a seeded user and false for anything else", async () => {
-    await expect(reviewMemberExists(idByName["תמר רוזן"])).resolves.toBe(true);
-    await expect(reviewMemberExists("0".repeat(24))).resolves.toBe(false);
+describe("findReviewMember", () => {
+  it("resolves a seeded user to the name the review will carry", async () => {
+    await expect(findReviewMember(idByName["תמר רוזן"])).resolves.toEqual({
+      id: idByName["תמר רוזן"],
+      name: "תמר רוזן",
+    });
+  });
+
+  it("answers null for anything that is not a known user", async () => {
+    await expect(findReviewMember("0".repeat(24))).resolves.toBeNull();
     // The schema takes any non-empty string, so a slug reaches this unparsed —
-    // it must answer false rather than throw on an invalid ObjectId.
-    await expect(reviewMemberExists("tamar")).resolves.toBe(false);
-    await expect(reviewMemberExists("")).resolves.toBe(false);
+    // it must answer null rather than throw on an invalid ObjectId.
+    await expect(findReviewMember("tamar")).resolves.toBeNull();
+    await expect(findReviewMember("")).resolves.toBeNull();
   });
 });

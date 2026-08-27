@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { GET, POST } from "@/app/api/shotef/monitors/route";
 import { type DirectoryPerson } from "@/lib/directory-schema";
 import { getDb } from "@/lib/mongodb";
-import { addShotefMember } from "@/lib/shotef";
+import { addShotefMember, removeShotefMember } from "@/lib/shotef";
 import { upsertRosterUser } from "@/lib/users";
 import { sessionCookie } from "./factories";
 
@@ -100,6 +100,22 @@ describe("GET /api/shotef/monitors", () => {
     expect(fastest.monitor).toBe("quick one");
   });
 
+  /**
+   * §8 end to end: the plaque keeps the name, the podium loses the row. The
+   * rotation gates the leaderboard, which is a ranking of the current team; a
+   * certificate is a record of something that happened.
+   */
+  it("keeps a departed solver on their plaque but off the podium", async () => {
+    await post(body({ solvedByIds: [userId["אורי בן־חיים"]] }));
+    await removeShotefMember(userId["אורי בן־חיים"]);
+
+    const { monitors, board } = await (await GET()).json();
+    expect(monitors[0].solvedBy).toEqual([
+      { id: userId["אורי בן־חיים"], name: "אורי בן־חיים" },
+    ]);
+    expect(board).toEqual([]);
+  });
+
   it("answers an empty wall without inventing a fastest fix", async () => {
     const { monitors, board, fastest } = await (await GET()).json();
     expect(monitors).toEqual([]);
@@ -118,7 +134,11 @@ describe("POST /api/shotef/monitors", () => {
     expect(monitor.monitor).toBe("db-prod-01: RAM above 95%");
     expect(monitor.firstFiredAt).toBe("2026-06-09T00:00:00.000Z");
     expect(monitor.solvedAt).toBe("2026-08-18T00:00:00.000Z");
-    expect(monitor.solvedByIds).toEqual([userId["אורי בן־חיים"]]);
+    // The record comes back with the names already resolved, so the wall can
+    // hang the plaque without a second read.
+    expect(monitor.solvedBy).toEqual([
+      { id: userId["אורי בן־חיים"], name: "אורי בן־חיים" },
+    ]);
   });
 
   it("keeps every name on a certificate more than one person earned", async () => {
@@ -127,16 +147,16 @@ describe("POST /api/shotef/monitors", () => {
     );
 
     const monitor = await response.json();
-    expect(monitor.solvedByIds).toEqual([
-      userId["אורי בן־חיים"],
-      userId["דניאל עמר"],
+    expect(monitor.solvedBy.map((s: { name: string }) => s.name)).toEqual([
+      "אורי בן־חיים",
+      "דניאל עמר",
     ]);
   });
 
   it("dedupes a name sent twice rather than counting it twice", async () => {
     const id = userId["אורי בן־חיים"];
     const monitor = await (await post(body({ solvedByIds: [id, id] }))).json();
-    expect(monitor.solvedByIds).toEqual([id]);
+    expect(monitor.solvedBy).toEqual([{ id, name: "אורי בן־חיים" }]);
 
     const { board } = await (await GET()).json();
     expect(board[0].solved).toBe(1);

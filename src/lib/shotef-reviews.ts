@@ -3,7 +3,11 @@ import "server-only";
 import { ObjectId, type Collection } from "mongodb";
 
 import { getDb } from "@/lib/mongodb";
-import { type ReviewInput, type ShotefReview } from "@/lib/shotef-schema";
+import {
+  type ReviewInput,
+  type ShotefReview,
+  type ShotefReviewList,
+} from "@/lib/shotef-schema";
 import { type UserDoc } from "@/lib/users";
 
 export * from "@/lib/shotef-schema";
@@ -22,6 +26,22 @@ export interface ReviewActor {
   /** `users._id` as a hex string. */
   id: string;
   /** AD display name, snapshotted onto `addedBy`. */
+  name: string;
+}
+
+/**
+ * The person a summary is *about*, resolved out of `users` before it is stored.
+ *
+ * Deliberately not a snapshot on the document: the name is looked up again on
+ * every read (see `listShotefReviews`), so a week keeps its author after they
+ * leave the on-call rotation and a rename in AD reaches every past week at
+ * once. This shape only exists so the write path can answer "who was that?"
+ * once — for the route's 422 and for the record it hands back — instead of
+ * twice.
+ */
+export interface ReviewMember {
+  /** `users._id` as a hex string. */
+  id: string;
   name: string;
 }
 
@@ -56,19 +76,18 @@ export interface ShotefReviewDoc {
   createdAt: Date;
 }
 
-/** What the page reads: the list plus the aggregate that heads it. */
-export interface ShotefReviewList {
-  reviews: ShotefReview[];
-  total: number;
-  /** Mean stars across **every** review, to one decimal. Zero when there are none. */
-  average: number;
-}
+/** A stored review with the name the `$lookup` below resolved for it. */
+type JoinedReviewDoc = ShotefReviewDoc & { memberName?: string | null };
 
-function serialize(doc: ShotefReviewDoc): ShotefReview {
+function serialize(doc: JoinedReviewDoc): ShotefReview {
   return {
     id: doc._id.toHexString(),
     weekStart: doc.weekStart.toISOString(),
     memberId: doc.memberId.toHexString(),
+    // Empty rather than a placeholder: `users` rows are never deleted, so a
+    // miss here means the row is genuinely gone, and naming the hole is the
+    // view's job, not the data layer's.
+    memberName: doc.memberName ?? "",
     rating: doc.rating,
     headline: doc.headline,
     body: doc.body,
@@ -87,9 +106,35 @@ async function reviews(): Promise<Collection<ShotefReviewDoc>> {
  */
 const SORT: Record<string, 1 | -1> = { weekStart: -1, _id: -1 };
 
-/** Every summary, newest week first. Deliberately unpaginated — see the route. */
+/**
+ * Every summary, newest week first, each with its shotef's *current* name.
+ * Deliberately unpaginated — see the route.
+ *
+ * The name is joined here rather than snapshotted on the document, and it is
+ * joined against `users` rather than looked up in the on-call rotation. Both
+ * halves matter: a review is a record of a week that happened, so leaving the
+ * rotation must not blank out its author, and `users` rows are never deleted,
+ * so the name is always there to resolve. `quote_comments` is the precedent.
+ */
 export async function listShotefReviews(): Promise<ShotefReview[]> {
-  const docs = await (await reviews()).find({}).sort(SORT).toArray();
+  const docs = await (await reviews())
+    .aggregate<JoinedReviewDoc>([
+      { $sort: SORT },
+      {
+        $lookup: {
+          from: "users",
+          localField: "memberId",
+          foreignField: "_id",
+          as: "member",
+        },
+      },
+      // A `users._id` is unique, so the join is one row or none — flattened
+      // here so nothing downstream has to know it arrived as an array.
+      { $set: { memberName: { $arrayElemAt: ["$member.displayName", 0] } } },
+      { $unset: "member" },
+    ])
+    .toArray();
+
   return docs.map(serialize);
 }
 
@@ -136,29 +181,44 @@ export async function getShotefReviews(): Promise<ShotefReviewList> {
 }
 
 /**
- * Whether `memberId` names a real `users` row. `reviewInputSchema` only knows
- * the field is a non-empty string, so an id that resolves to nobody is invalid
- * *input* — the route turns this into a 422 on that field rather than letting
- * the insert succeed against a member who does not exist.
+ * The `users` row `memberId` names, or null when it names nobody.
+ *
+ * `reviewInputSchema` only knows the field is a non-empty string, so an id that
+ * resolves to no one is invalid *input* — the route turns a null here into a
+ * 422 on that field rather than letting the insert succeed against a member who
+ * does not exist. It comes back with the name attached because the created
+ * record has to carry one, and asking twice for the same row would be silly.
  */
-export async function reviewMemberExists(memberId: string): Promise<boolean> {
-  if (!ObjectId.isValid(memberId)) return false;
+export async function findReviewMember(
+  memberId: string,
+): Promise<ReviewMember | null> {
+  if (!ObjectId.isValid(memberId)) return null;
   const db = await getDb();
   const row = await db
     .collection<UserDoc>("users")
-    .findOne({ _id: new ObjectId(memberId) }, { projection: { _id: 1 } });
-  return row !== null;
+    .findOne(
+      { _id: new ObjectId(memberId) },
+      { projection: { _id: 1, displayName: 1 } },
+    );
+  if (!row) return null;
+  return { id: row._id.toHexString(), name: row.displayName };
 }
 
+/**
+ * `member` is the row `findReviewMember` already resolved, not `input.memberId`
+ * — so this cannot store an FK that points at nobody, and the record it hands
+ * back can carry the name without a second read.
+ */
 export async function createShotefReview(
   input: ReviewInput,
+  member: ReviewMember,
   actor: ReviewActor,
 ): Promise<ShotefReview> {
   const collection = await reviews();
   const doc: Omit<ShotefReviewDoc, "_id"> = {
     // "2026-08-16" parses as UTC midnight, which is exactly how it is stored.
     weekStart: new Date(input.weekStart),
-    memberId: new ObjectId(input.memberId),
+    memberId: new ObjectId(member.id),
     rating: input.rating,
     headline: input.headline,
     body: input.body,
@@ -172,5 +232,5 @@ export async function createShotefReview(
   // pre-check `findOne`, which races two people writing up the same week — and
   // the picker dropping already-reviewed weeks is a courtesy, not enforcement.
   const result = await collection.insertOne(doc as ShotefReviewDoc);
-  return serialize({ ...doc, _id: result.insertedId });
+  return serialize({ ...doc, _id: result.insertedId, memberName: member.name });
 }
