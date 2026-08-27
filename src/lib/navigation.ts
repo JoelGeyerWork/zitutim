@@ -1,5 +1,6 @@
 import {
   CalendarDaysIcon,
+  CircleHelpIcon,
   HomeIcon,
   LightbulbIcon,
   ListOrderedIcon,
@@ -69,6 +70,7 @@ export const SECTIONS: Section[] = [
     tabs: [
       { href: "/quotes", label: "הפיד", icon: QuoteIcon },
       { href: "/quotes/search", label: "חיפוש", icon: SearchIcon },
+      { href: "/quotes/game", label: "מי אמר?", icon: CircleHelpIcon },
       { href: "/quotes/create", label: "ציטוט חדש", icon: PlusIcon },
     ],
   },

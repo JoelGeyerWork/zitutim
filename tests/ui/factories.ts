@@ -1,4 +1,4 @@
-import type { Quote } from "@/lib/quote-schema";
+import type { Quote, QuoteGameRound } from "@/lib/quote-schema";
 import type { QuoteComment } from "@/lib/engagement-schema";
 import type {
   Standing,
@@ -24,6 +24,20 @@ export function makeQuote(overrides: Partial<Quote> = {}): Quote {
     commentCount: 0,
     likedByViewer: false,
     commentsPreview: [],
+    ...overrides,
+  };
+}
+
+export function makeGameRound(
+  overrides: Partial<QuoteGameRound> = {},
+): QuoteGameRound {
+  return {
+    id: "6a0000000000000000000001",
+    text: "תמיד יש זמן לעוד קפה אחד",
+    saidAt: "2026-07-28T00:00:00.000Z",
+    context: "לפני הריטרו",
+    correctAuthor: "דנה",
+    options: ["דנה", "עומר", "נועה", "איתי"],
     ...overrides,
   };
 }

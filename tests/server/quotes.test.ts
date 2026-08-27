@@ -5,6 +5,7 @@ import {
   createQuote,
   deleteQuote,
   getQuote,
+  getQuoteGame,
   getStats,
   listQuotes,
   updateQuote,
@@ -312,6 +313,90 @@ describe("listQuotes", () => {
       "עומר",
       "דנה",
     ]);
+  });
+});
+
+describe("getQuoteGame", () => {
+  it("needs quotes from at least two authors", async () => {
+    await expect(getQuoteGame()).resolves.toEqual([]);
+
+    await create({ author: "דנה" });
+    await create({ author: "דנה", text: "עוד ציטוט של דנה" });
+
+    await expect(getQuoteGame()).resolves.toEqual([]);
+  });
+
+  it("returns unique random rounds with the right answer among the options", async () => {
+    const authors = ["דנה", "עומר", "נועה", "איתי", "מיכל"];
+    for (let index = 0; index < 12; index++) {
+      await create({
+        text: `ציטוט למשחק ${index}`,
+        author: authors[index % authors.length],
+      });
+    }
+
+    const rounds = await getQuoteGame();
+
+    expect(rounds).toHaveLength(10);
+    expect(new Set(rounds.map((round) => round.id)).size).toBe(10);
+    for (const round of rounds) {
+      expect(round.options).toContain(round.correctAuthor);
+      expect(round.options).toHaveLength(4);
+      expect(new Set(round.options).size).toBe(round.options.length);
+      expect(round.saidAt).toBe("2026-07-28T00:00:00.000Z");
+    }
+  });
+
+  it("uses every available author when there are fewer than four", async () => {
+    await create({ author: "דנה" });
+    await create({ author: "עומר" });
+
+    const rounds = await getQuoteGame();
+
+    expect(rounds).toHaveLength(2);
+    for (const round of rounds) {
+      expect(new Set(round.options)).toEqual(new Set(["דנה", "עומר"]));
+    }
+  });
+
+  it("does not sample leftover quotes with a blank author", async () => {
+    await create({ author: "דנה" });
+    await create({ author: "עומר" });
+    const db = await getDb();
+    await db.collection("quotes").insertMany([
+      {
+        text: "אין שם",
+        author: "   ",
+        saidAt: new Date("2026-07-28"),
+        context: null,
+        addedBy: null,
+        addedById: null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      },
+      {
+        text: "גם אין שם",
+        author: "",
+        saidAt: new Date("2026-07-28"),
+        context: null,
+        addedBy: null,
+        addedById: null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      },
+    ]);
+
+    const rounds = await getQuoteGame();
+    expect(rounds.map((round) => round.correctAuthor).sort()).toEqual([
+      "דנה",
+      "עומר",
+    ]);
+    for (const round of rounds) {
+      expect(round.correctAuthor.trim().length).toBeGreaterThan(0);
+      expect(round.options.every((option) => option.trim().length > 0)).toBe(
+        true,
+      );
+    }
   });
 });
 
