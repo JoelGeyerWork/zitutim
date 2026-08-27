@@ -27,8 +27,10 @@ export * from "@/lib/shotef-schema";
  * of that module to this rotation's key, so the two can never diverge in
  * behaviour — only in which row they touch.
  *
- * The weekly reviews and the hall of fame are still fixtures in
- * `shotef-schema.ts`; they get their own collections when their tabs move.
+ * The weekly reviews and the hall of fame have their own collections and their
+ * own modules — `shotef-reviews.ts` and `shotef-monitors.ts`. Neither goes
+ * through here: they reference `users` directly, so a name on a past week or a
+ * certificate does not depend on who is in this rotation today.
  */
 export const SHOTEF_ROTATION: RotationKey = "shotef";
 

@@ -11,7 +11,7 @@
  * Client-safe on purpose — no `server-only`, no database — like `team.ts`.
  */
 
-import { rotate } from "@/lib/team";
+import { rotate, type Member } from "@/lib/team";
 
 export type RosterMember = {
   /** `users._id` as a hex string — the FK a theme points at, and the mutate key. */
@@ -23,6 +23,27 @@ export type RosterMember = {
   /** objectGUID, so a directory search can tell who is already in the rotation. */
   directoryId: string;
 };
+
+/**
+ * The rotation with `directoryId` stripped off — what a page may hand a client
+ * component when it needs names, not identity.
+ *
+ * `directoryId` is the AD objectGUID, and a page that renders anonymously
+ * serializes whatever it passes down into the RSC payload. `GET /api/directory`
+ * is the one read in this app that demands a session precisely because it is a
+ * window onto the staff directory; a public page shipping the same field for
+ * eight people is a smaller window onto the same thing. The editor is the one
+ * consumer that genuinely needs it — to mark who is already in the rotation —
+ * so it keeps taking `RosterMember`, and everything else takes this.
+ */
+export function withoutDirectoryId(members: RosterMember[]): Member[] {
+  return members.map(({ id, name, role, gender }) => ({
+    id,
+    name,
+    role,
+    gender,
+  }));
+}
 
 /** Pull `from` out of the list and drop it back in at `to`. */
 export function moveItem<T>(list: T[], from: number, to: number): T[] {

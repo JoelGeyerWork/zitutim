@@ -365,6 +365,14 @@ export type MonitorWall = {
   board: Solver[];
   /** Null on an empty wall — there is no quickest save to name. */
   fastest: SolvedMonitor | null;
+  /**
+   * How many distinct people are named anywhere on the wall — **not**
+   * `board.length`. The board ranks the current on-call team, so it leaves out
+   * anyone who has since left the rotation; the wall still carries their name.
+   * Counting the board would quietly under-report the very people the plaques
+   * exist to remember.
+   */
+  solverCount: number;
 };
 
 /** Whole days the monitor was firing before it was finally silenced. */

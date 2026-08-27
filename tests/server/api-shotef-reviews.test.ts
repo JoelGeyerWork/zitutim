@@ -136,11 +136,10 @@ describe("POST /api/shotef/reviews", () => {
     await expect(db.collection("shotef_reviews").countDocuments()).resolves.toBe(0);
   });
 
+  // Relies on the index the app declares, not one built here — see the note in
+  // `shotef-reviews.test.ts`.
   it("returns 409 for a week that already has a summary", async () => {
     const db = await getDb();
-    await db
-      .collection("shotef_reviews")
-      .createIndex({ weekStart: -1 }, { unique: true });
 
     expect((await post(body())).status).toBe(201);
 

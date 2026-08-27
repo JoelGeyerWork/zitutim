@@ -396,6 +396,7 @@ describe("getHallOfFame", () => {
       monitors: [],
       board: [],
       fastest: null,
+      solverCount: 0,
     });
   });
 });

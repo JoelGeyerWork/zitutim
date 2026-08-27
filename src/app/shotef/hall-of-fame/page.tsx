@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 
 import { HallOfFame } from "@/components/shotef-hall-of-fame";
 import { PageHeader, PageShell } from "@/components/page-shell";
+import { withoutDirectoryId } from "@/lib/roster";
 import { getShotefRotation } from "@/lib/shotef";
 import { getHallOfFame } from "@/lib/shotef-monitors";
 
@@ -29,7 +30,7 @@ export default async function HallOfFamePage() {
         title="היכל התהילה"
         description="מוניטורים שצעקו, ומה בסוף השתיק אותם. הפעם הבאה שהם יצעקו כבר לא תהיה מאפס."
       />
-      <HallOfFame initial={initial} roster={roster} />
+      <HallOfFame initial={initial} roster={withoutDirectoryId(roster)} />
     </PageShell>
   );
 }

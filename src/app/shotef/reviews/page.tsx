@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 
 import { PageHeader, PageShell } from "@/components/page-shell";
 import { ShotefReviews } from "@/components/shotef-reviews";
+import { withoutDirectoryId } from "@/lib/roster";
 import { getShotefRotation } from "@/lib/shotef";
 import { getShotefReviews } from "@/lib/shotef-reviews";
 
@@ -31,7 +32,7 @@ export default async function ShotefReviewsPage() {
       />
       <ShotefReviews
         initial={initial}
-        roster={roster}
+        roster={withoutDirectoryId(roster)}
         nowIso={new Date().toISOString()}
       />
     </PageShell>

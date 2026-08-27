@@ -63,6 +63,7 @@ function wall(overrides: Partial<MonitorWall> = {}): MonitorWall {
     monitors: [PLAQUE],
     board: BOARD,
     fastest: PLAQUE,
+    solverCount: 1,
     ...overrides,
   };
 }
@@ -280,10 +281,24 @@ describe("HallOfFame", () => {
     expect(screen.queryByRole("button", { name: /תעודה חדשה/ })).toBeNull();
   });
 
+  /**
+   * The stat says how many people are up on the wall, so it cannot be read off
+   * the board: the board ranks the *current* rotation and drops anyone who has
+   * left it, while their plaques — and their names on them — stay. Here three
+   * people are named across the wall and only one is still on the board.
+   */
+  it("counts everyone on the wall, not everyone on the board", () => {
+    open(wall({ solverCount: 3 }));
+
+    const stat = screen.getByText("פותרים").closest("div") as HTMLElement;
+    expect(within(stat).getByText("3")).toBeInTheDocument();
+    expect(within(stat).queryByText(String(BOARD.length))).toBeNull();
+  });
+
   // A fresh database has no certificates, and a signed-out visitor to one needs
   // a way in — the add button above is not drawn for them.
   it("offers the login page on an empty wall when signed out", () => {
-    open({ monitors: [], board: [], fastest: null }, null);
+    open({ monitors: [], board: [], fastest: null, solverCount: 0 }, null);
 
     expect(screen.getByText("עדיין אין תעודה על הקיר.")).toBeInTheDocument();
     expect(
@@ -292,7 +307,7 @@ describe("HallOfFame", () => {
   });
 
   it("names no fastest fix on an empty wall rather than inventing one", () => {
-    open({ monitors: [], board: [], fastest: null });
+    open({ monitors: [], board: [], fastest: null, solverCount: 0 });
 
     expect(screen.getByText("0 הישגים")).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: /כניסה/ })).toBeNull();

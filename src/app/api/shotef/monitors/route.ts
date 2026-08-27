@@ -63,16 +63,18 @@ export async function POST(request: Request) {
     );
   }
 
-  // A name that resolves to no user is invalid input, not a server fault.
-  const solvers = await resolveSolvers(parsed.data.solvedByIds);
-  if (!solvers.ok) {
-    return NextResponse.json(
-      { error: "יש שדות לא תקינים", issues: solvers.issues },
-      { status: 422 },
-    );
-  }
-
   try {
+    // A name that resolves to no user is invalid input, not a server fault.
+    // Inside the try because it is a database call: a fault here is a 500 with
+    // a log line, like any other, rather than an unhandled rejection.
+    const solvers = await resolveSolvers(parsed.data.solvedByIds);
+    if (!solvers.ok) {
+      return NextResponse.json(
+        { error: "יש שדות לא תקינים", issues: solvers.issues },
+        { status: 422 },
+      );
+    }
+
     // The clerk is the session, never the body: who *solved* it is
     // `solvedByIds`, and who typed the certificate in is a separate fact. The
     // resolved solvers are handed on so the write path reads `users` once.

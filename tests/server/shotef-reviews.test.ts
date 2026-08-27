@@ -119,11 +119,12 @@ describe("createShotefReview", () => {
     expect(stored[0].rating).toBe(0);
   });
 
+  // The index is not created here: it comes from `createShotefReviewIndexes`
+  // in the memory-server setup, which is the same function production relies
+  // on. Building one locally would only prove that Mongo enforces unique
+  // indexes — this proves the application declares the one it needs.
   it("refuses a second summary for the same week off the unique index", async () => {
     const db = await getDb();
-    await db
-      .collection("shotef_reviews")
-      .createIndex({ weekStart: -1 }, { unique: true });
 
     await create();
     await expect(
@@ -155,6 +156,34 @@ describe("listShotefReviews", () => {
 
   it("is empty on a fresh database rather than throwing", async () => {
     await expect(listShotefReviews()).resolves.toEqual([]);
+  });
+
+  /**
+   * The regression the whole resolve-from-`users` rule exists to prevent. These
+   * two people are in no rotation at all — the collection is never touched by
+   * this file — so a read that resolved names by searching the on-call roster
+   * would hand back nothing here, and every card would render "לא ידוע".
+   */
+  it("resolves the author from users, with no rotation involved", async () => {
+    await create({}, "תמר רוזן");
+
+    const [stored] = await listShotefReviews();
+    expect(stored.memberName).toBe("תמר רוזן");
+    expect(stored.memberId).toBe(idByName["תמר רוזן"]);
+  });
+
+  it("survives a users row that has gone missing", async () => {
+    await create();
+    const db = await getDb();
+    await db
+      .collection("users")
+      .deleteOne({ _id: new ObjectId(idByName["דניאל עמר"]) });
+
+    // The summary is still a record of a week that happened, so it is listed —
+    // it just cannot say whose. Dropping the row entirely would lose the week.
+    const [stored] = await listShotefReviews();
+    expect(stored.memberName).toBe("");
+    expect(stored.headline).toBe("שבוע שקט שנגמר בשדרוג");
   });
 });
 

@@ -86,7 +86,7 @@ export function HallOfFame({
     setWall(initial);
   }
 
-  const { monitors, board, fastest } = wall;
+  const { monitors, board, fastest, solverCount } = wall;
 
   /**
    * The saved certificate, hung before the refresh behind it lands.
@@ -107,7 +107,12 @@ export function HallOfFame({
 
   return (
     <div className="space-y-4">
-      <TrophyCase monitors={monitors} board={board} fastest={fastest} />
+      <TrophyCase
+        monitors={monitors}
+        board={board}
+        fastest={fastest}
+        solverCount={solverCount}
+      />
       {board.length > 1 ? <Podium board={board} /> : null}
 
       <section className="space-y-3">
@@ -189,12 +194,15 @@ function TrophyCase({
   monitors,
   board,
   fastest,
+  solverCount,
 }: {
   monitors: SolvedMonitor[];
   board: Solver[];
   /** Both aggregates are the database's answer over the whole wall, not a
    *  reduction over `monitors` — see `getSolverBoard`. */
   fastest: SolvedMonitor | null;
+  /** Everyone on the wall, not everyone on the board — see `MonitorWall`. */
+  solverCount: number;
 }) {
   const leader = board[0];
 
@@ -222,7 +230,10 @@ function TrophyCase({
       </div>
 
       <dl className="relative mt-4 grid grid-cols-3 gap-2 border-t border-current/10 pt-3 text-center">
-        <Stat label="פותרים" value={String(board.length)} />
+        {/* Counted across the wall, not off `board`: the board ranks the
+            current rotation, so its length would drop anyone who has left it
+            from a stat that reads as "how many people are up here". */}
+        <Stat label="פותרים" value={String(solverCount)} />
         <Stat
           label="התיקון המהיר"
           value={fastest ? formatDuration(fastest.minutesToFix) : "—"}

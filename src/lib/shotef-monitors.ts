@@ -291,7 +291,7 @@ export async function getSolverBoard(): Promise<Solver[]> {
       ];
     })
     .sort(
-      // The same comparator `solverBoard` uses: form breaks a tie, not name order.
+      // The comparator the pure board used before this moved into the database: form breaks a tie, not name order.
       (a, b) => b.solved - a.solved || b.lastSolved.localeCompare(a.lastSolved),
     );
 }
@@ -313,6 +313,22 @@ export async function getFastestFix(): Promise<SolvedMonitor | undefined> {
 }
 
 /**
+ * Everyone named anywhere on the wall, counted once each.
+ *
+ * A collection-wide answer, like the board and the fastest fix — and separate
+ * from the board on purpose: that one ranks the current rotation, so using its
+ * length here would drop every recipient who has since left it, off a wall
+ * whose whole point is that it does not forget them. `distinct` dedupes across
+ * documents and within one, so a name written twice on a certificate counts
+ * once, the same rule `$setUnion` enforces for the board.
+ */
+export async function countSolvers(): Promise<number> {
+  const collection = await monitors();
+  const ids = await collection.distinct("solvedByIds");
+  return ids.length;
+}
+
+/**
  * Everything the hall-of-fame page renders, in the fewest round trips.
  *
  * The page and `GET /api/shotef/monitors` both read *this*, rather than each
@@ -321,10 +337,11 @@ export async function getFastestFix(): Promise<SolvedMonitor | undefined> {
  * rendered.
  */
 export async function getHallOfFame(): Promise<MonitorWall> {
-  const [monitorList, board, fastest] = await Promise.all([
+  const [monitorList, board, fastest, solverCount] = await Promise.all([
     listMonitors(),
     getSolverBoard(),
     getFastestFix(),
+    countSolvers(),
   ]);
-  return { monitors: monitorList, board, fastest: fastest ?? null };
+  return { monitors: monitorList, board, fastest: fastest ?? null, solverCount };
 }

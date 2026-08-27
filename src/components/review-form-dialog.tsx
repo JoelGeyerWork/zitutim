@@ -90,6 +90,21 @@ export function ReviewFormDialog({
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
 
+  // The week the form holds can stop being on offer underneath it: a 409 means
+  // somebody else filed this week, and the `router.refresh()` behind that error
+  // hands `reviews` down with their summary in it. Without this the trigger
+  // goes on showing a week that is no longer in its own dropdown and every
+  // resubmit repeats the 409. Reconciled during render like the parent's
+  // `seed` comparison — `react-hooks/set-state-in-effect` is an error here.
+  if (values.weekStart && !weeks.includes(values.weekStart)) {
+    const weekStart = weeks[0] ?? "";
+    setValues((current) => ({
+      ...current,
+      weekStart,
+      memberId: shotefOn(weekStart, roster)?.id ?? current.memberId,
+    }));
+  }
+
   function set<K extends keyof Values>(key: K, value: Values[K]) {
     setValues((current) => ({ ...current, [key]: value }));
     clearError(key);

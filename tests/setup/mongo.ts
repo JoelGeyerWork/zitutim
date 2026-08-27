@@ -3,6 +3,7 @@ import { afterAll, beforeAll } from "vitest";
 
 import { createEngagementIndexes } from "@/lib/engagement";
 import { closeClient } from "@/lib/mongodb";
+import { createShotefReviewIndexes } from "@/lib/shotef-reviews";
 
 /**
  * Spins up a throwaway in-memory MongoDB for the server suite. `getClient()`
@@ -16,6 +17,7 @@ beforeAll(async () => {
   process.env.MONGODB_URI = server.getUri();
   process.env.MONGODB_DB = "zitutim_test";
   await createEngagementIndexes();
+  await createShotefReviewIndexes();
 });
 
 afterAll(async () => {

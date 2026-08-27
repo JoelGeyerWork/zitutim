@@ -195,10 +195,15 @@ try {
   await db.collection("shotef_monitors").createIndexes([
     // The wall reads newest-save-first, and ends in _id for a total order.
     { key: { solvedAt: -1, _id: -1 } },
-    // The podium groups plaques by this.
+    // Whole-key, in the exact order `getFastestFix` sorts by. A bare
+    // `{ minutesToFix: 1 }` is only a *prefix* of that sort, so Mongo cannot
+    // use it to satisfy the order and falls back to a blocking sort over a
+    // collection scan — an index that looks like it is working and is not.
+    { key: { minutesToFix: 1, solvedAt: -1, _id: -1 } },
+    // `countSolvers` distincts on this. The podium's aggregation opens with
+    // $project/$unwind and reaches no index at all — deliberately unindexed
+    // rather than carrying one that cannot be used.
     { key: { solvedByIds: 1 } },
-    // "the quickest save on the wall" is one indexed scan, not a collection one.
-    { key: { minutesToFix: 1 } },
   ]);
 
   console.log(

@@ -63,18 +63,20 @@ export async function POST(request: Request) {
     );
   }
 
-  // A member id that resolves to nobody is invalid input, not a server fault —
-  // the schema only knows the field is a non-empty string. Resolved rather than
-  // merely checked, so the created record can name them without a second read.
-  const member = await findReviewMember(parsed.data.memberId);
-  if (!member) {
-    return NextResponse.json(
-      { error: "יש שדות לא תקינים", issues: { memberId: "לא נמצא ברשימה" } },
-      { status: 422 },
-    );
-  }
-
   try {
+    // A member id that resolves to nobody is invalid input, not a server fault
+    // — the schema only knows the field is a non-empty string. Resolved rather
+    // than merely checked, so the created record can name them without a second
+    // read. Inside the try because it is a database call: a fault here is a 500
+    // with a log line, like any other, rather than an unhandled rejection.
+    const member = await findReviewMember(parsed.data.memberId);
+    if (!member) {
+      return NextResponse.json(
+        { error: "יש שדות לא תקינים", issues: { memberId: "לא נמצא ברשימה" } },
+        { status: 422 },
+      );
+    }
+
     // The author is the session, never the body: whose *week* it was is
     // `memberId`, and who wrote it up is a separate fact.
     const review = await createShotefReview(parsed.data, member, {

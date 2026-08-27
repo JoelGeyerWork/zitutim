@@ -70,7 +70,11 @@ describe("handoverOf", () => {
 });
 
 describe("shiftIndex", () => {
-  it("advances by one every week and wraps at the end of the roster", () => {
+  // Absolute, not relative to `weeks[0]`: the anchor is what decides *whose*
+  // week it is, so a test written against its own first answer proves the step
+  // and the wrap while passing for any anchor at all. 2026-01-04 is the Sunday
+  // index 0 opened, and 2026-08-23 is 33 weeks after it — 33 % 3 === 0.
+  it("counts whole weeks from the anchor, and wraps at the roster's end", () => {
     const first = new Date("2026-08-23T00:00:00.000Z");
     const weeks = Array.from({ length: 4 }, (_, week) =>
       shiftIndex(
@@ -79,7 +83,12 @@ describe("shiftIndex", () => {
       ),
     );
 
-    expect(weeks).toEqual([weeks[0], (weeks[0] + 1) % 3, (weeks[0] + 2) % 3, weeks[0]]);
+    expect(weeks).toEqual([0, 1, 2, 0]);
+  });
+
+  it("puts index 0 on the anchor Sunday itself", () => {
+    expect(shiftIndex(new Date("2026-01-04T00:00:00.000Z"), 8)).toBe(0);
+    expect(shiftIndex(new Date("2026-01-11T00:00:00.000Z"), 8)).toBe(1);
   });
 
   it("stays in range before the anchor", () => {

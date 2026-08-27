@@ -189,6 +189,21 @@ export async function getShotefReviews(): Promise<ShotefReviewList> {
  * does not exist. It comes back with the name attached because the created
  * record has to carry one, and asking twice for the same row would be silly.
  */
+/**
+ * One week, one summary — declared here, not only in `scripts/seed.mjs`.
+ *
+ * `createShotefReview` has no pre-check `findOne` on purpose: two people
+ * writing up the same week would race it. The whole guarantee is therefore the
+ * unique index, and a database that never had the seed run by hand would have
+ * silently accepted both. Kept callable from the memory-server setup so the
+ * tests exercise the same database-enforced uniqueness production relies on,
+ * the way `createEngagementIndexes` already does.
+ */
+export async function createShotefReviewIndexes(): Promise<void> {
+  const collection = await reviews();
+  await collection.createIndexes([{ key: { weekStart: -1 }, unique: true }]);
+}
+
 export async function findReviewMember(
   memberId: string,
 ): Promise<ReviewMember | null> {
