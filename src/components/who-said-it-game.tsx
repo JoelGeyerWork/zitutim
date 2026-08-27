@@ -31,9 +31,12 @@ export function WhoSaidItGame({
   const router = useRouter();
   const [rounds, setRounds] = useState(initialRounds);
   const [roundIndex, setRoundIndex] = useState(0);
-  const [selected, setSelected] = useState<string | null>(null);
-  const [score, setScore] = useState(0);
+  const [pick, setPick] = useState<{
+    selected: string | null;
+    score: number;
+  }>({ selected: null, score: 0 });
   const [finished, setFinished] = useState(false);
+  const { selected, score } = pick;
 
   // router.refresh() re-runs the server component and hands us a new deal.
   // Adjusting during render (rather than in an effect) drops the extra paint.
@@ -42,8 +45,7 @@ export function WhoSaidItGame({
     setSeed(initialRounds);
     setRounds(initialRounds);
     setRoundIndex(0);
-    setSelected(null);
-    setScore(0);
+    setPick({ selected: null, score: 0 });
     setFinished(false);
   }
 
@@ -76,8 +78,7 @@ export function WhoSaidItGame({
       })),
     );
     setRoundIndex(0);
-    setSelected(null);
-    setScore(0);
+    setPick({ selected: null, score: 0 });
     setFinished(false);
   }
 
@@ -116,12 +117,14 @@ export function WhoSaidItGame({
   const correct = selected === round.correctAuthor;
 
   function choose(author: string) {
-    setSelected((current) => {
-      if (current !== null) return current;
-      if (author === round.correctAuthor) {
-        setScore((points) => points + 1);
-      }
-      return author;
+    // One pure update so Strict Mode's double-invoke cannot award the point twice.
+    setPick((current) => {
+      if (current.selected !== null) return current;
+      return {
+        selected: author,
+        score:
+          current.score + (author === round.correctAuthor ? 1 : 0),
+      };
     });
   }
 
@@ -131,7 +134,7 @@ export function WhoSaidItGame({
       return;
     }
     setRoundIndex((current) => current + 1);
-    setSelected(null);
+    setPick((current) => ({ ...current, selected: null }));
   }
 
   return (

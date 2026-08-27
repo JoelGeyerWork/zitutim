@@ -1,3 +1,4 @@
+import { StrictMode } from "react";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
@@ -68,6 +69,20 @@ describe("WhoSaidItGame", () => {
     render(<WhoSaidItGame initialRounds={[DANA, OMER]} />);
 
     await user.dblClick(screen.getByRole("button", { name: "דנה" }));
+
+    expect(screen.getByText("נקודה אחת")).toBeInTheDocument();
+    expect(screen.queryByText("2 נקודות")).not.toBeInTheDocument();
+  });
+
+  it("scores a correct click once under Strict Mode", async () => {
+    const user = userEvent.setup();
+    render(
+      <StrictMode>
+        <WhoSaidItGame initialRounds={[DANA, OMER]} />
+      </StrictMode>,
+    );
+
+    await user.click(screen.getByRole("button", { name: "דנה" }));
 
     expect(screen.getByText("נקודה אחת")).toBeInTheDocument();
     expect(screen.queryByText("2 נקודות")).not.toBeInTheDocument();
