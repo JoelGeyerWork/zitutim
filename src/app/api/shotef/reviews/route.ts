@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
-import { fieldErrors } from "@/lib/api";
+import { fieldErrors, personFailureResponse } from "@/lib/api";
+import { resolvePeople } from "@/lib/people";
 import {
   forbiddenResponse,
   getSessionFrom,
@@ -9,7 +10,6 @@ import {
 } from "@/lib/session";
 import {
   createShotefReview,
-  findReviewMember,
   getShotefReviews,
   reviewInputSchema,
 } from "@/lib/shotef-reviews";
@@ -64,21 +64,24 @@ export async function POST(request: Request) {
   }
 
   try {
-    // A member id that resolves to nobody is invalid input, not a server fault
-    // — the schema only knows the field is a non-empty string. Resolved rather
-    // than merely checked, so the created record can name them without a second
-    // read. Inside the try because it is a database call: a fault here is a 500
-    // with a log line, like any other, rather than an unhandled rejection.
-    const member = await findReviewMember(parsed.data.memberId);
-    if (!member) {
-      return NextResponse.json(
-        { error: "יש שדות לא תקינים", issues: { memberId: "לא נמצא ברשימה" } },
-        { status: 422 },
-      );
+    // The schema only knows `member` names *somebody*; this is where it turns
+    // into a `users` row. A reference to a row this app already holds resolves
+    // out of Mongo and never opens an LDAP connection — the rotation's own
+    // default takes that path, so summarising a week keeps working with no
+    // domain controller on the network. A directory reference is re-resolved
+    // with `findPersonById` and written through `upsertRosterUser`, so nothing
+    // the client typed lands in a stored name.
+    //
+    // Inside the try because it is a database call: a fault here is a 500 with a
+    // log line, like any other, rather than an unhandled rejection.
+    const resolution = await resolvePeople([parsed.data.member]);
+    if (!resolution.ok) {
+      return personFailureResponse(resolution.reason, "member", "לא נמצא ברשימה");
     }
+    const member = resolution.people[0]!;
 
     // The author is the session, never the body: whose *week* it was is
-    // `memberId`, and who wrote it up is a separate fact.
+    // `member`, and who wrote it up is a separate fact.
     const review = await createShotefReview(parsed.data, member, {
       id: session.id,
       name: session.name,

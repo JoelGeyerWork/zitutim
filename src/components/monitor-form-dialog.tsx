@@ -2,9 +2,12 @@
 
 import { useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
+import { SearchIcon } from "lucide-react";
 import { toast } from "sonner";
 
+import { DirectorySearch } from "@/components/directory-search";
 import { Field } from "@/components/field";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -22,7 +25,14 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { type DirectoryPerson } from "@/lib/directory-schema";
 import { todayInputValue } from "@/lib/format";
+import {
+  directoryRef,
+  personKey,
+  userRef,
+  type PersonRef,
+} from "@/lib/person-ref";
 import {
   AWARD_ICONS,
   AWARD_ICON_LABELS,
@@ -46,11 +56,34 @@ const UNITS = {
 
 type Unit = keyof typeof UNITS;
 
+/**
+ * A name the certificate can carry, and the reference the server will resolve
+ * it by.
+ *
+ * The rotation arrives as `users._id` rows and becomes `{ source: "user" }`
+ * references — the path that needs no directory at all. Anyone found in the
+ * search is appended as a `{ source: "directory" }` reference carrying the name
+ * it returned, so their button reads properly before this app has ever heard of
+ * them.
+ */
+type Candidate = { key: string; ref: PersonRef; name: string };
+
+function fromRoster(member: Member): Candidate {
+  const ref = userRef(member.id);
+  return { key: personKey(ref), ref, name: member.name };
+}
+
+function fromDirectory(person: DirectoryPerson): Candidate {
+  const ref = directoryRef(person.directoryId);
+  return { key: personKey(ref), ref, name: person.displayName };
+}
+
 type Values = {
   monitor: string;
   icon: AwardIcon;
   solution: string;
-  solvedByIds: string[];
+  /** Candidate `key`s, in the order the certificate will name them. */
+  solvedBy: string[];
   firstFiredAt: string;
   solvedAt: string;
   amount: string;
@@ -63,7 +96,7 @@ function emptyValues(): Values {
     monitor: "",
     icon: "memory",
     solution: "",
-    solvedByIds: [],
+    solvedBy: [],
     firstFiredAt: today,
     solvedAt: today,
     amount: "",
@@ -81,14 +114,27 @@ export function MonitorFormDialog({
   onOpenChange: (open: boolean) => void;
   /** The record the server created, so the wall can show it before the refresh. */
   onAdded: (monitor: SolvedMonitor) => void;
-  /** The on-call rotation: who may be named on a certificate from this form. */
+  /**
+   * The on-call rotation — the names offered without asking, because they are
+   * the likely ones. Not the limit of who a certificate may credit: a page is
+   * rarely silenced alone, and whoever knew the subsystem is often on another
+   * team entirely. They are found through the directory search below the row.
+   */
   roster: Member[];
 }) {
   const router = useRouter();
   const pathname = usePathname();
+  const loginHref = `/login?next=${encodeURIComponent(pathname)}`;
   const [values, setValues] = useState<Values>(emptyValues);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
+  // Everyone the directory has been asked about this visit. They join the
+  // button row, so a directory pick is un-picked exactly like a rotation one.
+  const [found, setFound] = useState<Candidate[]>([]);
+  const [searching, setSearching] = useState(false);
+
+  const candidates = [...roster.map(fromRoster), ...found];
+  const byKey = new Map(candidates.map((entry) => [entry.key, entry]));
 
   function set<K extends keyof Values>(key: K, value: Values[K]) {
     setValues((current) => ({ ...current, [key]: value }));
@@ -100,22 +146,37 @@ export function MonitorFormDialog({
     });
   }
 
-  function toggleSolver(id: string) {
+  function toggleSolver(key: string) {
     // Computed inside the updater rather than from `values`: two names picked
     // inside one task would otherwise read the same pre-click list and the
     // second would drop the first.
     setValues((current) => ({
       ...current,
-      solvedByIds: current.solvedByIds.includes(id)
-        ? current.solvedByIds.filter((picked) => picked !== id)
-        : [...current.solvedByIds, id],
+      solvedBy: current.solvedBy.includes(key)
+        ? current.solvedBy.filter((picked) => picked !== key)
+        : [...current.solvedBy, key],
     }));
     setErrors((current) => {
-      if (!current.solvedByIds) return current;
+      if (!current.solvedBy) return current;
       const next = { ...current };
-      delete next.solvedByIds;
+      delete next.solvedBy;
       return next;
     });
+  }
+
+  /**
+   * A directory result joins the button row, already picked. Appended rather
+   * than held apart, so removing them is the same press as removing anybody
+   * else and the order the certificate is written in stays one list.
+   */
+  function addFromDirectory(person: DirectoryPerson) {
+    const candidate = fromDirectory(person);
+    setFound((current) =>
+      current.some((entry) => entry.key === candidate.key)
+        ? current
+        : [...current, candidate],
+    );
+    if (!values.solvedBy.includes(candidate.key)) toggleSolver(candidate.key);
   }
 
   /**
@@ -138,7 +199,13 @@ export function MonitorFormDialog({
       monitor: values.monitor,
       icon: values.icon,
       solution: values.solution,
-      solvedByIds: values.solvedByIds,
+      // Keys back into references. A key with no candidate cannot happen — the
+      // row is drawn from the same list — but `flatMap` drops one rather than
+      // sending an undefined the schema would report on the wrong field.
+      solvedBy: values.solvedBy.flatMap((key) => {
+        const candidate = byKey.get(key);
+        return candidate ? [candidate.ref] : [];
+      }),
       firstFiredAt: values.firstFiredAt,
       solvedAt: values.solvedAt,
       // NaN on an empty or non-numeric box, which the schema rejects with the
@@ -176,7 +243,7 @@ export function MonitorFormDialog({
       // they can do something about it rather than just reporting failure.
       if (response.status === 401) {
         toast.error(payload?.error ?? "פג תוקף החיבור");
-        router.push(`/login?next=${encodeURIComponent(pathname)}`);
+        router.push(loginHref);
         return;
       }
 
@@ -190,6 +257,8 @@ export function MonitorFormDialog({
       onAdded(payload as SolvedMonitor);
       toast.success("התעודה נתלתה על הקיר");
       setValues(emptyValues());
+      setFound([]);
+      setSearching(false);
       router.refresh();
       onOpenChange(false);
     } catch {
@@ -209,13 +278,10 @@ export function MonitorFormDialog({
           </DialogDescription>
         </DialogHeader>
 
-        {roster.length === 0 ? (
-          <p className="text-muted-foreground py-4 text-sm text-balance">
-            אין אף אחד בתורנות, אז אין למי להעניק את התעודה. מוסיפים אנשים בעמוד
-            התורנות, ואז חוזרים לכאן.
-          </p>
-        ) : (
-          <form onSubmit={handleSubmit} className="space-y-5">
+        {/* No empty-rotation branch any more: a certificate names whoever
+            actually silenced the thing, and the directory search finds them
+            whether or not anybody is on the wheel. */}
+        <form onSubmit={handleSubmit} className="space-y-5">
             <Field
               id="monitor"
               label="שם המוניטור"
@@ -248,24 +314,83 @@ export function MonitorFormDialog({
             </Field>
 
             {/* Every name on the certificate. A page is rarely silenced alone. */}
-            <Field id="solvers" label="מי פתר" error={errors.solvedByIds}>
-              <div id="solvers" className="flex flex-wrap gap-2">
-                {roster.map((member) => {
-                  const picked = values.solvedByIds.includes(member.id);
-                  return (
+            <Field
+              id="solvers"
+              label="מי פתר"
+              hint={roster.length > 0 ? "התורנות, ומי שעוד היה שם" : undefined}
+              error={errors.solvedBy}
+            >
+              <div id="solvers" className="space-y-3">
+                {candidates.length > 0 ? (
+                  <div className="flex flex-wrap gap-2">
+                    {candidates.map((candidate) => {
+                      const picked = values.solvedBy.includes(candidate.key);
+                      return (
+                        <Button
+                          key={candidate.key}
+                          type="button"
+                          size="sm"
+                          variant={picked ? "default" : "outline"}
+                          aria-pressed={picked}
+                          onClick={() => toggleSolver(candidate.key)}
+                          className={cn(!picked && "text-muted-foreground")}
+                        >
+                          {candidate.name}
+                        </Button>
+                      );
+                    })}
+                  </div>
+                ) : null}
+
+                {searching ? (
+                  <div className="space-y-3 rounded-xl border p-3 sm:p-4">
+                    <DirectorySearch
+                      autoFocus
+                      loginHref={loginHref}
+                      taken={(person) =>
+                        values.solvedBy.includes(fromDirectory(person).key)
+                      }
+                      action={(person) =>
+                        values.solvedBy.includes(fromDirectory(person).key) ? (
+                          <Badge
+                            variant="secondary"
+                            className="shrink-0 font-normal"
+                          >
+                            כבר על התעודה
+                          </Badge>
+                        ) : (
+                          <Button
+                            size="sm"
+                            type="button"
+                            onClick={() => addFromDirectory(person)}
+                          >
+                            הוספה
+                          </Button>
+                        )
+                      }
+                    />
                     <Button
-                      key={member.id}
                       type="button"
+                      variant="ghost"
                       size="sm"
-                      variant={picked ? "default" : "outline"}
-                      aria-pressed={picked}
-                      onClick={() => toggleSolver(member.id)}
-                      className={cn(!picked && "text-muted-foreground")}
+                      onClick={() => setSearching(false)}
+                      className="w-full"
                     >
-                      {member.name}
+                      סגירת החיפוש
                     </Button>
-                  );
-                })}
+                  </div>
+                ) : (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setSearching(true)}
+                    className="text-muted-foreground gap-1.5 px-0"
+                  >
+                    <SearchIcon className="size-3.5" />
+                    מי שעזר לא ברשימה? חיפוש בספריית הארגון
+                  </Button>
+                )}
               </div>
             </Field>
 
@@ -365,8 +490,7 @@ export function MonitorFormDialog({
                 {saving ? "שומר…" : "תליית התעודה"}
               </Button>
             </div>
-          </form>
-        )}
+        </form>
       </DialogContent>
     </Dialog>
   );

@@ -48,9 +48,11 @@ export interface MonitorDoc {
   solution: string;
   /**
    * `users._id`, the same rows the rotation and the themes point at — never the
-   * hand-written slugs the fixtures used. Stored deduped: the schema folds the
-   * array through a `Set` before it gets here, so a name written twice on one
-   * certificate is one name, and the board can count array entries as plaques.
+   * hand-written slugs the fixtures used. Stored deduped, in two passes: the
+   * schema folds duplicate *references* out, and `resolvePeople` folds together
+   * the ones that only turn out to be the same person once resolved. So a name
+   * written twice on one certificate is one name, and the board can count array
+   * entries as plaques.
    */
   solvedByIds: ObjectId[];
   /** UTC midnight, like every other date here. */
@@ -144,51 +146,17 @@ export async function listMonitors(): Promise<SolvedMonitor[]> {
 }
 
 /**
- * Check that every name on the certificate is somebody this app knows, and
- * resolve it while we are there.
- *
- * A hex id that resolves to no user is invalid input, not a server fault — so
- * this reports an issue the route surfaces as a 422 rather than writing a
- * dangling reference and leaving the wall to render a plaque with nobody on it.
- * The names come back in the order they were written on the certificate, so the
- * created record can be handed straight back without a second lookup.
- *
- * Membership of the on-call rotation is deliberately *not* required: most pages
- * are not silenced alone, and whoever knew the subsystem is often not the shotef
- * — the certificate can credit anyone in `users`. The podium is the part that
- * only ranks the roster, which is `getSolverBoard`'s documented behaviour.
- */
-export async function resolveSolvers(
-  solvedByIds: string[],
-): Promise<
-  | { ok: true; solvers: MonitorSolver[] }
-  | { ok: false; issues: Record<string, string> }
-> {
-  const unknown = { ok: false as const, issues: { solvedByIds: "אחד מהשמות לא נמצא ברשימה" } };
-
-  // Guarded before constructing: `new ObjectId` throws on a malformed string,
-  // and a malformed id is the same kind of bad input as an unknown one.
-  if (solvedByIds.some((id) => !ObjectId.isValid(id))) return unknown;
-
-  const rows = await (await usersCollection())
-    .find({ _id: { $in: solvedByIds.map((id) => new ObjectId(id)) } })
-    .project<{ _id: ObjectId; displayName: string }>({ displayName: 1 })
-    .toArray();
-
-  // The schema has already deduped, so a short count means someone is missing.
-  if (rows.length !== solvedByIds.length) return unknown;
-
-  const byId = new Map(rows.map((row) => [row._id.toHexString(), row.displayName]));
-  return {
-    ok: true,
-    solvers: solvedByIds.map((id) => ({ id, name: byId.get(id)! })),
-  };
-}
-
-/**
- * `solvers` is what `resolveSolvers` already looked up while validating the
+ * `solvers` is what `resolvePeople` already looked up while validating the
  * input — passed in rather than resolved again, so the write path reads `users`
- * once.
+ * once, and it is also what decides `solvedByIds`: `input.solvedBy` is a list of
+ * references, and only the resolver knows which row each one names.
+ *
+ * Membership of the on-call rotation is deliberately *not* required, and since
+ * the form grew a directory search it is not even required that the recipient
+ * already have a `users` row — `resolvePeople` writes one. Most pages are not
+ * silenced alone, and whoever knew the subsystem is often not the shotef. The
+ * podium is the part that only ranks the roster, which is `getSolverBoard`'s
+ * documented behaviour.
  */
 export async function createMonitor(
   input: MonitorInput,
@@ -200,7 +168,7 @@ export async function createMonitor(
     icon: input.icon,
     monitor: input.monitor,
     solution: input.solution,
-    solvedByIds: input.solvedByIds.map((id) => new ObjectId(id)),
+    solvedByIds: solvers.map((solver) => new ObjectId(solver.id)),
     // `new Date("2026-06-09")` is UTC midnight, which is what the formatters
     // render in — parsing in local time shifts the day west of Greenwich.
     firstFiredAt: new Date(input.firstFiredAt),

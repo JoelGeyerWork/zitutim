@@ -1,11 +1,23 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { GET, POST } from "@/app/api/shotef/monitors/route";
+import { ConfigError } from "@/lib/config-error";
 import { type DirectoryPerson } from "@/lib/directory-schema";
 import { getDb } from "@/lib/mongodb";
 import { addShotefMember, removeShotefMember } from "@/lib/shotef";
 import { upsertRosterUser } from "@/lib/users";
 import { sessionCookie } from "./factories";
+
+// The route's only directory call. Everything else — the users upsert, the
+// monitors collection — is the real thing against the in-memory Mongo.
+vi.mock("@/lib/ldap", () => ({
+  findPersonById: vi.fn(),
+  findPeople: vi.fn(),
+}));
+
+import { findPersonById } from "@/lib/ldap";
+import { GET, POST } from "@/app/api/shotef/monitors/route";
+
+const mockFindPersonById = vi.mocked(findPersonById);
 
 const BASE = "http://localhost:3000/api/shotef/monitors";
 
@@ -47,7 +59,7 @@ function body(overrides: Record<string, unknown> = {}) {
     monitor: "db-prod-01: RAM above 95%",
     icon: "memory",
     solution: "שאילתת דוח בלי אינדקס משכה את כל הטבלה לזיכרון. הוספנו אינדקס מורכב.",
-    solvedByIds: [userId["אורי בן־חיים"]],
+    solvedBy: [{ source: "user", id: userId["אורי בן־חיים"] }],
     firstFiredAt: "2026-06-09",
     solvedAt: "2026-08-18",
     minutesToFix: 180,
@@ -67,6 +79,8 @@ beforeEach(async () => {
     userId[person.displayName] = id;
     await addShotefMember(id, "m");
   }
+
+  mockFindPersonById.mockReset();
 });
 
 describe("GET /api/shotef/monitors", () => {
@@ -77,7 +91,10 @@ describe("GET /api/shotef/monitors", () => {
         monitor: "quick one",
         minutesToFix: 11,
         solvedAt: "2026-07-21",
-        solvedByIds: [userId["אורי בן־חיים"], userId["דניאל עמר"]],
+        solvedBy: [
+          { source: "user", id: userId["אורי בן־חיים"] },
+          { source: "user", id: userId["דניאל עמר"] },
+        ],
       }),
     );
 
@@ -106,7 +123,9 @@ describe("GET /api/shotef/monitors", () => {
    * certificate is a record of something that happened.
    */
   it("keeps a departed solver on their plaque but off the podium", async () => {
-    await post(body({ solvedByIds: [userId["אורי בן־חיים"]] }));
+    await post(
+      body({ solvedBy: [{ source: "user", id: userId["אורי בן־חיים"] }] }),
+    );
     await removeShotefMember(userId["אורי בן־חיים"]);
 
     const { monitors, board } = await (await GET()).json();
@@ -143,7 +162,12 @@ describe("POST /api/shotef/monitors", () => {
 
   it("keeps every name on a certificate more than one person earned", async () => {
     const response = await post(
-      body({ solvedByIds: [userId["אורי בן־חיים"], userId["דניאל עמר"]] }),
+      body({
+        solvedBy: [
+          { source: "user", id: userId["אורי בן־חיים"] },
+          { source: "user", id: userId["דניאל עמר"] },
+        ],
+      }),
     );
 
     const monitor = await response.json();
@@ -155,7 +179,16 @@ describe("POST /api/shotef/monitors", () => {
 
   it("dedupes a name sent twice rather than counting it twice", async () => {
     const id = userId["אורי בן־חיים"];
-    const monitor = await (await post(body({ solvedByIds: [id, id] }))).json();
+    const monitor = await (
+      await post(
+        body({
+          solvedBy: [
+            { source: "user", id },
+            { source: "user", id },
+          ],
+        }),
+      )
+    ).json();
     expect(monitor.solvedBy).toEqual([{ id, name: "אורי בן־חיים" }]);
 
     const { board } = await (await GET()).json();
@@ -173,10 +206,10 @@ describe("POST /api/shotef/monitors", () => {
   });
 
   it("422s an empty solver list", async () => {
-    const response = await post(body({ solvedByIds: [] }));
+    const response = await post(body({ solvedBy: [] }));
     expect(response.status).toBe(422);
     const { issues } = await response.json();
-    expect(issues.solvedByIds).toBeTruthy();
+    expect(issues.solvedBy).toBeTruthy();
   });
 
   // An id nobody in `users` answers to is bad input, not a server fault: the
@@ -184,19 +217,120 @@ describe("POST /api/shotef/monitors", () => {
   // with a dangling reference on it.
   it("422s a solver id that resolves to no user", async () => {
     const response = await post(
-      body({ solvedByIds: [userId["אורי בן־חיים"], "6b00000000000000000000ff"] }),
+      body({
+        solvedBy: [
+          { source: "user", id: userId["אורי בן־חיים"] },
+          { source: "user", id: "6b00000000000000000000ff" },
+        ],
+      }),
     );
 
     expect(response.status).toBe(422);
     const { issues } = await response.json();
-    expect(issues.solvedByIds).toBeTruthy();
+    expect(issues.solvedBy).toBeTruthy();
 
     const db = await getDb();
     expect(await db.collection("shotef_monitors").countDocuments()).toBe(0);
   });
 
+  // The whole point of the directory search on this form: a page is rarely
+  // silenced alone, and whoever knew the subsystem is often not on the on-call
+  // rotation — sometimes not even in `users` yet.
+  it("credits somebody found in the directory, re-resolving them server-side", async () => {
+    mockFindPersonById.mockResolvedValue({
+      directoryId: "guid-roi",
+      displayName: "רועי אשכנזי",
+      title: "אבטחת מידע",
+      username: "roi.ashkenazi",
+    });
+
+    const response = await post(
+      body({
+        solvedBy: [
+          { source: "user", id: userId["אורי בן־חיים"] },
+          // The name and title the client sent are not in the body at all —
+          // only the id, which the route looks up itself.
+          { source: "directory", id: "guid-roi" },
+        ],
+      }),
+    );
+
+    expect(response.status).toBe(201);
+    const monitor = await response.json();
+    expect(monitor.solvedBy.map((s: { name: string }) => s.name)).toEqual([
+      "אורי בן־חיים",
+      "רועי אשכנזי",
+    ]);
+
+    // They arrived carrying a real `users` row, keyed on the objectGUID.
+    const db = await getDb();
+    const row = await db.collection("users").findOne({ directoryId: "guid-roi" });
+    expect(row!.displayName).toBe("רועי אשכנזי");
+    // And no podium row: the board ranks the current rotation, which they are
+    // not on — while the plaque keeps their name.
+    const { board } = await (await GET()).json();
+    expect(board.map((row: { member: { name: string } }) => row.member.name)).not.toContain(
+      "רועי אשכנזי",
+    );
+  });
+
+  // The directory is the *addition*, not the replacement. There is no domain
+  // controller on this network most of the time, and naming somebody this app
+  // already holds must not start depending on one.
+  it("never touches the directory for a list of known users", async () => {
+    mockFindPersonById.mockRejectedValue(new Error("directory unavailable"));
+
+    const response = await post(body());
+    expect(response.status).toBe(201);
+    expect(mockFindPersonById).not.toHaveBeenCalled();
+  });
+
+  it("422s a directoryId that resolves to nobody, without writing a plaque", async () => {
+    mockFindPersonById.mockResolvedValue(null);
+
+    const response = await post(
+      body({ solvedBy: [{ source: "directory", id: "guid-nobody" }] }),
+    );
+
+    expect(response.status).toBe(422);
+    const { issues } = await response.json();
+    expect(issues.solvedBy).toBeTruthy();
+
+    const db = await getDb();
+    expect(await db.collection("shotef_monitors").countDocuments()).toBe(0);
+  });
+
+  // A directory outage and a server that was never configured send whoever
+  // investigates to opposite places, so they are kept apart — the same split
+  // `POST /api/rotation` and the login route draw.
+  it("503s when the directory cannot be reached", async () => {
+    mockFindPersonById.mockRejectedValue(new Error("directory unavailable"));
+
+    const response = await post(
+      body({ solvedBy: [{ source: "directory", id: "guid-roi" }] }),
+    );
+
+    expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toMatchObject({
+      error: "לא הצלחנו לפנות לספריית הארגון",
+    });
+  });
+
+  it("500s when the directory is not configured on this server", async () => {
+    mockFindPersonById.mockRejectedValue(new ConfigError("LDAP_URL is not set"));
+
+    const response = await post(
+      body({ solvedBy: [{ source: "directory", id: "guid-roi" }] }),
+    );
+
+    expect(response.status).toBe(500);
+    await expect(response.json()).resolves.toMatchObject({
+      error: "החיפוש בספרייה לא מוגדר בשרת",
+    });
+  });
+
   it("422s a malformed solver id instead of 500ing on the ObjectId", async () => {
-    const response = await post(body({ solvedByIds: ["noa"] }));
+    const response = await post(body({ solvedBy: [{ source: "user", id: "noa" }] }));
     expect(response.status).toBe(422);
   });
 

@@ -18,6 +18,7 @@
 
 import { z } from "zod";
 
+import { dedupeRefs, personRefSchema } from "@/lib/person-ref";
 import { dateOnly } from "@/lib/quote-schema";
 import { type Member } from "@/lib/team";
 
@@ -296,7 +297,17 @@ export const reviewInputSchema = z.object({
     (value) => new Date(value).getUTCDay() === HANDOVER_WEEKDAY,
     "שבוע תורנות מתחיל ביום ראשון",
   ),
-  memberId: z.string().min(1, "צריך לבחור מי היה השוטף"),
+  /**
+   * Whose week it was — a `PersonRef`, not a bare `users._id`, so a week worked
+   * by somebody who was never on the on-call rotation (or has since left it)
+   * can still be written up in their name. The rotation gates the wheel and the
+   * podium; it is not the list of people a record may name.
+   *
+   * The rotation is still the *default*, and it sends `{ source: "user" }` — so
+   * the ordinary case resolves out of `users` and never opens an LDAP
+   * connection.
+   */
+  member: personRefSchema,
   // Zero is a legal score, so this is `min(0)` rather than `positive()` — a week
   // that went badly is exactly the one worth writing down.
   rating: z
@@ -401,12 +412,24 @@ export const monitorInputSchema = z
       .trim()
       .min(10, "צריך לכתוב איך פתרתם את זה")
       .max(1200, "ההסבר ארוך מדי"),
-    solvedByIds: z
-      .array(z.string())
-      // Through a Set: the form cannot send a name twice, but the schema is
-      // what a route handler would trust, and that one can be sent anything.
-      .transform((ids) => [...new Set(ids)])
-      .refine((ids) => ids.length > 0, "צריך לבחור לפחות אדם אחד"),
+    /**
+     * Everyone the certificate names, in the order it names them — as
+     * `PersonRef`s, so a colleague from another team who was on the call can be
+     * credited. Most pages are not silenced alone, and the shotef is often not
+     * the one who knew the subsystem.
+     *
+     * One ordered array rather than a `users._id` list beside a directory list:
+     * two arrays have no single order to merge back into, and the order is what
+     * gets written on the plaque.
+     */
+    solvedBy: z
+      .array(personRefSchema)
+      // The form cannot send a name twice, but the schema is what a route
+      // handler would trust, and that one can be sent anything. Two references
+      // to the same *person* through different sources can only be folded
+      // together after resolution — `resolvePeople` does that.
+      .transform(dedupeRefs)
+      .refine((refs) => refs.length > 0, "צריך לבחור לפחות אדם אחד"),
     firstFiredAt: dateOnly,
     solvedAt: dateOnly,
     minutesToFix: z

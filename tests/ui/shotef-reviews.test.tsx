@@ -200,6 +200,118 @@ describe("ShotefReviews", () => {
   // Zero is a real score, and the only way to reach it is pressing the star
   // that already is the score — here the first one, twice: five to one, then
   // one to none.
+  // The rotation still answers "who was probably on duty", and it does so with
+  // a `user` reference — the path that needs no directory at all.
+  it("defaults to the rotation and sends it as a user reference", async () => {
+    fetchMock.mockImplementation(async () =>
+      jsonResponse({ ...EXISTING, id: "w-3", weekStart: "2026-08-09T00:00:00.000Z" }, 201),
+    );
+
+    const actor = open();
+    await actor.click(screen.getByRole("button", { name: /סיכום חדש/ }));
+    const dialog = await screen.findByRole("dialog");
+    await fill(dialog, actor);
+    await actor.click(within(dialog).getByRole("button", { name: "פרסום הסיכום" }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(body.member).toEqual({
+      source: "user",
+      id: expect.stringMatching(/^6b0{20}1[12]$/),
+    });
+  });
+
+  // A week worked by somebody off the rotation has to be writable in their
+  // name. The browser sends the objectGUID and nothing else — the route
+  // re-resolves it, so no typed name reaches a stored one.
+  it("names somebody found in the directory instead of the rotation", async () => {
+    fetchMock.mockImplementation(async (url: string) => {
+      if (url.startsWith("/api/directory")) {
+        return jsonResponse({
+          people: [
+            {
+              directoryId: "guid-roi",
+              displayName: "רועי אשכנזי",
+              title: "אבטחת מידע",
+              username: "roi.ashkenazi",
+            },
+          ],
+        });
+      }
+      return jsonResponse(
+        { ...EXISTING, id: "w-4", weekStart: "2026-08-09T00:00:00.000Z" },
+        201,
+      );
+    });
+
+    const actor = open();
+    await actor.click(screen.getByRole("button", { name: /סיכום חדש/ }));
+    const dialog = await screen.findByRole("dialog");
+
+    await actor.click(
+      within(dialog).getByRole("button", { name: /חיפוש בספריית הארגון/ }),
+    );
+    await actor.type(screen.getByLabelText("חיפוש בספריית הארגון"), "רועי");
+
+    const result = await screen.findByText("רועי אשכנזי");
+    await actor.click(
+      within(result.closest("li")!).getByRole("button", { name: "בחירה" }),
+    );
+
+    // The picked name labels the field, before the server has heard of them.
+    expect(within(dialog).getByLabelText(/מי היה השוטף/)).toHaveTextContent(
+      "רועי אשכנזי",
+    );
+
+    await fill(dialog, actor);
+    await actor.click(within(dialog).getByRole("button", { name: "פרסום הסיכום" }));
+
+    const post = fetchMock.mock.calls.find(
+      ([url]) => url === "/api/shotef/reviews",
+    )!;
+    expect(JSON.parse(post[1].body).member).toEqual({
+      source: "directory",
+      id: "guid-roi",
+    });
+  });
+
+  it("tells a signed-out reader to sign in rather than offering a dead search box", async () => {
+    const actor = open(null);
+
+    await actor.click(screen.getByRole("button", { name: /סיכום חדש/ }));
+    const dialog = await screen.findByRole("dialog");
+    await actor.click(
+      within(dialog).getByRole("button", { name: /חיפוש בספריית הארגון/ }),
+    );
+
+    expect(
+      screen.queryByLabelText("חיפוש בספריית הארגון"),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "כניסה" })).toHaveAttribute(
+      "href",
+      "/login?next=%2Fshotef%2Freviews",
+    );
+  });
+
+  // Nobody on the wheel is a real state on a fresh database, and it must not
+  // stop a week being written up — the directory is the way in.
+  it("still opens the form with nobody on the rotation", async () => {
+    const actor = userEvent.setup();
+    render(
+      <SessionProvider user={makeSessionUser()}>
+        <ShotefReviews initial={INITIAL} roster={[]} nowIso={NOW} />
+      </SessionProvider>,
+    );
+
+    await actor.click(screen.getByRole("button", { name: /סיכום חדש/ }));
+    const dialog = await screen.findByRole("dialog");
+
+    expect(within(dialog).queryByText(/אין אף אחד בתורנות/)).toBeNull();
+    expect(
+      within(dialog).getByRole("button", { name: "פרסום הסיכום" }),
+    ).toBeInTheDocument();
+  });
+
   it("gives a week no stars at all", async () => {
     const actor = open();
 

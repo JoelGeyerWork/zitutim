@@ -2,9 +2,13 @@
 
 import { useEffect, useRef, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
-import { MoreHorizontalIcon, SearchIcon, UserPlusIcon } from "lucide-react";
+import { MoreHorizontalIcon, UserPlusIcon } from "lucide-react";
 import { toast } from "sonner";
 
+import {
+  DirectorySearch,
+  DirectorySearchNote,
+} from "@/components/directory-search";
 import { PersonAvatar } from "@/components/person-avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -21,7 +25,6 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Input } from "@/components/ui/input";
 import { formatDayMonth, formatMeetupDate, plural } from "@/lib/format";
 import { type DirectoryPerson } from "@/lib/directory-schema";
 import { moveItem, reorder, type RosterMember } from "@/lib/roster";
@@ -573,6 +576,11 @@ function Sortable({
  * Adding somebody is picking them out of the directory, never typing a name —
  * so they arrive with their real objectGUID, and the rotation entry and the row
  * their next sign-in touches are the same row.
+ *
+ * The search itself is `DirectorySearch`, shared with the two שוטף forms. All
+ * that is rotation-specific is what a result row offers, which is the one thing
+ * that component leaves to its caller: somebody already on the wheel is a badge
+ * saying so, not a second way to add them.
  */
 function Search({
   members,
@@ -585,135 +593,28 @@ function Search({
   copy: RotationCopy;
   onPick: (person: DirectoryPerson) => void;
 }) {
-  const router = useRouter();
-  const [query, setQuery] = useState("");
-  const [results, setResults] = useState<DirectoryPerson[]>([]);
-  // Which trimmed query `results`/`errored` describe. "loading" is then a render
-  // derivation rather than a synchronous setState in the effect — an error in
-  // this config, the same rule `QuoteFeed` works around.
-  const [resolvedFor, setResolvedFor] = useState("");
-  const [errored, setErrored] = useState(false);
-
-  const trimmed = query.trim();
-
-  useEffect(() => {
-    const q = query.trim();
-    if (q.length < 2) return;
-
-    // Debounced, so a fast typist issues one request rather than one a keystroke
-    // — the two-character floor is also the server's rule. Every setState is
-    // inside the async callback; the effect body itself sets none.
-    const handle = setTimeout(async () => {
-      try {
-        const response = await fetch(
-          `/api/directory?q=${encodeURIComponent(q)}`,
-        );
-        if (response.status === 401) {
-          router.push(loginHref);
-          return;
-        }
-        if (!response.ok) {
-          setResults([]);
-          setErrored(true);
-          setResolvedFor(q);
-          return;
-        }
-        const data: { people: DirectoryPerson[] } = await response.json();
-        setResults(data.people);
-        setErrored(false);
-        setResolvedFor(q);
-      } catch {
-        setResults([]);
-        setErrored(true);
-        setResolvedFor(q);
-      }
-    }, 300);
-
-    return () => clearTimeout(handle);
-  }, [query, loginHref, router]);
-
   const known = new Set(members.map((member) => member.directoryId));
-  const short = trimmed.length < 2;
-  // Results and the error flag apply only once they are for the query on screen;
-  // until then the search is still in flight.
-  const loading = !short && resolvedFor !== trimmed;
+  const inRotation = (person: DirectoryPerson) => known.has(person.directoryId);
 
   return (
     <div className="min-w-0 space-y-4">
-      <div className="relative">
-        <SearchIcon className="text-muted-foreground pointer-events-none absolute start-3 top-1/2 size-4 -translate-y-1/2" />
-        <Input
-          autoFocus
-          value={query}
-          onChange={(event) => setQuery(event.target.value)}
-          placeholder="שם או שם משתמש"
-          aria-label="חיפוש בספריית הארגון"
-          className="ps-9"
-        />
-      </div>
-
-      {short ? (
-        <p className="text-muted-foreground py-6 text-center text-sm">
-          לפחות שתי אותיות.
-        </p>
-      ) : loading ? (
-        <p className="text-muted-foreground py-6 text-center text-sm">
-          מחפשים…
-        </p>
-      ) : errored ? (
-        <p className="text-muted-foreground py-6 text-center text-sm">
-          לא הצלחנו לחפש בספרייה.
-        </p>
-      ) : results.length === 0 ? (
-        <p className="text-muted-foreground py-6 text-center text-sm">
-          אין תוצאות בספרייה.
-        </p>
-      ) : (
-        <ul className="divide-y rounded-xl border">
-          {results.map((person) => {
-            const inRotation = known.has(person.directoryId);
-
-            return (
-              <li
-                key={person.directoryId}
-                className={cn(
-                  "flex items-center gap-3 px-3 py-3 sm:px-4",
-                  inRotation && "opacity-55",
-                )}
-              >
-                <PersonAvatar name={person.displayName} className="size-10" />
-
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm font-medium">
-                    {person.displayName}
-                  </p>
-                  <p className="text-muted-foreground truncate text-xs">
-                    {person.title ? `${person.title} · ` : null}
-                    <span dir="ltr" className="font-mono">
-                      {person.username}
-                    </span>
-                  </p>
-                </div>
-
-                {inRotation ? (
-                  <Badge variant="secondary" className="shrink-0 font-normal">
-                    כבר {copy.inRotation}
-                  </Badge>
-                ) : (
-                  <Button size="sm" onClick={() => onPick(person)}>
-                    הוספה
-                  </Button>
-                )}
-              </li>
-            );
-          })}
-        </ul>
-      )}
-
-      <p className="text-muted-foreground text-xs text-balance">
-        החיפוש רץ בחשבון השירות ולא מנסה להזדהות כאף אחד, ולכן אינו נוגע במונה
-        הכניסות הכושלות של אף חשבון.
-      </p>
+      <DirectorySearch
+        autoFocus
+        loginHref={loginHref}
+        taken={inRotation}
+        action={(person) =>
+          inRotation(person) ? (
+            <Badge variant="secondary" className="shrink-0 font-normal">
+              כבר {copy.inRotation}
+            </Badge>
+          ) : (
+            <Button size="sm" onClick={() => onPick(person)}>
+              הוספה
+            </Button>
+          )
+        }
+      />
+      <DirectorySearchNote />
     </div>
   );
 }

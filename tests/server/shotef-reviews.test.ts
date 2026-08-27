@@ -4,7 +4,6 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { getDb } from "@/lib/mongodb";
 import {
   createShotefReview,
-  findReviewMember,
   getReviewStats,
   getShotefReviews,
   listShotefReviews,
@@ -12,6 +11,7 @@ import {
   type ReviewMember,
   type ShotefReviewDoc,
 } from "@/lib/shotef-reviews";
+import { userRef } from "@/lib/person-ref";
 import { type ReviewInput } from "@/lib/shotef-schema";
 
 const AUTHOR: ReviewActor = { id: "6b0000000000000000000001", name: "דנה כהן" };
@@ -50,7 +50,7 @@ function input(overrides: Partial<ReviewInput> = {}): ReviewInput {
   return {
     // A Sunday, which is the only thing the schema will take.
     weekStart: "2026-08-16",
-    memberId: idByName["דניאל עמר"],
+    member: userRef(idByName["דניאל עמר"]),
     rating: 5,
     headline: "שבוע שקט שנגמר בשדרוג",
     body: "שתי תקלות קטנות, שתיהן נסגרו באותו יום.",
@@ -129,7 +129,7 @@ describe("createShotefReview", () => {
     await create();
     await expect(
       create(
-        { memberId: idByName["תמר רוזן"], headline: "אותו שבוע, סיפור אחר" },
+        { member: userRef(idByName["תמר רוזן"]), headline: "אותו שבוע, סיפור אחר" },
         "תמר רוזן",
       ),
     ).rejects.toMatchObject({ code: 11000 });
@@ -223,22 +223,5 @@ describe("getShotefReviews", () => {
     expect(page.reviews).toHaveLength(2);
     expect(page.total).toBe(2);
     expect(page.average).toBe(3.5);
-  });
-});
-
-describe("findReviewMember", () => {
-  it("resolves a seeded user to the name the review will carry", async () => {
-    await expect(findReviewMember(idByName["תמר רוזן"])).resolves.toEqual({
-      id: idByName["תמר רוזן"],
-      name: "תמר רוזן",
-    });
-  });
-
-  it("answers null for anything that is not a known user", async () => {
-    await expect(findReviewMember("0".repeat(24))).resolves.toBeNull();
-    // The schema takes any non-empty string, so a slug reaches this unparsed —
-    // it must answer null rather than throw on an invalid ObjectId.
-    await expect(findReviewMember("tamar")).resolves.toBeNull();
-    await expect(findReviewMember("")).resolves.toBeNull();
   });
 });

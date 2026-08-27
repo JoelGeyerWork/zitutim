@@ -18,6 +18,7 @@ import {
   type ShotefReview,
   type SolvedMonitor,
 } from "@/lib/shotef-schema";
+import { directoryRef, userRef } from "@/lib/person-ref";
 import { rotate, type Member } from "@/lib/team";
 
 /**
@@ -275,7 +276,7 @@ describe("monitorInputSchema", () => {
     monitor: "redis-02: evicted keys above 1k/min",
     icon: "cache" as const,
     solution: "הכפלנו את מגבלת הזיכרון והוצאנו את המפתחות הגדולים.",
-    solvedByIds: ["maya"],
+    solvedBy: [userRef("6b0000000000000000000011")],
     firstFiredAt: "2026-07-01",
     solvedAt: "2026-08-20",
     minutesToFix: 240,
@@ -291,20 +292,43 @@ describe("monitorInputSchema", () => {
   });
 
   it("refuses a certificate with nobody on it", () => {
-    expect(issueOn({ solvedByIds: [] })?.message).toBe(
+    expect(issueOn({ solvedBy: [] })?.message).toBe(
       "צריך לבחור לפחות אדם אחד",
     );
   });
 
   // The form cannot send a name twice, but a route handler would trust this
   // schema, and that one can be sent anything.
-  it("keeps one of a name sent twice", () => {
+  it("keeps one of a reference sent twice", () => {
+    const maya = userRef("6b0000000000000000000011");
+    const ori = userRef("6b0000000000000000000012");
     const parsed = monitorInputSchema.parse({
       ...input,
-      solvedByIds: ["maya", "maya", "ori"],
+      solvedBy: [maya, maya, ori],
     });
 
-    expect(parsed.solvedByIds).toEqual(["maya", "ori"]);
+    expect(parsed.solvedBy).toEqual([maya, ori]);
+  });
+
+  // Two sources, one field — so a colleague found in the directory rides along
+  // in the same ordered list as the rotation picks. Only the server can tell
+  // that a `directory` reference and a `user` one are the same person, so the
+  // schema leaves both standing.
+  it("takes a directory reference beside a user one, in order", () => {
+    const parsed = monitorInputSchema.parse({
+      ...input,
+      solvedBy: [userRef("6b0000000000000000000011"), directoryRef("guid-roi")],
+    });
+
+    expect(parsed.solvedBy).toEqual([
+      { source: "user", id: "6b0000000000000000000011" },
+      { source: "directory", id: "guid-roi" },
+    ]);
+  });
+
+  it("refuses a name that is neither source", () => {
+    expect(issueOn({ solvedBy: [{ source: "guess", id: "maya" }] })).toBeDefined();
+    expect(issueOn({ solvedBy: ["maya"] })).toBeDefined();
   });
 
   it("refuses a monitor solved before it fired, on the date it blames", () => {
@@ -379,7 +403,7 @@ describe("shotefOn", () => {
 describe("reviewInputSchema", () => {
   const input = {
     weekStart: "2026-08-16",
-    memberId: "daniel",
+    member: userRef("6b0000000000000000000011"),
     rating: 4,
     headline: "שבוע של תור ריק",
     body: "שתי פניות בלבד, ושתיהן נסגרו לפני הצהריים.",
@@ -417,6 +441,17 @@ describe("reviewInputSchema", () => {
   });
 
   it("refuses a week with nobody on duty", () => {
-    expect(issueOn({ memberId: "" })?.message).toBe("צריך לבחור מי היה השוטף");
+    expect(issueOn({ member: undefined })?.message).toBe("צריך לבחור אדם");
+    expect(issueOn({ member: { source: "user", id: "" } })).toBeDefined();
+  });
+
+  // The rotation's own default sends a `user` reference, which is the whole
+  // reason summarising a week needs no directory. A week worked by somebody
+  // this app has never seen names them the other way.
+  it("takes either source for whose week it was", () => {
+    expect(
+      reviewInputSchema.safeParse({ ...input, member: directoryRef("guid-roi") })
+        .success,
+    ).toBe(true);
   });
 });

@@ -2,9 +2,10 @@
 
 import { useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
-import { StarIcon } from "lucide-react";
+import { SearchIcon, StarIcon } from "lucide-react";
 import { toast } from "sonner";
 
+import { DirectorySearch } from "@/components/directory-search";
 import { Field } from "@/components/field";
 import { Button } from "@/components/ui/button";
 import {
@@ -23,7 +24,14 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { type DirectoryPerson } from "@/lib/directory-schema";
 import { formatWeekRange } from "@/lib/format";
+import {
+  directoryRef,
+  personKey,
+  userRef,
+  type PersonRef,
+} from "@/lib/person-ref";
 import {
   RATING_LABELS,
   closedWeeks,
@@ -42,9 +50,32 @@ const MAX_STARS = 5;
 /** The week is taken. Rendered on that field, since that is what to change. */
 const WEEK_TAKEN = "כבר יש סיכום לשבוע הזה";
 
+/**
+ * Somebody the "מי היה השוטף" picker can offer, and the reference the server
+ * will resolve them by.
+ *
+ * The rotation arrives as `users._id` rows and becomes `{ source: "user" }`
+ * references, which is what keeps the ordinary case working with no domain
+ * controller on the network. Anyone found in the directory is appended as a
+ * `{ source: "directory" }` reference carrying the name the search returned, so
+ * the select can label them before the server has ever heard of them.
+ */
+type Candidate = { key: string; ref: PersonRef; name: string };
+
+function fromRoster(member: Member): Candidate {
+  const ref = userRef(member.id);
+  return { key: personKey(ref), ref, name: member.name };
+}
+
+function fromDirectory(person: DirectoryPerson): Candidate {
+  const ref = directoryRef(person.directoryId);
+  return { key: personKey(ref), ref, name: person.displayName };
+}
+
 type Values = {
   weekStart: string;
-  memberId: string;
+  /** The candidate `key`, not a `users._id` — see `Candidate`. */
+  member: string;
   rating: number;
   headline: string;
   body: string;
@@ -64,12 +95,18 @@ export function ReviewFormDialog({
   onAdded: (review: ShotefReview) => void;
   /** What is already written, so the same week isn't offered twice. */
   reviews: ShotefReview[];
-  /** The on-call rotation: who may be named as this week's shotef. */
+  /**
+   * The on-call rotation. It answers who was *probably* on duty and fills the
+   * field in — it is no longer the limit of who may be named. A week worked by
+   * someone who has since left it, or covered by a colleague who was never on
+   * it, is found through the directory search below the field.
+   */
   roster: Member[];
   nowIso: string;
 }) {
   const router = useRouter();
   const pathname = usePathname();
+  const loginHref = `/login?next=${encodeURIComponent(pathname)}`;
   // A week gets one summary. Dropping the taken ones from the list is the whole
   // duplicate check — there is no id to collide on and nothing to reject.
   const taken = new Set(reviews.map((review) => review.weekStart.slice(0, 10)));
@@ -77,11 +114,19 @@ export function ReviewFormDialog({
     .map((iso) => iso.slice(0, 10))
     .filter((week) => !taken.has(week));
 
+  // Whoever the directory has been asked about this visit, kept so the select
+  // can go on labelling a pick after the search panel is closed.
+  const [found, setFound] = useState<Candidate[]>([]);
+  const [searching, setSearching] = useState(false);
+
+  const candidates = [...roster.map(fromRoster), ...found];
+  const byKey = new Map(candidates.map((entry) => [entry.key, entry]));
+
   const [values, setValues] = useState<Values>(() => {
     const weekStart = weeks[0] ?? "";
     return {
       weekStart,
-      memberId: shotefOn(weekStart, roster)?.id ?? "",
+      member: defaultMember(weekStart, roster),
       rating: MAX_STARS,
       headline: "",
       body: "",
@@ -101,7 +146,7 @@ export function ReviewFormDialog({
     setValues((current) => ({
       ...current,
       weekStart,
-      memberId: shotefOn(weekStart, roster)?.id ?? current.memberId,
+      member: defaultMember(weekStart, roster) || current.member,
     }));
   }
 
@@ -142,10 +187,22 @@ export function ReviewFormDialog({
     setValues((current) => ({
       ...current,
       weekStart,
-      memberId: shotefOn(weekStart, roster)?.id ?? current.memberId,
+      member: defaultMember(weekStart, roster) || current.member,
     }));
     clearError("weekStart");
-    clearError("memberId");
+    clearError("member");
+  }
+
+  /** A directory result becomes an option, and the answer, in one press. */
+  function pickFromDirectory(person: DirectoryPerson) {
+    const candidate = fromDirectory(person);
+    setFound((current) =>
+      current.some((entry) => entry.key === candidate.key)
+        ? current
+        : [...current, candidate],
+    );
+    set("member", candidate.key);
+    setSearching(false);
   }
 
   async function handleSubmit(event: React.FormEvent) {
@@ -154,7 +211,16 @@ export function ReviewFormDialog({
 
     // Checked here for responsiveness only — the route re-validates with this
     // same schema and its 422 is the authority.
-    const parsed = reviewInputSchema.safeParse(values);
+    const parsed = reviewInputSchema.safeParse({
+      weekStart: values.weekStart,
+      // Undefined rather than a fabricated reference when nothing is picked, so
+      // the schema reports the missing field instead of the server 422ing on an
+      // id it cannot resolve.
+      member: byKey.get(values.member)?.ref,
+      rating: values.rating,
+      headline: values.headline,
+      body: values.body,
+    });
 
     if (!parsed.success) {
       // Keyed by field name, the same shape the other forms render from a
@@ -182,7 +248,7 @@ export function ReviewFormDialog({
       // they can do something about it rather than just reporting failure.
       if (response.status === 401) {
         toast.error(payload?.error ?? "פג תוקף החיבור");
-        router.push(`/login?next=${encodeURIComponent(pathname)}`);
+        router.push(loginHref);
         return;
       }
 
@@ -224,12 +290,11 @@ export function ReviewFormDialog({
           </DialogDescription>
         </DialogHeader>
 
-        {roster.length === 0 ? (
-          <p className="text-muted-foreground py-4 text-sm text-balance">
-            אין אף אחד בתורנות, אז אין למי לייחס את השבוע. מוסיפים אנשים בעמוד
-            התורנות, ואז חוזרים לכאן.
-          </p>
-        ) : weeks.length === 0 ? (
+        {/* No empty-rotation branch any more: the directory is the way in, so a
+            fresh database with nobody on the wheel can still have a week
+            written up. Only a week that is genuinely not on offer stops the
+            form. */}
+        {weeks.length === 0 ? (
           <p className="text-muted-foreground py-4 text-sm text-balance">
             כל השבועות האחרונים כבר מסוכמים. השבוע שרץ עכשיו יהיה זמין לסיכום
             ביום ראשון, כשהתורנות תעבור.
@@ -262,33 +327,72 @@ export function ReviewFormDialog({
               </Field>
 
               <Field
-                id="memberId"
+                id="member"
                 label="מי היה השוטף"
-                hint="ממולא לפי הסבב"
-                error={errors.memberId}
+                hint={roster.length > 0 ? "ממולא לפי הסבב" : undefined}
+                error={errors.member}
               >
                 <Select
-                  value={values.memberId}
-                  onValueChange={(value) => set("memberId", value ?? "")}
+                  value={values.member}
+                  onValueChange={(value) => set("member", value ?? "")}
                 >
-                  <SelectTrigger id="memberId" className="w-full">
+                  <SelectTrigger id="member" className="w-full">
                     <SelectValue>
                       {(value: string) =>
-                        roster.find((member) => member.id === value)?.name ??
-                        "בחרו אדם"
+                        byKey.get(value)?.name ?? "בחרו אדם"
                       }
                     </SelectValue>
                   </SelectTrigger>
                   <SelectContent>
-                    {roster.map((member) => (
-                      <SelectItem key={member.id} value={member.id}>
-                        {member.name}
+                    {candidates.map((candidate) => (
+                      <SelectItem key={candidate.key} value={candidate.key}>
+                        {candidate.name}
                       </SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
               </Field>
             </div>
+
+            {/* Full width rather than inside the field's grid cell: a list of
+                search results has nowhere to go in half a row. */}
+            {searching ? (
+              <div className="space-y-3 rounded-xl border p-3 sm:p-4">
+                <DirectorySearch
+                  autoFocus
+                  loginHref={loginHref}
+                  action={(person) => (
+                    <Button
+                      size="sm"
+                      type="button"
+                      onClick={() => pickFromDirectory(person)}
+                    >
+                      בחירה
+                    </Button>
+                  )}
+                />
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setSearching(false)}
+                  className="w-full"
+                >
+                  סגירת החיפוש
+                </Button>
+              </div>
+            ) : (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={() => setSearching(true)}
+                className="text-muted-foreground gap-1.5 px-0"
+              >
+                <SearchIcon className="size-3.5" />
+                מי שהיה בתורנות לא ברשימה? חיפוש בספריית הארגון
+              </Button>
+            )}
 
             <Field
               id="rating"
@@ -346,6 +450,12 @@ export function ReviewFormDialog({
       </DialogContent>
     </Dialog>
   );
+}
+
+/** Whose week the rotation says it was, as a candidate key. Empty if nobody. */
+function defaultMember(weekStart: string, roster: Member[]): string {
+  const member = shotefOn(weekStart, roster);
+  return member ? fromRoster(member).key : "";
 }
 
 /**

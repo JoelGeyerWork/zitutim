@@ -1,11 +1,11 @@
 import { NextResponse } from "next/server";
 
-import { fieldErrors } from "@/lib/api";
+import { fieldErrors, personFailureResponse } from "@/lib/api";
+import { resolvePeople } from "@/lib/people";
 import {
   createMonitor,
   getHallOfFame,
   monitorInputSchema,
-  resolveSolvers,
 } from "@/lib/shotef-monitors";
 import {
   forbiddenResponse,
@@ -64,24 +64,31 @@ export async function POST(request: Request) {
   }
 
   try {
-    // A name that resolves to no user is invalid input, not a server fault.
+    // Every name on the certificate turned into a `users` row. A list picked
+    // out of the rotation is all `{ source: "user" }`, which resolves out of
+    // Mongo and never opens an LDAP connection; a colleague found in the
+    // directory is re-resolved with `findPersonById` and written through
+    // `upsertRosterUser`, so a plaque can credit somebody this app had never
+    // seen without the client naming them.
+    //
     // Inside the try because it is a database call: a fault here is a 500 with
     // a log line, like any other, rather than an unhandled rejection.
-    const solvers = await resolveSolvers(parsed.data.solvedByIds);
-    if (!solvers.ok) {
-      return NextResponse.json(
-        { error: "יש שדות לא תקינים", issues: solvers.issues },
-        { status: 422 },
+    const resolution = await resolvePeople(parsed.data.solvedBy);
+    if (!resolution.ok) {
+      return personFailureResponse(
+        resolution.reason,
+        "solvedBy",
+        "אחד מהשמות לא נמצא ברשימה",
       );
     }
 
-    // The clerk is the session, never the body: who *solved* it is
-    // `solvedByIds`, and who typed the certificate in is a separate fact. The
-    // resolved solvers are handed on so the write path reads `users` once.
+    // The clerk is the session, never the body: who *solved* it is `solvedBy`,
+    // and who typed the certificate in is a separate fact. The resolved solvers
+    // are handed on so the write path reads `users` once.
     const monitor = await createMonitor(
       parsed.data,
       { id: session.id, name: session.name },
-      solvers.solvers,
+      resolution.people,
     );
     return NextResponse.json(monitor, { status: 201 });
   } catch (error) {

@@ -1,8 +1,20 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { ConfigError } from "@/lib/config-error";
 import { getDb } from "@/lib/mongodb";
-import { GET, POST } from "@/app/api/shotef/reviews/route";
 import { sessionCookie } from "./factories";
+
+// The route's only directory call. Everything else — the users upsert, the
+// reviews collection — is the real thing against the in-memory Mongo.
+vi.mock("@/lib/ldap", () => ({
+  findPersonById: vi.fn(),
+  findPeople: vi.fn(),
+}));
+
+import { findPersonById } from "@/lib/ldap";
+import { GET, POST } from "@/app/api/shotef/reviews/route";
+
+const mockFindPersonById = vi.mocked(findPersonById);
 
 const BASE = "http://localhost:3000/api/shotef/reviews";
 
@@ -39,7 +51,7 @@ async function seedUsers(): Promise<Record<string, string>> {
 function body(overrides: Record<string, unknown> = {}) {
   return {
     weekStart: "2026-08-16",
-    memberId: idByName["דניאל עמר"],
+    member: { source: "user", id: idByName["דניאל עמר"] },
     rating: 4,
     headline: "שבוע שקט שנגמר בשדרוג",
     body: "שתי תקלות קטנות, שתיהן נסגרו באותו יום.",
@@ -66,6 +78,7 @@ beforeEach(async () => {
   await db.collection("shotef_reviews").deleteMany({});
   await db.collection("users").deleteMany({});
   idByName = await seedUsers();
+  mockFindPersonById.mockReset();
 });
 
 describe("POST /api/shotef/reviews", () => {
@@ -123,17 +136,98 @@ describe("POST /api/shotef/reviews", () => {
     expect(payload.issues.body).toBeTruthy();
   });
 
-  it("rejects a memberId that resolves to no user with 422 on that field", async () => {
-    for (const memberId of ["0".repeat(24), "daniel"]) {
-      const response = await post(body({ memberId }));
+  it("rejects a member reference that resolves to no user with 422 on that field", async () => {
+    for (const id of ["0".repeat(24), "daniel"]) {
+      const response = await post(body({ member: { source: "user", id } }));
       expect(response.status).toBe(422);
       await expect(response.json()).resolves.toMatchObject({
-        issues: { memberId: "לא נמצא ברשימה" },
+        issues: { member: "לא נמצא ברשימה" },
       });
     }
 
     const db = await getDb();
     await expect(db.collection("shotef_reviews").countDocuments()).resolves.toBe(0);
+  });
+
+  // The point of the directory search on this form: a week worked by somebody
+  // who has since left the rotation — or was never on it — must still be
+  // writable in their name.
+  it("names somebody found in the directory, re-resolving them server-side", async () => {
+    mockFindPersonById.mockResolvedValue({
+      directoryId: "guid-roi",
+      displayName: "רועי אשכנזי",
+      title: "אבטחת מידע",
+      username: "roi.ashkenazi",
+    });
+
+    const response = await post(
+      // No name in the body at all — only the id the route looks up itself.
+      body({ member: { source: "directory", id: "guid-roi" } }),
+    );
+
+    expect(response.status).toBe(201);
+    const review = await response.json();
+    expect(review.memberName).toBe("רועי אשכנזי");
+
+    const db = await getDb();
+    const row = await db.collection("users").findOne({ directoryId: "guid-roi" });
+    expect(row!._id.toHexString()).toBe(review.memberId);
+  });
+
+  // The directory is the *addition*, not the replacement: there is usually no
+  // domain controller reachable, and the rotation's own default must not start
+  // depending on one.
+  it("never touches the directory for a member the app already holds", async () => {
+    mockFindPersonById.mockRejectedValue(new Error("directory unavailable"));
+
+    const response = await post(body());
+    expect(response.status).toBe(201);
+    expect(mockFindPersonById).not.toHaveBeenCalled();
+  });
+
+  it("rejects a directoryId that resolves to nobody with 422, not a 5xx", async () => {
+    mockFindPersonById.mockResolvedValue(null);
+
+    const response = await post(
+      body({ member: { source: "directory", id: "guid-nobody" } }),
+    );
+
+    expect(response.status).toBe(422);
+    await expect(response.json()).resolves.toMatchObject({
+      issues: { member: "לא נמצא ברשימה" },
+    });
+
+    const db = await getDb();
+    await expect(db.collection("shotef_reviews").countDocuments()).resolves.toBe(0);
+  });
+
+  // A directory outage and a server that was never configured send whoever
+  // investigates to opposite places, so they answer differently — the same
+  // split `POST /api/rotation` and the login route draw.
+  it("answers 503 when the directory cannot be reached", async () => {
+    mockFindPersonById.mockRejectedValue(new Error("directory unavailable"));
+
+    const response = await post(
+      body({ member: { source: "directory", id: "guid-roi" } }),
+    );
+
+    expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toMatchObject({
+      error: "לא הצלחנו לפנות לספריית הארגון",
+    });
+  });
+
+  it("answers 500 when the directory is not configured on this server", async () => {
+    mockFindPersonById.mockRejectedValue(new ConfigError("LDAP_URL is not set"));
+
+    const response = await post(
+      body({ member: { source: "directory", id: "guid-roi" } }),
+    );
+
+    expect(response.status).toBe(500);
+    await expect(response.json()).resolves.toMatchObject({
+      error: "החיפוש בספרייה לא מוגדר בשרת",
+    });
   });
 
   // Relies on the index the app declares, not one built here — see the note in
@@ -146,7 +240,10 @@ describe("POST /api/shotef/reviews", () => {
     // A different member and a different headline — it is the *week* that is
     // taken, and the picker dropping it is a courtesy, not the enforcement.
     const second = await post(
-      body({ memberId: idByName["תמר רוזן"], headline: "אותו שבוע, סיפור אחר" }),
+      body({
+        member: { source: "user", id: idByName["תמר רוזן"] },
+        headline: "אותו שבוע, סיפור אחר",
+      }),
     );
     expect(second.status).toBe(409);
     await expect(second.json()).resolves.toMatchObject({

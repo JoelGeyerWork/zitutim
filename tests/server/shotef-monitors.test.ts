@@ -11,11 +11,12 @@ import {
   getSolverBoard,
   listMonitors,
   monitorInputSchema,
-  resolveSolvers,
   type MonitorActor,
   type MonitorDoc,
   type MonitorInput,
 } from "@/lib/shotef-monitors";
+import { resolvePeople } from "@/lib/people";
+import { userRef } from "@/lib/person-ref";
 import { upsertRosterUser } from "@/lib/users";
 
 const ADDER: MonitorActor = { id: "6b0000000000000000000001", name: "יואל" };
@@ -48,7 +49,7 @@ function input(overrides: Partial<MonitorInput> = {}): MonitorInput {
     monitor: "db-prod-01: RAM above 95%",
     icon: "memory",
     solution: "שאילתת דוח בלי אינדקס משכה את כל הטבלה לזיכרון. הוספנו אינדקס מורכב.",
-    solvedByIds: [userId["אורי בן־חיים"]],
+    solvedBy: [userRef(userId["אורי בן־חיים"])],
     firstFiredAt: "2026-06-09",
     solvedAt: "2026-08-18",
     minutesToFix: 180,
@@ -57,15 +58,15 @@ function input(overrides: Partial<MonitorInput> = {}): MonitorInput {
 }
 
 /**
- * The write path as the route drives it: resolve the names, then store. Going
- * through `resolveSolvers` rather than handing `createMonitor` a made-up list
- * is what keeps these tests honest about the one read the route actually does.
+ * The write path as the route drives it: resolve the references, then store.
+ * Going through `resolvePeople` rather than handing `createMonitor` a made-up
+ * list is what keeps these tests honest about the one read the route does.
  */
 async function create(overrides: Partial<MonitorInput> = {}) {
   const parsed = input(overrides);
-  const resolved = await resolveSolvers(parsed.solvedByIds);
+  const resolved = await resolvePeople(parsed.solvedBy);
   if (!resolved.ok) throw new Error("the test named somebody who does not exist");
-  return createMonitor(parsed, ADDER, resolved.solvers);
+  return createMonitor(parsed, ADDER, resolved.people);
 }
 
 beforeEach(async () => {
@@ -138,7 +139,7 @@ describe("createMonitor", () => {
 
   it("keeps every name on a certificate solved by more than one person", async () => {
     const monitor = await create({
-      solvedByIds: [userId["אורי בן־חיים"], userId["דניאל עמר"]],
+      solvedBy: [userRef(userId["אורי בן־חיים"]), userRef(userId["דניאל עמר"])],
     });
 
     expect(monitor.solvedBy.map((solver) => solver.name)).toEqual([
@@ -160,7 +161,7 @@ describe("listMonitors", () => {
 
   it("resolves every name on a plaque out of users", async () => {
     await create({
-      solvedByIds: [userId["אורי בן־חיים"], userId["דניאל עמר"]],
+      solvedBy: [userRef(userId["אורי בן־חיים"]), userRef(userId["דניאל עמר"])],
     });
 
     const [plaque] = await listMonitors();
@@ -176,7 +177,7 @@ describe("listMonitors", () => {
    * that happened, and it must not lose a recipient the day they leave.
    */
   it("keeps a name on the wall after that person leaves the rotation", async () => {
-    await create({ solvedByIds: [userId["נועה ברקת"]] });
+    await create({ solvedBy: [userRef(userId["נועה ברקת"])] });
     await removeShotefMember(userId["נועה ברקת"]);
 
     const [plaque] = await listMonitors();
@@ -186,7 +187,7 @@ describe("listMonitors", () => {
   });
 
   it("names somebody who was never on the rotation at all", async () => {
-    await create({ solvedByIds: [userId["רועי אשכנזי"]] });
+    await create({ solvedBy: [userRef(userId["רועי אשכנזי"])] });
 
     const [plaque] = await listMonitors();
     expect(plaque.solvedBy[0].name).toBe("רועי אשכנזי");
@@ -195,7 +196,7 @@ describe("listMonitors", () => {
   // Resolved on read, not snapshotted: a rename in the directory reaches every
   // plaque at once, with no stale copy anywhere to go looking for.
   it("follows a rename in the directory onto plaques already hung", async () => {
-    await create({ solvedByIds: [userId["נועה ברקת"]] });
+    await create({ solvedBy: [userRef(userId["נועה ברקת"])] });
 
     await upsertRosterUser({ ...PEOPLE[0], displayName: "נועה ברקת־שרון" });
 
@@ -209,56 +210,14 @@ describe("listMonitors", () => {
   });
 });
 
-describe("resolveSolvers", () => {
-  it("accepts ids that are all real users", async () => {
-    const result = await resolveSolvers([
-      userId["אורי בן־חיים"],
-      userId["דניאל עמר"],
-    ]);
-    expect(result.ok).toBe(true);
-  });
-
-  it("hands back the names in the order they were written", async () => {
-    const result = await resolveSolvers([
-      userId["דניאל עמר"],
-      userId["אורי בן־חיים"],
-    ]);
-
-    expect(result.ok && result.solvers.map((solver) => solver.name)).toEqual([
-      "דניאל עמר",
-      "אורי בן־חיים",
-    ]);
-  });
-
-  it("accepts someone off the on-call rotation — the wall is not the roster", async () => {
-    const result = await resolveSolvers([userId["רועי אשכנזי"]]);
-    expect(result.ok).toBe(true);
-  });
-
-  it("reports an id that resolves to no user, rather than writing it", async () => {
-    const result = await resolveSolvers([
-      userId["אורי בן־חיים"],
-      "6b00000000000000000000ff",
-    ]);
-
-    expect(result.ok).toBe(false);
-    expect(result.ok === false && result.issues.solvedByIds).toBeTruthy();
-  });
-
-  it("reports a malformed id instead of throwing on the ObjectId", async () => {
-    const result = await resolveSolvers(["not-an-object-id"]);
-    expect(result.ok).toBe(false);
-  });
-});
-
 describe("getSolverBoard", () => {
   it("counts certificates per person, most first", async () => {
     await create({
-      solvedByIds: [userId["אורי בן־חיים"]],
+      solvedBy: [userRef(userId["אורי בן־חיים"])],
       solvedAt: "2026-08-18",
     });
     await create({
-      solvedByIds: [userId["אורי בן־חיים"], userId["דניאל עמר"]],
+      solvedBy: [userRef(userId["אורי בן־חיים"]), userRef(userId["דניאל עמר"])],
       solvedAt: "2026-07-06",
     });
 
@@ -271,8 +230,8 @@ describe("getSolverBoard", () => {
   });
 
   it("breaks a tie on the most recent save", async () => {
-    await create({ solvedByIds: [userId["דניאל עמר"]], solvedAt: "2026-06-11" });
-    await create({ solvedByIds: [userId["נועה ברקת"]], solvedAt: "2026-08-01" });
+    await create({ solvedBy: [userRef(userId["דניאל עמר"])], solvedAt: "2026-06-11" });
+    await create({ solvedBy: [userRef(userId["נועה ברקת"])], solvedAt: "2026-08-01" });
 
     const board = await getSolverBoard();
     expect(board.map((row) => row.member.name)).toEqual([
@@ -314,7 +273,7 @@ describe("getSolverBoard", () => {
    */
   it("drops a solver who is not on the rotation, though their plaque keeps them", async () => {
     await create({
-      solvedByIds: [userId["נועה ברקת"], userId["רועי אשכנזי"]],
+      solvedBy: [userRef(userId["נועה ברקת"]), userRef(userId["רועי אשכנזי"])],
     });
 
     const board = await getSolverBoard();
@@ -328,14 +287,14 @@ describe("getSolverBoard", () => {
   });
 
   it("never leaks a directoryId onto the public board", async () => {
-    await create({ solvedByIds: [userId["נועה ברקת"]] });
+    await create({ solvedBy: [userRef(userId["נועה ברקת"])] });
 
     const board = await getSolverBoard();
     expect(board[0].member).not.toHaveProperty("directoryId");
   });
 
   it("carries the gender the podium needs, which only the rotation has", async () => {
-    await create({ solvedByIds: [userId["נועה ברקת"]] });
+    await create({ solvedBy: [userRef(userId["נועה ברקת"])] });
 
     const board = await getSolverBoard();
     expect(board[0].member.gender).toBe("f");
@@ -364,7 +323,7 @@ describe("getFastestFix", () => {
   });
 
   it("resolves its solvers too, since the wall may render it", async () => {
-    await create({ solvedByIds: [userId["דניאל עמר"]], minutesToFix: 11 });
+    await create({ solvedBy: [userRef(userId["דניאל עמר"])], minutesToFix: 11 });
 
     expect((await getFastestFix())!.solvedBy[0].name).toBe("דניאל עמר");
   });
@@ -411,9 +370,9 @@ describe("monitorInputSchema stays authoritative", () => {
     expect(parsed.error!.issues[0].path).toEqual(["firstFiredAt"]);
   });
 
-  it("dedupes solvedByIds before anything stores them", () => {
-    const id = userId["אורי בן־חיים"];
-    const parsed = monitorInputSchema.parse(input({ solvedByIds: [id, id] }));
-    expect(parsed.solvedByIds).toEqual([id]);
+  it("dedupes solvedBy before anything stores it", () => {
+    const ref = userRef(userId["אורי בן־חיים"]);
+    const parsed = monitorInputSchema.parse(input({ solvedBy: [ref, ref] }));
+    expect(parsed.solvedBy).toEqual([ref]);
   });
 });

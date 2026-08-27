@@ -3,12 +3,12 @@ import "server-only";
 import { ObjectId, type Collection } from "mongodb";
 
 import { getDb } from "@/lib/mongodb";
+import { type ResolvedPerson } from "@/lib/people";
 import {
   type ReviewInput,
   type ShotefReview,
   type ShotefReviewList,
 } from "@/lib/shotef-schema";
-import { type UserDoc } from "@/lib/users";
 
 export * from "@/lib/shotef-schema";
 
@@ -32,18 +32,15 @@ export interface ReviewActor {
 /**
  * The person a summary is *about*, resolved out of `users` before it is stored.
  *
+ * `ResolvedPerson` is what `resolvePeople` hands back, whichever source the
+ * form named them through — so the write path here is identical for a member of
+ * the rotation and for somebody picked out of the directory a moment ago.
+ *
  * Deliberately not a snapshot on the document: the name is looked up again on
  * every read (see `listShotefReviews`), so a week keeps its author after they
- * leave the on-call rotation and a rename in AD reaches every past week at
- * once. This shape only exists so the write path can answer "who was that?"
- * once — for the route's 422 and for the record it hands back — instead of
- * twice.
+ * leave the on-call rotation and a rename in AD reaches every past week at once.
  */
-export interface ReviewMember {
-  /** `users._id` as a hex string. */
-  id: string;
-  name: string;
-}
+export type ReviewMember = ResolvedPerson;
 
 /** Shape stored in MongoDB. */
 export interface ShotefReviewDoc {
@@ -181,15 +178,6 @@ export async function getShotefReviews(): Promise<ShotefReviewList> {
 }
 
 /**
- * The `users` row `memberId` names, or null when it names nobody.
- *
- * `reviewInputSchema` only knows the field is a non-empty string, so an id that
- * resolves to no one is invalid *input* — the route turns a null here into a
- * 422 on that field rather than letting the insert succeed against a member who
- * does not exist. It comes back with the name attached because the created
- * record has to carry one, and asking twice for the same row would be silly.
- */
-/**
  * One week, one summary — declared here, not only in `scripts/seed.mjs`.
  *
  * `createShotefReview` has no pre-check `findOne` on purpose: two people
@@ -204,25 +192,10 @@ export async function createShotefReviewIndexes(): Promise<void> {
   await collection.createIndexes([{ key: { weekStart: -1 }, unique: true }]);
 }
 
-export async function findReviewMember(
-  memberId: string,
-): Promise<ReviewMember | null> {
-  if (!ObjectId.isValid(memberId)) return null;
-  const db = await getDb();
-  const row = await db
-    .collection<UserDoc>("users")
-    .findOne(
-      { _id: new ObjectId(memberId) },
-      { projection: { _id: 1, displayName: 1 } },
-    );
-  if (!row) return null;
-  return { id: row._id.toHexString(), name: row.displayName };
-}
-
 /**
- * `member` is the row `findReviewMember` already resolved, not `input.memberId`
- * — so this cannot store an FK that points at nobody, and the record it hands
- * back can carry the name without a second read.
+ * `member` is the row `resolvePeople` already resolved, not `input.member` — so
+ * this cannot store an FK that points at nobody, and the record it hands back
+ * can carry the name without a second read.
  */
 export async function createShotefReview(
   input: ReviewInput,

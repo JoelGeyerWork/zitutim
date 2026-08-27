@@ -6,7 +6,7 @@ import { HallOfFame } from "@/components/shotef-hall-of-fame";
 import { SessionProvider } from "@/components/session-provider";
 import type { MonitorWall, SolvedMonitor, Solver } from "@/lib/shotef-schema";
 import type { Member } from "@/lib/team";
-import { makeSessionUser, respondWith } from "./factories";
+import { jsonResponse, makeSessionUser, respondWith } from "./factories";
 
 vi.mock("sonner", () => ({
   toast: { success: vi.fn(), error: vi.fn() },
@@ -135,7 +135,7 @@ describe("HallOfFame", () => {
     expect(init.method).toBe("POST");
     expect(JSON.parse(init.body as string)).toMatchObject({
       monitor: "redis-02: evicted keys above 1k/min",
-      solvedByIds: [YONATAN],
+      solvedBy: [{ source: "user", id: YONATAN }],
       firstFiredAt: "2026-07-01",
       solvedAt: "2026-08-20",
       // Four hours, as the two spans of one control spell it.
@@ -373,7 +373,9 @@ describe("HallOfFame", () => {
     expect(screen.getByText("לא ידוע")).toBeInTheDocument();
   });
 
-  it("tells a signed-in reader with an empty rotation where to add people", async () => {
+  // An empty rotation is no longer a dead end: the certificate names whoever
+  // actually silenced the thing, and the directory is where they are found.
+  it("still lets a certificate be written with nobody on the rotation", async () => {
     const actor = userEvent.setup();
     render(
       <SessionProvider user={makeSessionUser()}>
@@ -384,9 +386,92 @@ describe("HallOfFame", () => {
     await actor.click(screen.getByRole("button", { name: /תעודה חדשה/ }));
     const dialog = await screen.findByRole("dialog");
 
-    expect(within(dialog).getByText(/אין אף אחד בתורנות/)).toBeInTheDocument();
+    expect(within(dialog).queryByText(/אין אף אחד בתורנות/)).toBeNull();
     expect(
-      within(dialog).queryByRole("button", { name: "תליית התעודה" }),
-    ).toBeNull();
+      within(dialog).getByRole("button", { name: "תליית התעודה" }),
+    ).toBeInTheDocument();
+    expect(
+      within(dialog).getByRole("button", { name: /חיפוש בספריית הארגון/ }),
+    ).toBeInTheDocument();
+  });
+
+  // The certificate credits a `users` row, and a directory result may not have
+  // one yet — so what crosses the wire is the objectGUID, and the route
+  // re-resolves it. Nothing the browser typed reaches a stored name.
+  it("puts somebody found in the directory on the certificate", async () => {
+    vi.mocked(fetch).mockImplementation(async (url) => {
+      if (String(url).startsWith("/api/directory")) {
+        return jsonResponse({
+          people: [
+            {
+              directoryId: "guid-roi",
+              displayName: "רועי אשכנזי",
+              title: "אבטחת מידע",
+              username: "roi.ashkenazi",
+            },
+          ],
+        });
+      }
+      return jsonResponse(CREATED, 201);
+    });
+
+    const user = open();
+    await user.click(screen.getByRole("button", { name: /תעודה חדשה/ }));
+    const dialog = await screen.findByRole("dialog");
+
+    await user.click(
+      within(dialog).getByRole("button", { name: /חיפוש בספריית הארגון/ }),
+    );
+    await user.type(
+      screen.getByLabelText("חיפוש בספריית הארגון"),
+      "רועי",
+    );
+
+    const result = await screen.findByText("רועי אשכנזי");
+    await user.click(
+      within(result.closest("li")!).getByRole("button", { name: "הוספה" }),
+    );
+
+    // They joined the button row already picked, so they come off it the same
+    // way anybody else does.
+    expect(
+      within(dialog).getByRole("button", { name: "רועי אשכנזי" }),
+    ).toHaveAttribute("aria-pressed", "true");
+
+    await fillForm(dialog, user);
+    await user.click(
+      within(dialog).getByRole("button", { name: "תליית התעודה" }),
+    );
+
+    const post = vi
+      .mocked(fetch)
+      .mock.calls.find(([url]) => url === "/api/shotef/monitors")!;
+    expect(JSON.parse((post[1] as RequestInit).body as string).solvedBy).toEqual([
+      { source: "directory", id: "guid-roi" },
+      { source: "user", id: YONATAN },
+    ]);
+  });
+
+  it("says the directory needs a session rather than showing a box that 401s", async () => {
+    const actor = userEvent.setup();
+    render(
+      <SessionProvider user={null}>
+        <HallOfFame initial={wall()} roster={ROSTER} />
+      </SessionProvider>,
+    );
+
+    await actor.click(screen.getByRole("button", { name: /תעודה חדשה/ }));
+    const dialog = await screen.findByRole("dialog");
+    await actor.click(
+      within(dialog).getByRole("button", { name: /חיפוש בספריית הארגון/ }),
+    );
+
+    expect(
+      screen.queryByLabelText("חיפוש בספריית הארגון"),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "כניסה" })).toHaveAttribute(
+      "href",
+      "/login?next=%2Fshotef%2Fhall-of-fame",
+    );
   });
 });
