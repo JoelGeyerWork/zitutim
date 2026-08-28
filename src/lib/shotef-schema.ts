@@ -274,6 +274,15 @@ export function closedWeeks(now: Date, count: number): string[] {
   );
 }
 
+/**
+ * Has the week that opened on `weekStartIso` handed over yet? The rule behind
+ * `closedWeeks`, pulled out so the schema can enforce what the picker offers.
+ * Both Sundays, so a plain `<` is exact.
+ */
+export function isClosedWeek(weekStartIso: string, now: Date): boolean {
+  return new Date(weekStartIso).getTime() < currentShift(now).getTime();
+}
+
 /** Whose week it was, per the anchored rotation — the review's default author. */
 export function shotefOn(weekStartIso: string, roster: Member[]): Member | undefined {
   return roster[shiftIndex(new Date(weekStartIso), roster.length)];
@@ -293,10 +302,22 @@ export const reviewInputSchema = z.object({
   // A shift is a whole Sunday-to-Saturday week, so a week that doesn't start on
   // one is not a week anyone was on duty for. The form only offers Sundays; the
   // check is here because this is the shape a route handler would trust.
-  weekStart: dateOnly.refine(
-    (value) => new Date(value).getUTCDay() === HANDOVER_WEEKDAY,
-    "שבוע תורנות מתחיל ביום ראשון",
-  ),
+  weekStart: dateOnly
+    .refine(
+      (value) => new Date(value).getUTCDay() === HANDOVER_WEEKDAY,
+      "שבוע תורנות מתחיל ביום ראשון",
+    )
+    // `dateOnly` only bars a date more than a day ahead, which lets through
+    // both the week running now (its Sunday is already behind us) and, on a
+    // Saturday, the Sunday about to open. Neither has a score yet — and the
+    // write is one-way, because `weekStart` is unique: an early summary takes
+    // the slot, and the real one 409s on the day it could finally be written.
+    // The dialog offers `closedWeeks` alone; this is the same rule standing
+    // where a route handler can trust it.
+    .refine(
+      (value) => isClosedWeek(value, new Date()),
+      "אפשר לסכם רק שבוע שכבר הסתיים",
+    ),
   /**
    * Whose week it was — a `PersonRef`, not a bare `users._id`, so a week worked
    * by somebody who was never on the on-call rotation (or has since left it)

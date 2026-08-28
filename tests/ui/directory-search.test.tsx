@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -53,6 +53,45 @@ describe("DirectorySearch", () => {
 
     expect(screen.getByText("לפחות שתי אותיות.")).toBeInTheDocument();
     expect(fetch).not.toHaveBeenCalled();
+  });
+
+  // Two requests in flight, answering in the wrong order. The debounce cancels
+  // a *pending* request, not one already sent, so this is reachable by typing.
+  it("ignores a slow answer to a query that has been typed past", async () => {
+    const inflight: Array<{ q: string; send: (people: unknown[]) => void }> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: string) => {
+        const q = new URL(url, "http://localhost").searchParams.get("q")!;
+        return new Promise<Response>((resolve) => {
+          inflight.push({ q, send: (people) => resolve(jsonResponse({ people })) });
+        });
+      }),
+    );
+
+    const actor = search();
+    const box = screen.getByLabelText("חיפוש בספריית הארגון");
+
+    await actor.type(box, "רו");
+    await waitFor(() => expect(inflight).toHaveLength(1));
+
+    await actor.type(box, "עי");
+    await waitFor(() => expect(inflight).toHaveLength(2));
+    expect(inflight.map((call) => call.q)).toEqual(["רו", "רועי"]);
+
+    // The query on screen answers first, then the one already typed past.
+    inflight[1].send([ROI]);
+    expect(await screen.findByText("רועי אשכנזי")).toBeInTheDocument();
+
+    inflight[0].send([{ ...ROI, directoryId: "guid-stale", displayName: "רות שגב" }]);
+
+    // The stale answer neither replaces the list nor puts the box back on
+    // "מחפשים…", which is where `resolvedFor` regressing to "רו" would leave it.
+    await waitFor(() => {
+      expect(screen.queryByText("רות שגב")).not.toBeInTheDocument();
+      expect(screen.queryByText("מחפשים…")).not.toBeInTheDocument();
+    });
+    expect(screen.getByText("רועי אשכנזי")).toBeInTheDocument();
   });
 
   it("hands a result to the caller's own control", async () => {

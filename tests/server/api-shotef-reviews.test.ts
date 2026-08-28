@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ConfigError } from "@/lib/config-error";
 import { getDb } from "@/lib/mongodb";
+import { currentShift } from "@/lib/shotef-schema";
 import { sessionCookie } from "./factories";
 
 // The route's only directory call. Everything else — the users upsert, the
@@ -121,6 +122,23 @@ describe("POST /api/shotef/reviews", () => {
     const payload = await response.json();
     expect(payload.error).toBe("יש שדות לא תקינים");
     expect(payload.issues.weekStart).toBe("שבוע תורנות מתחיל ביום ראשון");
+
+    const db = await getDb();
+    await expect(db.collection("shotef_reviews").countDocuments()).resolves.toBe(0);
+  });
+
+  // `dateOnly` lets the running week through — its Sunday is already behind us
+  // — so only the closed-week rule stands between a signed-in client and a slot
+  // it can never give back: `weekStart` is unique, so the early write wins and
+  // the real summary 409s on the day it could finally be written.
+  it("rejects a summary for the week still running with 422", async () => {
+    const running = currentShift(new Date()).toISOString().slice(0, 10);
+
+    const response = await post(body({ weekStart: running }));
+    expect(response.status).toBe(422);
+
+    const payload = await response.json();
+    expect(payload.issues.weekStart).toBe("אפשר לסכם רק שבוע שכבר הסתיים");
 
     const db = await getDb();
     await expect(db.collection("shotef_reviews").countDocuments()).resolves.toBe(0);

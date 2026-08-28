@@ -7,6 +7,7 @@ import {
   buildShifts,
   byNewest,
   currentShift,
+  isClosedWeek,
   handoverOf,
   byWeek,
   closedWeeks,
@@ -426,6 +427,28 @@ describe("reviewInputSchema", () => {
     );
   });
 
+  // The dialog only ever offers `closedWeeks`, but the schema is what a route
+  // handler trusts — and `dateOnly` waves the running week through, because the
+  // Sunday that opened it is already behind us.
+  it("refuses the week that is still running", () => {
+    const running = currentShift(new Date()).toISOString().slice(0, 10);
+
+    expect(issueOn({ weekStart: running })?.message).toBe(
+      "אפשר לסכם רק שבוע שכבר הסתיים",
+    );
+  });
+
+  it("takes the week that closed most recently", () => {
+    const [lastClosed] = closedWeeks(new Date(), 1);
+
+    expect(
+      reviewInputSchema.safeParse({
+        ...input,
+        weekStart: lastClosed.slice(0, 10),
+      }).success,
+    ).toBe(true);
+  });
+
   // Zero is a real score: a week that went badly is the one worth writing down.
   it("takes zero stars but not a negative or a sixth one", () => {
     expect(reviewInputSchema.safeParse({ ...input, rating: 0 }).success).toBe(
@@ -453,5 +476,28 @@ describe("reviewInputSchema", () => {
       reviewInputSchema.safeParse({ ...input, member: directoryRef("guid-roi") })
         .success,
     ).toBe(true);
+  });
+});
+
+describe("isClosedWeek", () => {
+  // Saturday 2026-08-22: the shift running is the one that opened on the 16th,
+  // and the 23rd is under 24 hours away — so `dateOnly`'s future check passes
+  // it. This is the edge the closed-week rule exists for.
+  const saturday = new Date("2026-08-22T12:00:00.000Z");
+
+  it("is false for the week running now", () => {
+    expect(isClosedWeek("2026-08-16", saturday)).toBe(false);
+  });
+
+  it("is false for the week about to open, a day out", () => {
+    expect(isClosedWeek("2026-08-23", saturday)).toBe(false);
+  });
+
+  it("is true from the handover onwards", () => {
+    expect(isClosedWeek("2026-08-09", saturday)).toBe(true);
+    // The same week, judged one day later: the handover has happened.
+    expect(isClosedWeek("2026-08-16", new Date("2026-08-23T00:00:00.000Z"))).toBe(
+      true,
+    );
   });
 });

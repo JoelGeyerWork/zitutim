@@ -50,7 +50,17 @@ export function ShotefRoulette({
   const [editing, setEditing] = useState(false);
 
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  useEffect(() => () => clearTimeout(timer.current ?? undefined), []);
+  // Keyed on `initialRoster`, not `[]`: the cleanup then runs on unmount *and*
+  // whenever the server hands down a fresh list. A spin still in flight would
+  // otherwise land `setWinner` on an index into a wheel that just changed
+  // shape — `rotate` wraps, so it cannot crash, it would simply announce the
+  // wrong person some seconds after the list settled. Clearing it here rather
+  // than in the reseed branch below is not a preference: touching a ref during
+  // render is a `react-hooks/refs` error in this config.
+  useEffect(
+    () => () => clearTimeout(timer.current ?? undefined),
+    [initialRoster],
+  );
 
   // The editor mutates through the API and then `router.refresh()`, which
   // re-runs the server page and hands down a fresh `initialRoster`. Reconciled
@@ -85,6 +95,11 @@ export function ShotefRoulette({
     const target = ((-next * slice) % 360 + 360) % 360;
     const ahead = ((target - (rotation % 360)) % 360 + 360) % 360;
     const spinMs = prefersReducedMotion() ? 0 : SPIN_MS;
+
+    // Belt and braces with the reseed above: that branch clears `spinning`
+    // without the timer having fired, so this is the one path that can start a
+    // second spin while the first one's timeout is still pending.
+    clearTimeout(timer.current ?? undefined);
 
     setSpinning(true);
     setDuration(spinMs);

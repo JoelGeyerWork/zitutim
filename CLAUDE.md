@@ -361,6 +361,13 @@ Three more things the two list tabs share:
   `Record<field, message>`. `MonitorFormDialog` remaps `minutesToFix` onto its
   `amount` field for **both** sources: the route keys its 422 to a field the
   form does not draw.
+- **A review can only be written about a week that has closed.** The dialog
+  offers `closedWeeks` and nothing else, but the schema is what the route
+  trusts, and `dateOnly` waves the running week through — its Sunday is already
+  in the past — plus, on a Saturday, the Sunday about to open. The write is
+  one-way: `weekStart` is unique, so an early summary takes the slot and the
+  real one 409s on the day it could finally be written. `isClosedWeek` is the
+  shared rule, refined onto `weekStart` beside the Sunday check.
 
 Three things worth knowing about the math:
 

@@ -65,11 +65,13 @@ export function DirectorySearch({
     // Debounced, so a fast typist issues one request rather than one a keystroke
     // — the two-character floor is also the server's rule. Every setState is
     // inside the async callback; the effect body itself sets none.
+    let cancelled = false;
     const handle = setTimeout(async () => {
       try {
         const response = await fetch(
           `/api/directory?q=${encodeURIComponent(q)}`,
         );
+        if (cancelled) return;
         if (response.status === 401) {
           // Signed in when this rendered, so a 401 means the session lapsed
           // rather than that they never had one — and every write behind this
@@ -85,17 +87,28 @@ export function DirectorySearch({
           return;
         }
         const data: { people: DirectoryPerson[] } = await response.json();
+        if (cancelled) return;
         setResults(data.people);
         setErrored(false);
         setResolvedFor(q);
       } catch {
+        if (cancelled) return;
         setResults([]);
         setErrored(true);
         setResolvedFor(q);
       }
     }, 300);
 
-    return () => clearTimeout(handle);
+    return () => {
+      // Cancelling the debounce is only half of it: a request already in flight
+      // outlives the effect that started it, and the responses can land in
+      // either order. "ab" answering after "abc" would put `resolvedFor` back
+      // on a query nobody is looking at any more — and since `loading` is
+      // `resolvedFor !== trimmed`, the box would sit on "מחפשים…" until the
+      // next keystroke, over results that are already stale.
+      cancelled = true;
+      clearTimeout(handle);
+    };
   }, [query, signedIn, loginHref, router]);
 
   // `GET /api/directory` is the one read in this app that demands a session, and
