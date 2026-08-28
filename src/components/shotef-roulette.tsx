@@ -2,12 +2,12 @@
 
 import { useEffect, useRef, useState } from "react";
 import {
+  BroomIcon,
   DicesIcon,
   ClockIcon,
   HashIcon,
   LifeBuoyIcon,
   PencilIcon,
-  SirenIcon,
 } from "lucide-react";
 
 import { PersonAvatar } from "@/components/person-avatar";
@@ -148,7 +148,7 @@ export function ShotefRoulette({
 
           <div className="flex flex-wrap items-center justify-between gap-2">
             <Badge className="gap-1">
-              <SirenIcon className="size-3" />
+              <BroomIcon className="size-3" />
               שוטף השבוע
             </Badge>
             {/* Counted to the handover, not to the start — what matters when

@@ -1,4 +1,5 @@
 import {
+  BroomIcon,
   CalendarDaysIcon,
   CircleHelpIcon,
   HomeIcon,
@@ -8,7 +9,6 @@ import {
   PlusIcon,
   QuoteIcon,
   SearchIcon,
-  SirenIcon,
   StarIcon,
   TrophyIcon,
   type LucideIcon,
@@ -70,7 +70,7 @@ export const SECTIONS: Section[] = [
     href: "/shotef",
     label: "שוטף",
     description: "מי תורן השבוע על הבאגים והתקלות שנופלות עלינו",
-    icon: SirenIcon,
+    icon: BroomIcon,
     tabs: [
       { href: "/shotef", label: "התורנות", icon: LifeBuoyIcon },
       { href: "/shotef/reviews", label: "סיכומי שבוע", icon: StarIcon },
