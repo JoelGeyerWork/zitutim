@@ -243,7 +243,7 @@ describe("DELETE /api/themes/:id", () => {
 });
 
 describe("authentication and origin", () => {
-  const UNAUTHORIZED = { error: "צריך להתחבר כדי לשנות את הקיר" };
+  const UNAUTHORIZED = { error: "צריך להתחבר כדי לשנות משהו כאן" };
 
   it.each([
     ["no cookie", null],

@@ -15,6 +15,7 @@ links into them rather than being a section itself:
 | `/` | the hub — this week's ישב״צ, and a teaser per section |
 | `/quotes`, `/quotes/search`, `/quotes/create` | the quote wall: who said something, when, and what led to it |
 | `/meetups`, `/meetups/themes` | the weekly ישב״צ, the refreshment rotation, and the theme-guessing game |
+| `/shotef`, `/shotef/reviews`, `/shotef/hall-of-fame` | the weekly on-call slot: whose week it is, how each week went, and the monitors we have already solved |
 | `/login` | — |
 
 Navigation is exactly two levels, both in the header at every screen size: a
@@ -155,6 +156,250 @@ themes-page "whose turn was it" header) still reads the hard-coded `TEAM`, so it
 can drift from the DB rotation if the two lists of the same eight ever diverge.
 It is a smaller seam than two rosters, and collapsing `TEAM` into the rotation is
 what finally closes it.
+
+### שוטף: all three tabs are stored
+
+The on-call section was moved off fixtures one tab at a time, and none are
+left: the rotation, the weekly reviews (`shotef_reviews`) and the hall of fame
+(`shotef_monitors`) are all persisted, all session-gated on write, and all
+seeded by `--demo`.
+
+**The rotation is a second row in the `rotation` collection**, `_id: "shotef"`,
+not a collection of its own. `rotation.ts` takes a `RotationKey` on every
+function, **defaulting to `"current"`** so the ישב״צ side reads exactly as it did
+when the module knew one row. The shape needed is identical
+(`{ userId, gender }[]`, order is array position) and the singleton/atomicity
+reasoning in `rotation.ts` is subtle enough that a second copy of it is a second
+copy to keep in agreement. `src/lib/shotef.ts` binds that module to this key —
+`getShotefRotation`, `addShotefMember`, … — so nothing outside it names the key,
+and the two rotations can differ only in which row they touch.
+
+Membership works exactly like the meetup rotation: `GET|POST
+/api/shotef/rotation`, `PATCH|DELETE /api/shotef/rotation/[userId]`, `PUT
+/api/shotef/rotation/order`. `GET` is public, every mutation is
+`isSameOrigin` → session-off-the-`Request` **before** the body is parsed → Zod,
+POST re-resolves the person through `findPersonById` so nothing a client typed
+lands in a stored name, and removing the **last** member is refused (409) — a
+rotation with nobody on it has no week to render. **Someone in both rotations is
+one `users` row**, since both point at the same `upsertRosterUser` identity.
+
+**One editor serves both rotations.** `RotationEditor` takes a required
+`copy: RotationCopy` — the REST base plus the nouns — and `MEETUP_COPY` /
+`SHOTEF_COPY` sit side by side in that file so a field added to one cannot be
+silently forgotten on the other. The three prepositional forms
+(`inRotation`/`toRotation`/`fromRotation`) are separate fields rather than
+derived from one stem because Hebrew folds the preposition into the definite
+article. Both sides say `סבב` today, so the forms happen to agree — they are
+still stored per-rotation rather than shared, because the moment one is renamed
+(as שוטף's was, from `תורנות`) the whole set moves with it, `joinTail`'s
+relative pronoun included. The
+`copy` prop is deliberately **required, not defaulted**: which API a component
+POSTs to should not be implicit. `slots` is the structural
+`Turn = { date, weeksAway }`, which both `MeetupSlot` and `ShotefShift` satisfy.
+The debounced directory lookup it used to own now lives in
+`src/components/directory-search.tsx` — see below; the editor keeps only the
+part that was ever rotation-specific, which is what a result row offers.
+
+Two things worth knowing about the pair:
+
+- **Every write control in this section is drawn for everyone**, signed in or
+  not — the two pencils, "סיכום חדש" and "תעודה חדשה" — and the `401` behind it
+  bounces the caller to `/login`. They were briefly gated on `useSession()`,
+  which reads like the safer choice and is the worse one: the control is the
+  only thing telling a signed-out reader that summarising a week or hanging a
+  certificate is possible at all, so hiding it leaves a populated page with no
+  way in and no hint there is one. The enforcement was never the button; it is
+  the route. This matches `meetup-roulette.tsx`, which never gated its pencil.
+  Consequently the empty states carry **no login link of their own** — the
+  button above them already leads there, and two doors to one place is one too
+  many. The **one** control in this section that *is* gated on `useSession()` is
+  the directory search inside those forms, and for the opposite reason: it has
+  no 401 to bounce off, because `GET /api/directory` would refuse it before a
+  keystroke ever reached a write path.
+- **`ShotefRoulette` reconciles a fresh `initialRoster` during render**, and
+  resets `winner`/`rotation`/`spinning` when it does — those index into a wheel
+  that just changed shape. `react-hooks/set-state-in-effect` is an error in this
+  config, so this is a render-time `seed` comparison, never an effect.
+
+The split follows quotes/themes exactly: **`src/lib/shotef-schema.ts` is
+client-safe** (every type, every Zod schema, every pure date/maths helper, every
+label map) and `src/lib/shotef.ts` is the `server-only` Mongo layer that
+re-exports it. **Client components must import from `@/lib/shotef-schema`** —
+pulling `@/lib/shotef` into a `"use client"` file drags the Mongo driver into the
+browser bundle.
+
+#### A person is resolved from `users`, never from the rotation
+
+This is the rule the reviews and the wall are built on, and getting it wrong is
+invisible until somebody leaves the roster.
+
+A review stores `memberId` and a certificate stores `solvedByIds` as `users._id`
+references, and **the Mongo layer joins to `users` to hand the view a name**.
+Resolving a person by searching the *current* on-call rotation — which is what
+`memberById(id, roster)` and the old roster-taking `solversOf` did — means every
+past summary they wrote reads "לא ידוע" the day they come off the roster, and
+their name vanishes from certificates they earned. A week that happened does not
+stop having had someone on duty.
+
+**Resolved on read, not snapshotted.** `users` rows are never deleted — leaving a
+rotation is not leaving the directory — so the name is always there, and a rename
+in AD reaches every past week at once. Same call as `quote_comments`, which
+stores `authorId` and no name; themes snapshot `broughtBy` instead only because
+it is one of the regex-searched fields.
+
+The rotation is the authority for exactly two things: whose week it is, and who
+the podium ranks. **The podium drops people who are off the rotation and a
+plaque never does** — the leaderboard is of the current team, the certificate is
+of what happened. That asymmetry is deliberate; it has a test.
+
+It is emphatically **not** the list of people a record may name. Both forms
+began by offering nothing but the rotation, which contradicted the rule above
+from the other end: a week worked by somebody who has since left could not be
+written up in their name at all, and a certificate could not credit the
+colleague from another team who was actually on the call — even though the
+routes would have taken their `users._id` happily. Both pickers now open onto
+the directory, which is the next section.
+
+#### Naming a person: `PersonRef`, and why it has two arms
+
+**A form says who it means with a `PersonRef` — `{ source: "user" | "directory",
+id }`.** `src/lib/person-ref.ts` is the client-safe half (the type, the Zod
+schema, `userRef`/`directoryRef`/`personKey`/`dedupeRefs`) and
+`src/lib/people.ts` is the `server-only` resolver that re-exports it, the same
+split every other pair here keeps. `reviewInputSchema.member` is one of them;
+`monitorInputSchema.solvedBy` is an array of them. The stored documents are
+unchanged — `memberId` and `solvedByIds` are still plain `users._id`.
+
+The tag is explicit rather than sniffed from the shape of the id, and it is
+**one field rather than two parallel ones** (`memberId` beside
+`memberDirectoryId`, and so on) for a reason that only shows on the certificate:
+the names on it are an *ordered* list, and two arrays have no single order to
+merge back into.
+
+`resolvePeople(refs)` turns them into `users` rows, and three things about it
+are load-bearing:
+
+- **A list of nothing but `user` references never opens an LDAP connection.**
+  There is no domain controller on the development network and there may be none
+  during an outage in production, so the ordinary case — the rotation's own
+  default, a name picked out of the button row — must not start depending on
+  one. The directory is the *addition*, never the replacement. There is a test
+  that fails the mocked lookup and still expects a 201.
+- **A `directory` reference is re-resolved with `findPersonById` and written
+  through `upsertRosterUser`**, exactly as `POST /api/rotation` does: only the
+  objectGUID crosses the wire, so nothing a client typed lands in a stored name,
+  and somebody added twice lands on their existing row instead of forking a
+  second one. This is why a certificate can credit a colleague this app has
+  never seen.
+- **The `user` half is checked first**, before any directory row is written, so
+  a request that is going to be refused as invalid input does not leave a new
+  `users` row behind it.
+
+`PersonFailure` keeps the three answers apart, and `personFailureResponse` in
+`src/lib/api.ts` is the single mapping both routes use: `unknown` → **422** on
+the field (a reference naming nobody is bad input), `unavailable` → **503**,
+`misconfigured` → **500**. That is the `ConfigError`-versus-outage split the
+login route and `POST /api/rotation` already draw, and it matters for the same
+reason: the two send whoever investigates to opposite places.
+
+One subtlety: `dedupeRefs` folds duplicate *references* out in the schema, but
+only `resolvePeople` can tell that `{ user, X }` and `{ directory, G }` are one
+person, so it dedupes again on the resolved id. Both passes are needed.
+
+#### `DirectorySearch`
+
+`src/components/directory-search.tsx` is the debounced 300 ms lookup against
+`GET /api/directory?q=`, with the two-character floor matching the server's own
+and distinct loading / empty / errored states. It was `RotationEditor`'s private
+`Search` until the two שוטף forms wanted it; three copies of one debounce would
+have drifted.
+
+It knows nothing about what picking someone means — the trailing control on a
+row is the caller's `action` render prop, and `taken` dims a row the caller has
+already claimed. That is the only part that was ever rotation-specific ("כבר
+בסבב" versus "כבר על התעודה").
+
+**It gates itself on `useSession()`.** `GET /api/directory` is the one read here
+that refuses to answer anonymously, and both שוטף dialogs are drawn for
+signed-out readers, so an ungated box would either 401 on every keystroke or
+throw them off a half-filled form. Signed out it renders a sign-in link instead;
+the `401 → router.push(loginHref)` bounce stays for the session that lapses
+*while* the form is open, which is a different fact and the one case where
+leaving is right.
+
+The two forms keep the rotation as the fast path and put the search behind a
+link under it: the reviews dialog still defaults to `shotefOn`'s answer, and the
+certificate's button row still opens on the on-call team. A directory pick is
+**appended to the same list**, so on the certificate it is un-picked by the same
+press as anybody else and the order the plaque is written in stays one list.
+Neither dialog has an empty-rotation dead end any more — a fresh database with
+nobody on the wheel can still have a week written up.
+
+Note the reviews page and the hall-of-fame page still pass
+`withoutDirectoryId(roster)`: they render anonymously, so shipping eight AD
+objectGUIDs in the RSC payload is exactly what that helper exists to prevent.
+Nothing here needs them — the rotation's own picks are `users._id` references,
+and a directory `id` only ever arrives from a search the viewer's own session
+authorised.
+
+One casualty worth knowing: the plaque used to conjugate "פתר/פתרה/פתרו" from the
+solver's gender. Gender lives on the *rotation document*, not the `users` row, so
+an off-rotation recipient has none — reintroducing that lookup would undo the
+rule above. The wall says the passive **"נפתר תוך"** instead.
+
+Three more things the two list tabs share:
+
+- **The aggregates are computed in the database**, not reduced over the loaded
+  page: the reviews' `average`, and the wall's `board` and `fastest`. Both lists
+  are unpaginated today, so an in-memory reduce would be exact — and would
+  silently start describing one screenful the day anyone adds a `limit`. Same
+  reasoning as `getStandings`.
+- **An optimistic add moves only what the client can honestly recompute.** The
+  new review updates the list *and* the average, because the client holds every
+  review there is. The new certificate moves the wall but **not** the podium or
+  the fastest fix; those re-arrive with the `router.refresh()` behind it.
+- **`monitorInputSchema` and `reviewInputSchema` live in `shotef-schema.ts`, not
+  in their dialogs** — they are the shape the route handler re-validates, and
+  each dialog renders both its own issues and the server's `422` from one
+  `Record<field, message>`. `MonitorFormDialog` remaps `minutesToFix` onto its
+  `amount` field for **both** sources: the route keys its 422 to a field the
+  form does not draw.
+- **A review can only be written about a week that has closed.** The dialog
+  offers `closedWeeks` and nothing else, but the schema is what the route
+  trusts, and `dateOnly` waves the running week through — its Sunday is already
+  in the past — plus, on a Saturday, the Sunday about to open. The write is
+  one-way: `weekStart` is unique, so an early summary takes the slot and the
+  real one 409s on the day it could finally be written. `isClosedWeek` is the
+  shared rule, refined onto `weekStart` beside the Sunday check.
+
+Three things worth knowing about the math:
+
+- **The shift changes hands on Sunday, not on ישב״צ day.** It has its own
+  anchor (`SHOTEF_ANCHOR`) and its own `currentShift`/`shiftIndex`, rather than
+  borrowing the Tuesday-anchored `rotationIndex` — a Sunday is not a whole
+  number of weeks from that anchor, so sharing it would only work by rounding.
+- **The countdown is to the handover, not to the start.** On duty, what matters
+  is how much of the week is left, so the card counts down to
+  `handoverOf(shift)`.
+- **The turn is `weeksElapsed % size`, so editing the roster moves everyone's
+  upcoming week** — the same accepted trade-off the ישב״צ rotation documents, and
+  it now bites for real, because the roster is editable. Past weeks are safe: a
+  review records who was actually on duty. `buildShifts` hands back `[]` for an
+  empty roster rather than a list of shifts with nobody on them — an unseeded
+  database has never had a member, so the callers must render that.
+
+The wheel itself is shared: `RotationWheel` (was `MeetupWheel`) draws both
+rotations and knows about neither — the icon at its hub is the only thing that
+says which one you are looking at.
+
+`scripts/seed.mjs` creates the `shotef_reviews` (unique on `weekStart` — one
+week, one summary, enforced by the index and surfaced as a `409` rather than by
+a racy pre-check) and `shotef_monitors` indexes unconditionally, and `--demo` seeds both rotations from one `ROSTER_SEED`, whose
+rows now carry a **fixed `_id`** applied through `$setOnInsert`: a fresh database
+always gives the same person the same `users._id`, which is what lets later demo
+content be written against a known id. A database that already holds them keeps
+the ids it minted, so everything downstream still reads `idByKey`, never the
+constant.
 
 ### It runs on an air-gapped network
 
@@ -513,7 +758,9 @@ directional *icons* are a separate judgment call: the "לפיד" arrow in
 leftward in RTL.
 
 Hebrew counts need `plural()` from `src/lib/format.ts` — a bare numeral reads
-badly at 1 ("1 תוצאות").
+badly at 1 ("1 תוצאות"). Durations need `formatDuration()` from the same module
+for the same reason, one step worse: Hebrew has a dual, so 2 is its own word in
+every unit ("שעתיים", "יומיים") and cannot be reached by counting.
 
 ## UI library
 

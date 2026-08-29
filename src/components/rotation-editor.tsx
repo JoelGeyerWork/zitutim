@@ -2,9 +2,13 @@
 
 import { useEffect, useRef, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
-import { MoreHorizontalIcon, SearchIcon, UserPlusIcon } from "lucide-react";
+import { MoreHorizontalIcon, UserPlusIcon } from "lucide-react";
 import { toast } from "sonner";
 
+import {
+  DirectorySearch,
+  DirectorySearchNote,
+} from "@/components/directory-search";
 import { PersonAvatar } from "@/components/person-avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -21,11 +25,10 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Input } from "@/components/ui/input";
-import { formatMeetupDate, plural } from "@/lib/format";
+import { formatDayMonth, formatMeetupDate, plural } from "@/lib/format";
 import { type DirectoryPerson } from "@/lib/directory-schema";
 import { moveItem, reorder, type RosterMember } from "@/lib/roster";
-import { rotate, type MeetupSlot } from "@/lib/team";
+import { rotate } from "@/lib/team";
 import { cn } from "@/lib/utils";
 
 type Gender = "m" | "f";
@@ -33,7 +36,88 @@ type Gender = "m" | "f";
 const JSON_HEADERS = { "Content-Type": "application/json" };
 
 /**
- * Editing the refreshment rotation: who is on the wheel, and in what order.
+ * One turn as a row spells it. Structural rather than `MeetupSlot | ShotefShift`
+ * — all the editor wants to know is which date a position falls on and whether
+ * that position is the one running now.
+ */
+type Turn = { date: string; weeksAway: number };
+
+/**
+ * Everything that differs between the two rotations this editor drives: where
+ * it writes, and what it calls things.
+ *
+ * One editor rather than two, for the same reason both rotations are one
+ * collection behind a key (`rotation.ts`): the drag, the optimistic list and
+ * the 401 handling are subtle enough that a second copy is a second copy to
+ * keep in agreement. Both configurations live here, side by side, so a field
+ * added to one cannot be quietly forgotten on the other.
+ *
+ * The three prepositional forms are separate fields rather than built from a
+ * single noun: Hebrew folds the preposition into the definite article
+ * ("בסבב", "מהסבב"), and the two nouns disagree on gender besides ("שבו" vs
+ * "שבה"), so a sentence assembled from a stem would be wrong as often as right.
+ */
+export type RotationCopy = {
+  /** REST base. Mutations are `${api}`, `${api}/${userId}` and `${api}/order`. */
+  api: string;
+  /** The rotation, as the dialog titles it. */
+  title: string;
+  /** The line under that title on the list view. */
+  hint: string;
+  /** "…בסבב" — after a count, and after "כבר". */
+  inRotation: string;
+  /** "…לסבב" — after "הוספה" and after "להוסיף". */
+  toRotation: string;
+  /** "…מהסבב" — after "הוצאה", "להוציא" and "הוצאו". */
+  fromRotation: string;
+  /** The tail of the confirm sentence, which turns on the noun's own gender. */
+  joinTail: string;
+  /** The verb the gender choice is actually choosing between. */
+  verb: { f: string; m: string };
+  /** What that verb is done to, for the worked example under the choice. */
+  verbObject: string;
+  /** The closing note on the list view. */
+  footnote: string;
+  /** A turn's date, as its row spells it. */
+  formatTurn: (iso: string) => string;
+};
+
+/** The ישב״צ refreshment rotation. */
+export const MEETUP_COPY: RotationCopy = {
+  api: "/api/rotation",
+  title: "סבב הכיבוד",
+  hint: "מי מביא כיבוד, ובאיזה סדר. גוררים כדי לשנות.",
+  inRotation: "בסבב",
+  toRotation: "לסבב",
+  fromRotation: "מהסבב",
+  joinTail: "לסוף הסבב, שבו יהיו מעכשיו",
+  verb: { f: "מביאה", m: "מביא" },
+  verbObject: "את הכיבוד",
+  footnote:
+    "השם והתפקיד מגיעים מספריית הארגון ומתעדכנים משם. הסדר ולשון הפנייה נקבעים כאן — ומי שיוצא מהסבב נשאר רשום על נושאי הכיבוד שהביא.",
+  formatTurn: formatMeetupDate,
+};
+
+/** The on-call rotation: the same store and the same routes one level down. */
+export const SHOTEF_COPY: RotationCopy = {
+  api: "/api/shotef/rotation",
+  title: "הסבב",
+  hint: "מי שוטף, ובאיזה סדר. גוררים כדי לשנות.",
+  inRotation: "בסבב",
+  toRotation: "לסבב",
+  fromRotation: "מהסבב",
+  joinTail: "לסוף הסבב, שבו יהיו מעכשיו",
+  verb: { f: "שוטפת", m: "שוטף" },
+  verbObject: "השבוע",
+  footnote:
+    "השם והתפקיד מגיעים מספריית הארגון ומתעדכנים משם. הסדר ולשון הפנייה נקבעים כאן — ומי שיוצא מהסבב נשאר רשום על השבועות שכבר עברו עליו.",
+  // The day the week opens, not its range: a range that crosses a month is
+  // long enough to squeeze the name beside it.
+  formatTurn: formatDayMonth,
+};
+
+/**
+ * Editing a rotation: who is on the wheel, and in what order.
  *
  * Not a team-management screen. Nobody is created or deleted here — a person
  * exists in the organisation's directory whether or not they bring snacks, and
@@ -52,15 +136,18 @@ export function RotationEditor({
   roster,
   slots,
   offset,
+  copy,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   /** The stored rotation, resolved off the server page. Stable across renders. */
   roster: RosterMember[];
   /** The next turn per *displayed* row. Computed by the caller, which owns "now". */
-  slots: MeetupSlot[];
+  slots: Turn[];
   /** Turns the displayed cycle back into the stored order for a reorder. */
   offset: number;
+  /** Which rotation this is editing. Required, because it names the API. */
+  copy: RotationCopy;
 }) {
   const router = useRouter();
   const pathname = usePathname();
@@ -93,7 +180,7 @@ export function RotationEditor({
     setOrder(next); // optimistic — the drag has to feel immediate
     const ids = reorder(next, offset).map((member) => member.id);
     try {
-      const response = await fetch("/api/rotation/order", {
+      const response = await fetch(`${copy.api}/order`, {
         method: "PUT",
         headers: JSON_HEADERS,
         body: JSON.stringify({ ids }),
@@ -114,7 +201,7 @@ export function RotationEditor({
       ),
     );
     try {
-      const response = await fetch(`/api/rotation/${id}`, {
+      const response = await fetch(`${copy.api}/${id}`, {
         method: "PATCH",
         headers: JSON_HEADERS,
         body: JSON.stringify({ gender }),
@@ -130,43 +217,43 @@ export function RotationEditor({
 
   async function remove(id: string) {
     try {
-      const response = await fetch(`/api/rotation/${id}`, {
+      const response = await fetch(`${copy.api}/${id}`, {
         method: "DELETE",
         headers: JSON_HEADERS,
       });
       if (!guard(response.status)) return;
       if (response.status === 409) {
-        toast.error("צריך שיישאר לפחות אדם אחד בסבב");
+        toast.error(`צריך שיישאר לפחות אדם אחד ${copy.inRotation}`);
       } else if (!response.ok) {
-        toast.error("לא הצלחנו להוציא מהסבב");
+        toast.error(`לא הצלחנו להוציא ${copy.fromRotation}`);
       } else {
-        toast.success("הוצאו מהסבב");
+        toast.success(`הוצאו ${copy.fromRotation}`);
       }
       router.refresh();
     } catch {
-      toast.error("לא הצלחנו להוציא מהסבב");
+      toast.error(`לא הצלחנו להוציא ${copy.fromRotation}`);
       router.refresh();
     }
   }
 
   async function add(person: DirectoryPerson, gender: Gender) {
     try {
-      const response = await fetch("/api/rotation", {
+      const response = await fetch(copy.api, {
         method: "POST",
         headers: JSON_HEADERS,
         body: JSON.stringify({ directoryId: person.directoryId, gender }),
       });
       if (!guard(response.status)) return;
       if (response.status === 409) {
-        toast.error(`${person.displayName} כבר בסבב`);
+        toast.error(`${person.displayName} כבר ${copy.inRotation}`);
       } else if (!response.ok) {
-        toast.error("לא הצלחנו להוסיף לסבב");
+        toast.error(`לא הצלחנו להוסיף ${copy.toRotation}`);
       } else {
-        toast.success(`${person.displayName} נוספו לסבב`);
+        toast.success(`${person.displayName} נוספו ${copy.toRotation}`);
       }
       router.refresh();
     } catch {
-      toast.error("לא הצלחנו להוסיף לסבב");
+      toast.error(`לא הצלחנו להוסיף ${copy.toRotation}`);
       router.refresh();
     }
     close();
@@ -187,11 +274,13 @@ export function RotationEditor({
     >
       <DialogContent className="max-h-[90dvh] gap-5 overflow-y-auto sm:max-w-2xl sm:p-6">
         <DialogHeader>
-          <DialogTitle>{adding ? "הוספה לסבב" : "סבב הכיבוד"}</DialogTitle>
+          <DialogTitle>
+            {adding ? `הוספה ${copy.toRotation}` : copy.title}
+          </DialogTitle>
           <DialogDescription>
             {adding
               ? "מחפשים בספריית הארגון ובוחרים. השם והתפקיד מגיעים משם."
-              : "מי מביא כיבוד, ובאיזה סדר. גוררים כדי לשנות."}
+              : copy.hint}
           </DialogDescription>
         </DialogHeader>
 
@@ -199,16 +288,22 @@ export function RotationEditor({
           <Confirm
             person={picked}
             rotationSize={order.length}
+            copy={copy}
             onBack={() => setPicked(null)}
             onConfirm={(gender) => add(picked, gender)}
           />
         ) : adding ? (
-          <Search members={order} loginHref={loginHref} onPick={setPicked} />
+          <Search
+            members={order}
+            loginHref={loginHref}
+            copy={copy}
+            onPick={setPicked}
+          />
         ) : (
           <div className="min-w-0 space-y-4">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <p className="text-muted-foreground text-sm">
-                {plural(order.length, "אדם אחד", "אנשים")} בסבב
+                {plural(order.length, "אדם אחד", "אנשים")} {copy.inRotation}
               </p>
               <Button
                 size="sm"
@@ -223,14 +318,14 @@ export function RotationEditor({
             <Sortable
               queue={order}
               slots={slots}
+              copy={copy}
               onReorder={reorderTo}
               onGender={changeGender}
               onRemove={remove}
             />
 
             <p className="text-muted-foreground text-xs text-balance">
-              השם והתפקיד מגיעים מספריית הארגון ומתעדכנים משם. הסדר ולשון הפנייה
-              נקבעים כאן — ומי שיוצא מהסבב נשאר רשום על נושאי הכיבוד שהביא.
+              {copy.footnote}
             </p>
           </div>
         )}
@@ -257,12 +352,14 @@ type Drag = {
 function Sortable({
   queue,
   slots,
+  copy,
   onReorder,
   onGender,
   onRemove,
 }: {
   queue: RosterMember[];
-  slots: MeetupSlot[];
+  slots: Turn[];
+  copy: RotationCopy;
   onReorder: (queue: RosterMember[]) => void;
   onGender: (id: string, gender: Gender) => void;
   onRemove: (id: string) => void;
@@ -428,7 +525,7 @@ function Sortable({
                 {turn?.weeksAway === 0 ? (
                   <span className="text-foreground font-medium">השבוע</span>
                 ) : turn ? (
-                  formatMeetupDate(turn.date)
+                  copy.formatTurn(turn.date)
                 ) : null}
               </p>
             </div>
@@ -437,6 +534,7 @@ function Sortable({
                 since a truncated name is worse than a second line. */}
             <GenderChoice
               value={member.gender}
+              verb={copy.verb}
               onChange={(gender) => onGender(member.id, gender)}
               className="order-last w-full sm:order-none sm:w-auto"
             />
@@ -458,11 +556,12 @@ function Sortable({
               <DropdownMenuContent align="end">
                 <DropdownMenuItem
                   variant="destructive"
-                  // Somebody has to bring the refreshments.
+                  // A rotation with nobody in it has no turn to render, which
+                  // is why the API refuses this one with a 409 as well.
                   disabled={queue.length === 1}
                   onClick={() => onRemove(member.id)}
                 >
-                  הוצאה מהסבב
+                  הוצאה {copy.fromRotation}
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
@@ -477,145 +576,45 @@ function Sortable({
  * Adding somebody is picking them out of the directory, never typing a name —
  * so they arrive with their real objectGUID, and the rotation entry and the row
  * their next sign-in touches are the same row.
+ *
+ * The search itself is `DirectorySearch`, shared with the two שוטף forms. All
+ * that is rotation-specific is what a result row offers, which is the one thing
+ * that component leaves to its caller: somebody already on the wheel is a badge
+ * saying so, not a second way to add them.
  */
 function Search({
   members,
   loginHref,
+  copy,
   onPick,
 }: {
   members: RosterMember[];
   loginHref: string;
+  copy: RotationCopy;
   onPick: (person: DirectoryPerson) => void;
 }) {
-  const router = useRouter();
-  const [query, setQuery] = useState("");
-  const [results, setResults] = useState<DirectoryPerson[]>([]);
-  // Which trimmed query `results`/`errored` describe. "loading" is then a render
-  // derivation rather than a synchronous setState in the effect — an error in
-  // this config, the same rule `QuoteFeed` works around.
-  const [resolvedFor, setResolvedFor] = useState("");
-  const [errored, setErrored] = useState(false);
-
-  const trimmed = query.trim();
-
-  useEffect(() => {
-    const q = query.trim();
-    if (q.length < 2) return;
-
-    // Debounced, so a fast typist issues one request rather than one a keystroke
-    // — the two-character floor is also the server's rule. Every setState is
-    // inside the async callback; the effect body itself sets none.
-    const handle = setTimeout(async () => {
-      try {
-        const response = await fetch(
-          `/api/directory?q=${encodeURIComponent(q)}`,
-        );
-        if (response.status === 401) {
-          router.push(loginHref);
-          return;
-        }
-        if (!response.ok) {
-          setResults([]);
-          setErrored(true);
-          setResolvedFor(q);
-          return;
-        }
-        const data: { people: DirectoryPerson[] } = await response.json();
-        setResults(data.people);
-        setErrored(false);
-        setResolvedFor(q);
-      } catch {
-        setResults([]);
-        setErrored(true);
-        setResolvedFor(q);
-      }
-    }, 300);
-
-    return () => clearTimeout(handle);
-  }, [query, loginHref, router]);
-
   const known = new Set(members.map((member) => member.directoryId));
-  const short = trimmed.length < 2;
-  // Results and the error flag apply only once they are for the query on screen;
-  // until then the search is still in flight.
-  const loading = !short && resolvedFor !== trimmed;
+  const inRotation = (person: DirectoryPerson) => known.has(person.directoryId);
 
   return (
     <div className="min-w-0 space-y-4">
-      <div className="relative">
-        <SearchIcon className="text-muted-foreground pointer-events-none absolute start-3 top-1/2 size-4 -translate-y-1/2" />
-        <Input
-          autoFocus
-          value={query}
-          onChange={(event) => setQuery(event.target.value)}
-          placeholder="שם או שם משתמש"
-          aria-label="חיפוש בספריית הארגון"
-          className="ps-9"
-        />
-      </div>
-
-      {short ? (
-        <p className="text-muted-foreground py-6 text-center text-sm">
-          לפחות שתי אותיות.
-        </p>
-      ) : loading ? (
-        <p className="text-muted-foreground py-6 text-center text-sm">
-          מחפשים…
-        </p>
-      ) : errored ? (
-        <p className="text-muted-foreground py-6 text-center text-sm">
-          לא הצלחנו לחפש בספרייה.
-        </p>
-      ) : results.length === 0 ? (
-        <p className="text-muted-foreground py-6 text-center text-sm">
-          אין תוצאות בספרייה.
-        </p>
-      ) : (
-        <ul className="divide-y rounded-xl border">
-          {results.map((person) => {
-            const inRotation = known.has(person.directoryId);
-
-            return (
-              <li
-                key={person.directoryId}
-                className={cn(
-                  "flex items-center gap-3 px-3 py-3 sm:px-4",
-                  inRotation && "opacity-55",
-                )}
-              >
-                <PersonAvatar name={person.displayName} className="size-10" />
-
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm font-medium">
-                    {person.displayName}
-                  </p>
-                  <p className="text-muted-foreground truncate text-xs">
-                    {person.title ? `${person.title} · ` : null}
-                    <span dir="ltr" className="font-mono">
-                      {person.username}
-                    </span>
-                  </p>
-                </div>
-
-                {inRotation ? (
-                  <Badge variant="secondary" className="shrink-0 font-normal">
-                    כבר בסבב
-                  </Badge>
-                ) : (
-                  <Button size="sm" onClick={() => onPick(person)}>
-                    הוספה
-                  </Button>
-                )}
-              </li>
-            );
-          })}
-        </ul>
-      )}
-
-      <p className="text-muted-foreground text-xs text-balance">
-        החיפוש רץ בחשבון השירות ולא מנסה להזדהות כאף אחד, ולכן אינו נוגע במונה
-        הכניסות הכושלות של אף חשבון.
-      </p>
+      <DirectorySearch
+        autoFocus
+        loginHref={loginHref}
+        taken={inRotation}
+        action={(person) =>
+          inRotation(person) ? (
+            <Badge variant="secondary" className="shrink-0 font-normal">
+              כבר {copy.inRotation}
+            </Badge>
+          ) : (
+            <Button size="sm" onClick={() => onPick(person)}>
+              הוספה
+            </Button>
+          )
+        }
+      />
+      <DirectorySearchNote />
     </div>
   );
 }
@@ -623,11 +622,13 @@ function Search({
 function Confirm({
   person,
   rotationSize,
+  copy,
   onBack,
   onConfirm,
 }: {
   person: DirectoryPerson;
   rotationSize: number;
+  copy: RotationCopy;
   onBack: () => void;
   onConfirm: (gender: Gender) => void;
 }) {
@@ -652,16 +653,21 @@ function Confirm({
         <p className="text-sm font-semibold">לשון פנייה</p>
         {/* The one field the directory cannot answer, which is why it is asked
             here rather than read. */}
-        <GenderChoice value={gender} onChange={setGender} className="w-full" />
+        <GenderChoice
+          value={gender}
+          verb={copy.verb}
+          onChange={setGender}
+          className="w-full"
+        />
         <p className="text-muted-foreground text-xs">
-          כדי לכתוב &rlm;„{gender === "f" ? "מביאה" : "מביא"} את הכיבוד”.
+          כדי לכתוב &rlm;„{copy.verb[gender]} {copy.verbObject}”.
         </p>
       </div>
 
       <p className="text-muted-foreground text-xs text-balance">
-        {person.displayName} {gender === "f" ? "תיכנס" : "ייכנס"} לסוף הסבב, שבו
-        יהיו מעכשיו {plural(rotationSize + 1, "אדם אחד", "אנשים")} — כך שהתור של
-        כולם זז בשבוע.
+        {person.displayName} {gender === "f" ? "תיכנס" : "ייכנס"} {copy.joinTail}{" "}
+        {plural(rotationSize + 1, "אדם אחד", "אנשים")} — כך שהתור של כולם זז
+        בשבוע.
       </p>
 
       <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
@@ -669,7 +675,7 @@ function Confirm({
           חזרה
         </Button>
         <Button type="button" size="lg" onClick={() => onConfirm(gender)}>
-          הוספה לסבב
+          הוספה {copy.toRotation}
         </Button>
       </div>
     </div>
@@ -679,10 +685,13 @@ function Confirm({
 /** Two states, both always visible — a switch would not say what it toggles. */
 function GenderChoice({
   value,
+  verb,
   onChange,
   className,
 }: {
   value: Gender;
+  /** The choice is spelled as the verb it conjugates, not as "male"/"female". */
+  verb: RotationCopy["verb"];
   onChange: (gender: Gender) => void;
   className?: string;
 }) {
@@ -710,7 +719,7 @@ function GenderChoice({
               : "text-muted-foreground hover:text-foreground",
           )}
         >
-          {option === "f" ? "מביאה" : "מביא"}
+          {verb[option]}
         </button>
       ))}
     </div>

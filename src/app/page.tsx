@@ -8,7 +8,19 @@ import { formatMeetupDate, plural } from "@/lib/format";
 import { HUB, SECTIONS, type Section } from "@/lib/navigation";
 import { type RosterMember } from "@/lib/roster";
 import { getRotation } from "@/lib/rotation";
-import { conjugate, currentMeetup, daysUntil, MEETUP, rotationIndex } from "@/lib/team";
+import {
+  currentShift,
+  getShotefRotation,
+  handoverOf,
+  shiftIndex,
+} from "@/lib/shotef";
+import {
+  conjugate,
+  currentMeetup,
+  daysUntil,
+  MEETUP,
+  rotationIndex,
+} from "@/lib/team";
 import { getSession } from "@/lib/session";
 import { getStats, listQuotes } from "@/lib/quotes";
 import { cn } from "@/lib/utils";
@@ -18,11 +30,12 @@ export const dynamic = "force-dynamic";
 export default async function HubPage() {
   const now = new Date();
 
-  const [user, stats, latest, roster] = await Promise.all([
+  const [user, stats, latest, roster, onCallRoster] = await Promise.all([
     getSession(),
     getStats(),
     listQuotes({ limit: 1 }),
     getRotation(),
+    getShotefRotation(),
   ]);
 
   // This week's slot straight off the DB-backed rotation, in stored order — the
@@ -36,6 +49,15 @@ export default async function HubPage() {
         }
       : null;
 
+  // The same anchored index the on-call wheel uses, over the same stored
+  // rotation. Empty on an unseeded database, where this card falls back to the
+  // section description rather than crashing — exactly like the meetup one.
+  const shift = currentShift(now);
+  const onCall =
+    onCallRoster.length > 0
+      ? onCallRoster[shiftIndex(shift, onCallRoster.length)]
+      : null;
+
   /**
    * What each section shows on its card. A section with nothing registered
    * still gets a card — its description and a way in — so adding one to
@@ -47,6 +69,17 @@ export default async function HubPage() {
           // The meetup leads the hub: it is the one thing here that expires.
           className: "bg-accent text-accent-foreground border-transparent",
           content: <MeetupTeaser member={thisWeek.member} date={thisWeek.date} now={now} />,
+        }
+      : {},
+    "/shotef": onCall
+      ? {
+          content: (
+            <ShotefTeaser
+              member={onCall}
+              handover={handoverOf(shift.toISOString())}
+              now={now}
+            />
+          ),
         }
       : {},
     "/quotes": { content: <QuoteTeaser stats={stats} quote={latest.quotes[0]} /> },
@@ -75,9 +108,9 @@ export default async function HubPage() {
   );
 }
 
-// `content` is optional: an empty rotation registers a `/meetups` teaser with
-// neither field, so the card falls back to the section description like any
-// section with nothing registered.
+// `content` is optional: an empty rotation registers a teaser with neither
+// field, so the card falls back to the section description like any section
+// with nothing registered.
 type Teaser = { className?: string; content?: React.ReactNode };
 
 /** A whole section as one click target — the hub is a list of front doors. */
@@ -148,6 +181,32 @@ function MeetupTeaser({
         {formatMeetupDate(date)}, {MEETUP.time} · {MEETUP.place}
       </p>
     </>
+  );
+}
+
+function ShotefTeaser({
+  member,
+  handover,
+  now,
+}: {
+  // Resolved on the server page off `getShotefRotation()`; the teaser only
+  // renders it, so it stays a plain display component like the meetup one.
+  member: RosterMember;
+  /** When the shift is handed on — on duty, that is the date that matters. */
+  handover: string;
+  now: Date;
+}) {
+  return (
+    <div className="mt-3 flex items-center gap-3">
+      <PersonAvatar name={member.name} className="size-12 text-lg" />
+      <div className="min-w-0">
+        <p className="truncate font-semibold">{member.name}</p>
+        <p className="text-muted-foreground text-sm">
+          {conjugate(member, "אחראי", "אחראית")} על הבאגים · הסבב עובר{" "}
+          {daysUntil(handover, now)}
+        </p>
+      </div>
+    </div>
   );
 }
 

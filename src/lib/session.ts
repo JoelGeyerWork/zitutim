@@ -12,7 +12,12 @@ export * from "@/lib/auth-schema";
 
 export const SESSION_COOKIE = "zitutim_session";
 
-export const UNAUTHORIZED_MESSAGE = "צריך להתחבר כדי לשנות את הקיר";
+// Section-neutral on purpose. This was written for the quote wall and said
+// "את הקיר", then followed `unauthorizedResponse()` into themes, both rotations
+// and the two שוטף tabs — where it told people to sign in to change a wall they
+// were nowhere near. Every write control is drawn signed-out now, so this
+// string is the one most readers ever see.
+export const UNAUTHORIZED_MESSAGE = "צריך להתחבר כדי לשנות משהו כאן";
 export const FORBIDDEN_MESSAGE = "בקשה נדחתה";
 
 const DEFAULT_TTL_HOURS = 8;

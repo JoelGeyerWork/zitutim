@@ -184,7 +184,7 @@ describe("QuoteForm — attribution", () => {
     // Sitting on the form for eight hours and then saving must not just say
     // "failed" — there is something the user can do about it.
     fetchMock.mockImplementation(
-      respondWith({ error: "צריך להתחבר כדי לשנות את הקיר" }, 401),
+      respondWith({ error: "צריך להתחבר כדי לשנות משהו כאן" }, 401),
     );
     const user = userEvent.setup();
     render(<QuoteForm />);
@@ -194,7 +194,7 @@ describe("QuoteForm — attribution", () => {
     await waitFor(() =>
       expect(push).toHaveBeenCalledWith(expect.stringContaining("/login?next=")),
     );
-    expect(toast.error).toHaveBeenCalledWith("צריך להתחבר כדי לשנות את הקיר");
+    expect(toast.error).toHaveBeenCalledWith("צריך להתחבר כדי לשנות משהו כאן");
   });
 });
 

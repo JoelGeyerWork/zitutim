@@ -11,24 +11,36 @@ import { type UserDoc } from "@/lib/users";
 export * from "@/lib/roster";
 
 /**
- * The refreshment rotation, as a *single* document.
+ * A rotation, as a *single* document.
  *
- * One collection, one row, always at `_id: "current"`. Rotation order is array
- * order and nothing else: identity — name, title, `directoryId`, and every theme
- * that FKs against it — lives on the `users` row `members[i].userId` names, so
- * there is nothing to reconcile between the two. Storing the order as one array
- * (rather than per-member `order` integers) makes a reorder one atomic `$set`
- * and keeps last-write-wins free: the last write of the array simply *is* the
- * state.
+ * One row per rotation, addressed only by its fixed `_id`. Rotation order is
+ * array order and nothing else: identity — name, title, `directoryId`, and
+ * every theme that FKs against it — lives on the `users` row `members[i].userId`
+ * names, so there is nothing to reconcile between the two. Storing the order as
+ * one array (rather than per-member `order` integers) makes a reorder one atomic
+ * `$set` and keeps last-write-wins free: the last write of the array simply *is*
+ * the state.
  */
 export interface RotationDoc {
-  _id: "current";
+  _id: RotationKey;
   members: { userId: ObjectId; gender: "m" | "f" }[];
   updatedAt: Date;
 }
 
-/** Every read and write targets this exact `_id`; there is no other row. */
-const ROTATION_ID = "current" as const;
+/**
+ * Which rotation. `"current"` is the ישב״צ refreshment rotation and is the
+ * default everywhere, so that side reads exactly as it did when this module
+ * knew only one row; `"shotef"` is the on-call rotation.
+ *
+ * The two share this module rather than a second collection because the shape
+ * is identical — `{ userId, gender }[]`, order is array position — and the
+ * singleton and atomicity reasoning below is subtle enough that a copy of it is
+ * a copy that drifts.
+ */
+export type RotationKey = "current" | "shotef";
+
+/** The refreshment rotation. Every function here defaults to it. */
+const ROTATION_ID = "current" as const satisfies RotationKey;
 
 const genderSchema = z.enum(["m", "f"]);
 
@@ -72,32 +84,35 @@ async function usersCollection(): Promise<Collection<UserDoc>> {
  * Wrapped in React `cache()` so both call sites that need the rotation within
  * one request — the themes page's own `getThemeRoster` and the one inside
  * `getStandings` — share a single resolution instead of hitting Mongo twice.
+ * `cache` memoizes per argument, so the two rotations never share an entry.
  * Outside a render (the tests) `cache` is a no-op, so each call still reads
  * fresh.
  */
-export const getRotation = cache(async (): Promise<RosterMember[]> => {
-  const doc = await (await rotation()).findOne({ _id: ROTATION_ID });
-  if (!doc || doc.members.length === 0) return [];
+export const getRotation = cache(
+  async (key: RotationKey = ROTATION_ID): Promise<RosterMember[]> => {
+    const doc = await (await rotation()).findOne({ _id: key });
+    if (!doc || doc.members.length === 0) return [];
 
-  const rows = await (await usersCollection())
-    .find({ _id: { $in: doc.members.map((member) => member.userId) } })
-    .toArray();
-  const byId = new Map(rows.map((row) => [row._id.toHexString(), row]));
+    const rows = await (await usersCollection())
+      .find({ _id: { $in: doc.members.map((member) => member.userId) } })
+      .toArray();
+    const byId = new Map(rows.map((row) => [row._id.toHexString(), row]));
 
-  const out: RosterMember[] = [];
-  for (const member of doc.members) {
-    const row = byId.get(member.userId.toHexString());
-    if (!row) continue;
-    out.push({
-      id: row._id.toHexString(),
-      name: row.displayName,
-      role: row.title ?? "",
-      gender: member.gender,
-      directoryId: row.directoryId,
-    });
-  }
-  return out;
-});
+    const out: RosterMember[] = [];
+    for (const member of doc.members) {
+      const row = byId.get(member.userId.toHexString());
+      if (!row) continue;
+      out.push({
+        id: row._id.toHexString(),
+        name: row.displayName,
+        role: row.title ?? "",
+        gender: member.gender,
+        directoryId: row.directoryId,
+      });
+    }
+    return out;
+  },
+);
 
 export type AddOutcome = { ok: true } | { ok: false; reason: "already-in" };
 
@@ -110,6 +125,7 @@ export type AddOutcome = { ok: true } | { ok: false; reason: "already-in" };
 export async function addMember(
   userId: string,
   gender: RotationGender,
+  key: RotationKey = ROTATION_ID,
 ): Promise<AddOutcome> {
   if (!ObjectId.isValid(userId)) return { ok: false, reason: "already-in" };
   const id = new ObjectId(userId);
@@ -117,11 +133,11 @@ export async function addMember(
 
   // Ensure the singleton exists first, so the append below never has to upsert.
   // A fresh database has no document; two concurrent first-adds can both try to
-  // insert `_id: "current"` and one hits the unique `_id` index — which just
+  // insert the row and one hits the unique `_id` index — which just
   // means the other created it, so a duplicate-key error *here* is success.
   try {
     await collection.updateOne(
-      { _id: ROTATION_ID },
+      { _id: key },
       { $setOnInsert: { members: [], updatedAt: new Date() } },
       { upsert: true },
     );
@@ -142,7 +158,7 @@ export async function addMember(
   // into the filter, so concurrent adds serialise and only one matches; a
   // second matches nothing and reports `already-in`.
   const result = await collection.updateOne(
-    { _id: ROTATION_ID, "members.userId": { $ne: id } },
+    { _id: key, "members.userId": { $ne: id } },
     {
       $push: { members: { userId: id, gender } },
       $set: { updatedAt: new Date() },
@@ -156,11 +172,14 @@ export type RemoveOutcome = "removed" | "not-found" | "last";
 
 /**
  * Remove a member by splicing them out. Removing is *forgetting*: nothing about
- * a former member is kept here — their `users` row and their theme history are
- * untouched. Refuses to empty the rotation, which would leave nobody to bring
- * the refreshments and no slot to render.
+ * a former member is kept here — their `users` row and the history that FKs
+ * against it are untouched. Refuses to empty the rotation, which would leave
+ * nobody to bring the refreshments (or take the pages) and no slot to render.
  */
-export async function removeMember(userId: string): Promise<RemoveOutcome> {
+export async function removeMember(
+  userId: string,
+  key: RotationKey = ROTATION_ID,
+): Promise<RemoveOutcome> {
   if (!ObjectId.isValid(userId)) return "not-found";
   const id = new ObjectId(userId);
   const collection = await rotation();
@@ -173,7 +192,7 @@ export async function removeMember(userId: string): Promise<RemoveOutcome> {
   // once the first has dropped the count to 1.
   const result = await collection.updateOne(
     {
-      _id: ROTATION_ID,
+      _id: key,
       "members.userId": id,
       $expr: { $gt: [{ $size: "$members" }, 1] },
     },
@@ -185,7 +204,7 @@ export async function removeMember(userId: string): Promise<RemoveOutcome> {
   // only one left (last). A single read tells the two apart — and because the
   // pull is refused for the last member, this read can never contradict a write
   // that already happened.
-  const doc = await collection.findOne({ _id: ROTATION_ID });
+  const doc = await collection.findOne({ _id: key });
   const present = doc?.members.some((member) => member.userId.equals(id));
   if (present && doc!.members.length === 1) return "last";
   return "not-found";
@@ -195,12 +214,13 @@ export async function removeMember(userId: string): Promise<RemoveOutcome> {
 export async function setGender(
   userId: string,
   gender: RotationGender,
+  key: RotationKey = ROTATION_ID,
 ): Promise<boolean> {
   if (!ObjectId.isValid(userId)) return false;
   const id = new ObjectId(userId);
 
   const result = await (await rotation()).updateOne(
-    { _id: ROTATION_ID, "members.userId": id },
+    { _id: key, "members.userId": id },
     { $set: { "members.$.gender": gender, updatedAt: new Date() } },
   );
   return result.matchedCount === 1;
@@ -215,9 +235,12 @@ export type ReorderOutcome = { ok: true } | { ok: false };
  * concurrency control; two editors racing is rare here and the later save simply
  * winning is acceptable. Writes nothing when the set is invalid.
  */
-export async function reorderMembers(ids: string[]): Promise<ReorderOutcome> {
+export async function reorderMembers(
+  ids: string[],
+  key: RotationKey = ROTATION_ID,
+): Promise<ReorderOutcome> {
   const collection = await rotation();
-  const doc = await collection.findOne({ _id: ROTATION_ID });
+  const doc = await collection.findOne({ _id: key });
   const members = doc?.members ?? [];
 
   if (ids.length !== members.length) return { ok: false };
@@ -232,7 +255,7 @@ export async function reorderMembers(ids: string[]): Promise<ReorderOutcome> {
   }
 
   await collection.updateOne(
-    { _id: ROTATION_ID },
+    { _id: key },
     { $set: { members: reordered, updatedAt: new Date() } },
     { upsert: true },
   );

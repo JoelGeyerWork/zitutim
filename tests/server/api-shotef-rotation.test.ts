@@ -5,26 +5,23 @@ import { type DirectoryPerson } from "@/lib/directory-schema";
 import { getDb } from "@/lib/mongodb";
 import { sessionCookie } from "./factories";
 
-// The routes' only directory calls. Everything else — the users upsert, the
+// The routes' only directory call. Everything else — the users upsert, the
 // rotation store — is the real thing against the in-memory Mongo.
 vi.mock("@/lib/ldap", () => ({
   findPersonById: vi.fn(),
   findPeople: vi.fn(),
 }));
 
-import { findPeople, findPersonById } from "@/lib/ldap";
-import { GET as GET_DIRECTORY } from "@/app/api/directory/route";
-import { GET as GET_ROTATION, POST } from "@/app/api/rotation/route";
-import { DELETE, PATCH } from "@/app/api/rotation/[userId]/route";
-import { PUT } from "@/app/api/rotation/order/route";
+import { findPersonById } from "@/lib/ldap";
+import { GET as GET_MEETUP } from "@/app/api/rotation/route";
+import { GET, POST } from "@/app/api/shotef/rotation/route";
+import { DELETE, PATCH } from "@/app/api/shotef/rotation/[userId]/route";
+import { PUT } from "@/app/api/shotef/rotation/order/route";
 
 const mockFindPersonById = vi.mocked(findPersonById);
-const mockFindPeople = vi.mocked(findPeople);
 
-const BASE = "http://localhost:3000/api/rotation";
-const DIRECTORY_URL = "http://localhost:3000/api/directory";
+const BASE = "http://localhost:3000/api/shotef/rotation";
 
-/** The directory the mocked lookups answer from, keyed on directoryId. */
 const DIRECTORY: Record<string, DirectoryPerson> = {
   "guid-noa": { directoryId: "guid-noa", displayName: "נועה ברקת", title: "ראשת צוות", username: "noa.bareket" },
   "guid-itay": { directoryId: "guid-itay", displayName: "איתי שרון", title: "שרת", username: "itay.sharon" },
@@ -87,6 +84,11 @@ async function add(directoryId: string, gender: "m" | "f" = "f"): Promise<string
   return member.userId as string;
 }
 
+async function members() {
+  const { members: list } = await (await GET()).json();
+  return list as { userId: string; name: string; title: string; gender: string }[];
+}
+
 beforeEach(async () => {
   const db = await getDb();
   await db.collection("rotation").deleteMany({});
@@ -94,24 +96,32 @@ beforeEach(async () => {
 
   mockFindPersonById.mockReset();
   mockFindPersonById.mockImplementation(async (id: string) => DIRECTORY[id] ?? null);
-  mockFindPeople.mockReset();
-  mockFindPeople.mockResolvedValue([]);
 });
 
-describe("GET /api/rotation", () => {
+describe("GET /api/shotef/rotation", () => {
   it("is public and returns members as { userId, name, title, gender }, no directoryId", async () => {
     const noaId = await add("guid-noa", "f");
 
-    const response = await GET_ROTATION();
+    const response = await GET();
     expect(response.status).toBe(200);
-    const { members } = await response.json();
-    expect(members).toEqual([
-      { userId: noaId, name: "נועה ברקת", title: "ראשת צוות", gender: "f" },
-    ]);
+    await expect(response.json()).resolves.toEqual({
+      members: [
+        { userId: noaId, name: "נועה ברקת", title: "ראשת צוות", gender: "f" },
+      ],
+    });
+  });
+
+  // The two rotations are one collection behind a key, so the thing worth
+  // proving at the route boundary is that they are still two lists.
+  it("does not answer with the meetup rotation's members", async () => {
+    await add("guid-noa");
+
+    const meetup = await (await GET_MEETUP()).json();
+    expect(meetup.members).toEqual([]);
   });
 });
 
-describe("POST /api/rotation", () => {
+describe("POST /api/shotef/rotation", () => {
   it("re-resolves the person and ignores names in the body", async () => {
     const response = await post({
       directoryId: "guid-noa",
@@ -126,13 +136,10 @@ describe("POST /api/rotation", () => {
     const { member } = await response.json();
     expect(member.name).toBe("נועה ברקת");
     expect(member.title).toBe("ראשת צוות");
-
-    // And what was stored resolves to the directory name, not the body's.
-    const list = await (await GET_ROTATION()).json();
-    expect(list.members[0].name).toBe("נועה ברקת");
+    expect(await members()).toEqual([expect.objectContaining({ name: "נועה ברקת" })]);
   });
 
-  it("returns 422 for an unknown directoryId", async () => {
+  it("returns 422 for an unknown directoryId and writes nothing", async () => {
     const response = await post({ directoryId: "guid-nobody", gender: "m" });
     expect(response.status).toBe(422);
     await expect(response.json()).resolves.toMatchObject({
@@ -144,19 +151,23 @@ describe("POST /api/rotation", () => {
   });
 
   it("returns 422 for a missing gender", async () => {
-    const response = await post({ directoryId: "guid-noa" });
-    expect(response.status).toBe(422);
+    expect((await post({ directoryId: "guid-noa" })).status).toBe(422);
   });
 
-  it("returns 409 when the person is already in the rotation", async () => {
+  it("returns 409 when the person is already on the rotation", async () => {
     await add("guid-noa");
     const again = await post({ directoryId: "guid-noa", gender: "m" });
     expect(again.status).toBe(409);
     await expect(again.json()).resolves.toMatchObject({ error: "כבר בסבב" });
   });
+
+  it("reports a directory outage as 503, not as bad input", async () => {
+    mockFindPersonById.mockRejectedValueOnce(new Error("ECONNREFUSED"));
+    expect((await post({ directoryId: "guid-noa", gender: "f" })).status).toBe(503);
+  });
 });
 
-describe("DELETE /api/rotation/:userId", () => {
+describe("DELETE /api/shotef/rotation/:userId", () => {
   it("removes a member and returns 204", async () => {
     await add("guid-noa");
     const itayId = await add("guid-itay");
@@ -164,18 +175,14 @@ describe("DELETE /api/rotation/:userId", () => {
     const response = await del(itayId);
     expect(response.status).toBe(204);
     await expect(response.text()).resolves.toBe("");
-
-    const list = await (await GET_ROTATION()).json();
-    expect(list.members).toHaveLength(1);
+    expect(await members()).toHaveLength(1);
   });
 
   it("refuses to remove the last member with 409", async () => {
     const noaId = await add("guid-noa");
     const response = await del(noaId);
     expect(response.status).toBe(409);
-    // Still there.
-    const list = await (await GET_ROTATION()).json();
-    expect(list.members).toHaveLength(1);
+    expect(await members()).toHaveLength(1);
   });
 
   it("returns 404 for an unknown or malformed id", async () => {
@@ -185,14 +192,11 @@ describe("DELETE /api/rotation/:userId", () => {
   });
 });
 
-describe("PATCH /api/rotation/:userId", () => {
+describe("PATCH /api/shotef/rotation/:userId", () => {
   it("updates the gender and 404s for someone absent", async () => {
     const noaId = await add("guid-noa", "f");
-    const response = await patch(noaId, { gender: "m" });
-    expect(response.status).toBe(200);
-
-    const list = await (await GET_ROTATION()).json();
-    expect(list.members[0].gender).toBe("m");
+    expect((await patch(noaId, { gender: "m" })).status).toBe(200);
+    expect((await members())[0].gender).toBe("m");
 
     expect((await patch(new ObjectId().toHexString(), { gender: "m" })).status).toBe(404);
   });
@@ -203,17 +207,14 @@ describe("PATCH /api/rotation/:userId", () => {
   });
 });
 
-describe("PUT /api/rotation/order", () => {
-  it("stores a valid set densely", async () => {
+describe("PUT /api/shotef/rotation/order", () => {
+  it("stores a valid set verbatim", async () => {
     const a = await add("guid-noa");
     const b = await add("guid-itay");
     const c = await add("guid-shira");
 
-    const response = await order({ ids: [c, a, b] });
-    expect(response.status).toBe(200);
-
-    const list = await (await GET_ROTATION()).json();
-    expect(list.members.map((member: { userId: string }) => member.userId)).toEqual([c, a, b]);
+    expect((await order({ ids: [c, a, b] })).status).toBe(200);
+    expect((await members()).map((member) => member.userId)).toEqual([c, a, b]);
   });
 
   it("rejects a duplicate/stale set with 422 and writes nothing", async () => {
@@ -221,40 +222,8 @@ describe("PUT /api/rotation/order", () => {
     const b = await add("guid-itay");
     const c = await add("guid-shira");
 
-    const response = await order({ ids: [a, a, b] });
-    expect(response.status).toBe(422);
-
-    // Untouched: still insertion order.
-    const list = await (await GET_ROTATION()).json();
-    expect(list.members.map((member: { userId: string }) => member.userId)).toEqual([a, b, c]);
-  });
-});
-
-describe("GET /api/directory", () => {
-  it("requires a session", async () => {
-    const anon = new Request(`${DIRECTORY_URL}?q=noa`);
-    const response = await GET_DIRECTORY(anon);
-    expect(response.status).toBe(401);
-    expect(mockFindPeople).not.toHaveBeenCalled();
-  });
-
-  it("returns people for a signed-in caller", async () => {
-    mockFindPeople.mockResolvedValue([DIRECTORY["guid-noa"]]);
-
-    const request = await mutate(`${DIRECTORY_URL}?q=noa`, "GET");
-    const response = await GET_DIRECTORY(request);
-    expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toEqual({
-      people: [DIRECTORY["guid-noa"]],
-    });
-  });
-
-  it("answers a query under two characters without a directory call", async () => {
-    const request = await mutate(`${DIRECTORY_URL}?q=n`, "GET");
-    const response = await GET_DIRECTORY(request);
-    expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toEqual({ people: [] });
-    expect(mockFindPeople).not.toHaveBeenCalled();
+    expect((await order({ ids: [a, a, b] })).status).toBe(422);
+    expect((await members()).map((member) => member.userId)).toEqual([a, b, c]);
   });
 });
 
@@ -265,9 +234,11 @@ describe("authentication and origin", () => {
     // Session precedes parse: a malformed body still answers 401, not 400/422.
     expect((await post({ directoryId: "guid-noa", gender: "f" }, null)).status).toBe(401);
     expect((await post("{not json", null)).status).toBe(401);
-    await expect(post({ directoryId: "guid-noa", gender: "f" }, null).then((r) => r.json())).resolves.toEqual(
-      UNAUTHORIZED,
-    );
+    await expect(
+      post({ directoryId: "guid-noa", gender: "f" }, null).then((r) => r.json()),
+    ).resolves.toEqual(UNAUTHORIZED);
+    // And the unmetered directory lookup never ran for an anonymous caller.
+    expect(mockFindPersonById).not.toHaveBeenCalled();
   });
 
   it("rejects DELETE, PATCH and PUT /order without a session", async () => {

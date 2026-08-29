@@ -4,7 +4,11 @@ import {
   authorTone,
   formatRelative,
   formatSaidAt,
+  formatDayMonth,
+  formatDaySpan,
+  formatDuration,
   formatSaidAtShort,
+  formatWeekRange,
   initial,
   plural,
   toInputValue,
@@ -13,6 +17,77 @@ import {
 
 afterEach(() => {
   vi.useRealTimers();
+});
+
+describe("formatDuration", () => {
+  it("counts minutes below an hour", () => {
+    expect(formatDuration(11)).toBe("11 דקות");
+    expect(formatDuration(1)).toBe("דקה");
+  });
+
+  // Hebrew has a dual form, so 2 is its own word and cannot be reached by
+  // counting — the one thing here a naive `${n} שעות` would get wrong.
+  it("uses the dual for two hours and two days", () => {
+    expect(formatDuration(120)).toBe("שעתיים");
+    expect(formatDuration(2 * 24 * 60)).toBe("יומיים");
+  });
+
+  it("counts hours, then days", () => {
+    expect(formatDuration(60)).toBe("שעה");
+    expect(formatDuration(300)).toBe("5 שעות");
+    expect(formatDuration(24 * 60)).toBe("יום");
+    expect(formatDuration(3 * 24 * 60)).toBe("3 ימים");
+  });
+
+  it("spells a half day", () => {
+    expect(formatDuration(36 * 60)).toBe("יום וחצי");
+  });
+});
+
+describe("formatDaySpan", () => {
+  it("coarsens as the span grows", () => {
+    expect(formatDaySpan(3)).toBe("3 ימים");
+    expect(formatDaySpan(47)).toBe("7 שבועות");
+    expect(formatDaySpan(132)).toBe("4 חודשים");
+    expect(formatDaySpan(434)).toBe("שנה");
+  });
+
+  it("uses the dual at every scale", () => {
+    expect(formatDaySpan(2)).toBe("יומיים");
+    expect(formatDaySpan(14)).toBe("שבועיים");
+    expect(formatDaySpan(60)).toBe("חודשיים");
+    expect(formatDaySpan(730)).toBe("שנתיים");
+  });
+
+  it("has a word for a monitor silenced the day it fired", () => {
+    expect(formatDaySpan(0)).toBe("פחות מיום");
+  });
+});
+
+describe("formatWeekRange", () => {
+  it("spells the month once when both ends share it", () => {
+    expect(formatWeekRange("2026-08-16T00:00:00.000Z")).toBe("16–22 באוגוסט");
+  });
+
+  it("spells both months when the week crosses one", () => {
+    expect(formatWeekRange("2026-09-27T00:00:00.000Z")).toBe(
+      "27 בספטמבר – 3 באוקטובר",
+    );
+  });
+
+  // UTC midnight in, UTC out — a local-time render would move the week back a
+  // day west of Greenwich, like every other date in the app.
+  it("formats in UTC", () => {
+    expect(formatWeekRange("2026-08-16T00:00:00.000Z")).toBe(
+      formatWeekRange("2026-08-16T23:00:00.000Z"),
+    );
+  });
+});
+
+describe("formatDayMonth", () => {
+  it("renders a bare day and month", () => {
+    expect(formatDayMonth("2026-08-30T00:00:00.000Z")).toBe("30 באוגוסט");
+  });
 });
 
 describe("formatSaidAt", () => {

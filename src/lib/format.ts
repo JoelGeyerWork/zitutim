@@ -26,6 +26,18 @@ const meetupDate = new Intl.DateTimeFormat(LOCALE, {
   timeZone: "UTC",
 });
 
+/** The two halves of a week range — "16" and "22 באוגוסט". */
+const dayOnly = new Intl.DateTimeFormat(LOCALE, {
+  day: "numeric",
+  timeZone: "UTC",
+});
+
+const dayMonth = new Intl.DateTimeFormat(LOCALE, {
+  day: "numeric",
+  month: "long",
+  timeZone: "UTC",
+});
+
 export function formatSaidAt(iso: string): string {
   return fullDate.format(new Date(iso));
 }
@@ -36,6 +48,25 @@ export function formatMeetupDate(iso: string): string {
 
 export function formatSaidAtShort(iso: string): string {
   return shortDate.format(new Date(iso));
+}
+
+/**
+ * "16–22 באוגוסט" for a week that starts at `iso` — a shotef shift is a span,
+ * and naming only its first day reads as a single date. The month is spelled
+ * once when both ends share it. UTC throughout, like every formatter here.
+ */
+export function formatWeekRange(iso: string): string {
+  const start = new Date(iso);
+  const end = new Date(start.getTime() + 6 * 24 * 60 * 60 * 1000);
+
+  return start.getUTCMonth() === end.getUTCMonth()
+    ? `${dayOnly.format(start)}–${dayMonth.format(end)}`
+    : `${dayMonth.format(start)} – ${dayMonth.format(end)}`;
+}
+
+/** "30 באוגוסט" — a single day, where a whole range would not fit. */
+export function formatDayMonth(iso: string): string {
+  return dayMonth.format(new Date(iso));
 }
 
 const relative = new Intl.RelativeTimeFormat(LOCALE, { numeric: "auto" });
@@ -74,6 +105,54 @@ export function todayInputValue(): string {
 /** ISO timestamp -> YYYY-MM-DD, for pre-filling a date input when editing. */
 export function toInputValue(iso: string): string {
   return new Date(iso).toISOString().slice(0, 10);
+}
+
+/**
+ * A wall-clock span in Hebrew: "11 דקות", "שעתיים", "יום וחצי". Hebrew has a
+ * dual form, so 2 is its own word in every unit and cannot be reached by
+ * counting. Halves are spelled only for the day, which is the one unit here
+ * coarse enough to need them.
+ */
+export function formatDuration(minutes: number): string {
+  if (minutes < 60) return minutes === 1 ? "דקה" : `${minutes} דקות`;
+
+  if (minutes < 24 * 60) {
+    const hours = Math.round(minutes / 60);
+    if (hours === 1) return "שעה";
+    if (hours === 2) return "שעתיים";
+    return `${hours} שעות`;
+  }
+
+  const days = Math.round((minutes / (24 * 60)) * 2) / 2;
+  const half = days % 1 !== 0;
+  const whole = Math.floor(days);
+
+  const name =
+    whole === 1 ? "יום" : whole === 2 ? "יומיים" : `${whole} ימים`;
+  return half ? `${name} וחצי` : name;
+}
+
+/**
+ * A span of days in Hebrew, coarsened as it grows: days, then weeks, then
+ * months, then years. Same dual as `formatDuration` — 2 is its own word at
+ * every scale — and the same reason for the coarsening: "444 ימים" is a number
+ * nobody converts in their head, while "שנה" lands immediately.
+ */
+export function formatDaySpan(days: number): string {
+  if (days < 1) return "פחות מיום";
+  if (days < 14) return count(days, "יום", "יומיים", "ימים");
+  if (days < 60) return count(Math.round(days / 7), "שבוע", "שבועיים", "שבועות");
+  if (days < 365) {
+    return count(Math.round(days / 30), "חודש", "חודשיים", "חודשים");
+  }
+  return count(Math.round(days / 365), "שנה", "שנתיים", "שנים");
+}
+
+/** One, the dual, or a numeral and the plural. */
+function count(n: number, one: string, two: string, many: string): string {
+  if (n === 1) return one;
+  if (n === 2) return two;
+  return `${n} ${many}`;
 }
 
 /**

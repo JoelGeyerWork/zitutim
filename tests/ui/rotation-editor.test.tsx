@@ -2,10 +2,11 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { RotationEditor } from "@/components/rotation-editor";
+import { MEETUP_COPY, RotationEditor } from "@/components/rotation-editor";
+import { SessionProvider } from "@/components/session-provider";
 import { type RosterMember } from "@/lib/roster";
 import { type MeetupSlot } from "@/lib/team";
-import { jsonResponse } from "./factories";
+import { jsonResponse, makeSessionUser } from "./factories";
 
 vi.mock("sonner", () => ({
   toast: { success: vi.fn(), error: vi.fn() },
@@ -37,15 +38,23 @@ function slotsFor(queue: RosterMember[]): MeetupSlot[] {
   }));
 }
 
-function editor(queue: RosterMember[], offset = 0) {
+/**
+ * Signed in, because `DirectorySearch` offers the box only to a session —
+ * `GET /api/directory` is the one read here that refuses to answer anonymously,
+ * so a search field that could only ever 401 is worse than saying so.
+ */
+function editor(queue: RosterMember[], offset = 0, user = makeSessionUser()) {
   return (
-    <RotationEditor
-      open
-      onOpenChange={() => {}}
-      roster={queue}
-      slots={slotsFor(queue)}
-      offset={offset}
-    />
+    <SessionProvider user={user}>
+      <RotationEditor
+        open
+        onOpenChange={() => {}}
+        roster={queue}
+        slots={slotsFor(queue)}
+        offset={offset}
+        copy={MEETUP_COPY}
+      />
+    </SessionProvider>
   );
 }
 
@@ -148,6 +157,22 @@ describe("RotationEditor", () => {
       directoryId: "guid-shira",
       gender: "f",
     });
+  });
+
+  it("offers a signed-out reader the login page instead of a box that cannot answer", async () => {
+    const user = userEvent.setup();
+    render(editor([member("m1", "נועה ברקת")], 0, null!));
+    const dialog = await screen.findByRole("dialog");
+
+    await user.click(within(dialog).getByRole("button", { name: "הוספה" }));
+
+    expect(
+      screen.queryByLabelText("חיפוש בספריית הארגון"),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "כניסה" })).toHaveAttribute(
+      "href",
+      "/login?next=%2Fmeetups",
+    );
   });
 
   it("marks a directory result already in the rotation rather than offering to add", async () => {

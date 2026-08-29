@@ -1,12 +1,16 @@
 import {
+  BroomIcon,
   CalendarDaysIcon,
   CircleHelpIcon,
   HomeIcon,
+  LifeBuoyIcon,
   LightbulbIcon,
   ListOrderedIcon,
   PlusIcon,
   QuoteIcon,
   SearchIcon,
+  StarIcon,
+  TrophyIcon,
   type LucideIcon,
 } from "lucide-react";
 
@@ -48,8 +52,8 @@ export const HUB: Section = {
 
 /**
  * Order matters and is deliberate: it is the order of the dropdown *and* of the
- * hub's cards. The meetup leads because it is the one thing here that expires —
- * everything else reads the same tomorrow.
+ * hub's cards. The two weekly rotations lead because they are the things here
+ * that expire — the quote wall reads the same tomorrow.
  */
 export const SECTIONS: Section[] = [
   {
@@ -60,6 +64,17 @@ export const SECTIONS: Section[] = [
     tabs: [
       { href: "/meetups", label: "התור", icon: ListOrderedIcon },
       { href: "/meetups/themes", label: "נושאי הכיבוד", icon: LightbulbIcon },
+    ],
+  },
+  {
+    href: "/shotef",
+    label: "שוטף",
+    description: "מי תורן השבוע על הבאגים והתקלות שנופלות עלינו",
+    icon: BroomIcon,
+    tabs: [
+      { href: "/shotef", label: "הסבב", icon: LifeBuoyIcon },
+      { href: "/shotef/reviews", label: "סיכומי שבוע", icon: StarIcon },
+      { href: "/shotef/hall-of-fame", label: "היכל התהילה", icon: TrophyIcon },
     ],
   },
   {
