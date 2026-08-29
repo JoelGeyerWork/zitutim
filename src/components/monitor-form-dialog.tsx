@@ -317,7 +317,7 @@ export function MonitorFormDialog({
             <Field
               id="solvers"
               label="מי פתר"
-              hint={roster.length > 0 ? "התורנות, ומי שעוד היה שם" : undefined}
+              hint={roster.length > 0 ? "הסבב, ומי שעוד היה שם" : undefined}
               error={errors.solvedBy}
             >
               <div id="solvers" className="space-y-3">

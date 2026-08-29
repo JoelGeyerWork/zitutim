@@ -207,7 +207,7 @@ function TrophyCase({
             {plural(monitors.length, "הישג אחד", "הישגים")}
           </p>
           <p className="mt-0.5 text-sm opacity-80 text-balance">
-            כל מוניטור כאן צעק פעם, ומישהו בתורנות השתיק אותו לתמיד.
+            כל מוניטור כאן צעק פעם, ומישהו בסבב השתיק אותו לתמיד.
           </p>
         </div>
       </div>

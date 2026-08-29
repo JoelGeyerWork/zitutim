@@ -72,7 +72,7 @@ export const SECTIONS: Section[] = [
     description: "מי תורן השבוע על הבאגים והתקלות שנופלות עלינו",
     icon: BroomIcon,
     tabs: [
-      { href: "/shotef", label: "התורנות", icon: LifeBuoyIcon },
+      { href: "/shotef", label: "הסבב", icon: LifeBuoyIcon },
       { href: "/shotef/reviews", label: "סיכומי שבוע", icon: StarIcon },
       { href: "/shotef/hall-of-fame", label: "היכל התהילה", icon: TrophyIcon },
     ],

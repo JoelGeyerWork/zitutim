@@ -386,7 +386,7 @@ describe("HallOfFame", () => {
     await actor.click(screen.getByRole("button", { name: /תעודה חדשה/ }));
     const dialog = await screen.findByRole("dialog");
 
-    expect(within(dialog).queryByText(/אין אף אחד בתורנות/)).toBeNull();
+    expect(within(dialog).queryByText(/אין אף אחד בסבב/)).toBeNull();
     expect(
       within(dialog).getByRole("button", { name: "תליית התעודה" }),
     ).toBeInTheDocument();

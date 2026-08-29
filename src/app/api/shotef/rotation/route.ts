@@ -45,7 +45,7 @@ export async function GET() {
   } catch (error) {
     console.error("GET /api/shotef/rotation failed", error);
     return NextResponse.json(
-      { error: "לא הצלחנו לטעון את התורנות" },
+      { error: "לא הצלחנו לטעון את הסבב" },
       { status: 500 },
     );
   }
@@ -108,7 +108,7 @@ export async function POST(request: Request) {
     const userId = await upsertRosterUser(person);
     const result = await addShotefMember(userId, parsed.data.gender);
     if (!result.ok) {
-      return NextResponse.json({ error: "כבר בתורנות" }, { status: 409 });
+      return NextResponse.json({ error: "כבר בסבב" }, { status: 409 });
     }
     return NextResponse.json(
       {
@@ -124,7 +124,7 @@ export async function POST(request: Request) {
   } catch (error) {
     console.error("POST /api/shotef/rotation failed", error);
     return NextResponse.json(
-      { error: "לא הצלחנו להוסיף לתורנות" },
+      { error: "לא הצלחנו להוסיף לסבב" },
       { status: 500 },
     );
   }

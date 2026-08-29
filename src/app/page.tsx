@@ -202,7 +202,7 @@ function ShotefTeaser({
       <div className="min-w-0">
         <p className="truncate font-semibold">{member.name}</p>
         <p className="text-muted-foreground text-sm">
-          {conjugate(member, "אחראי", "אחראית")} על הבאגים · התורנות עוברת{" "}
+          {conjugate(member, "אחראי", "אחראית")} על הבאגים · הסבב עובר{" "}
           {daysUntil(handover, now)}
         </p>
       </div>

@@ -25,7 +25,7 @@ export default async function ShotefPage() {
   return (
     <PageShell>
       <PageHeader
-        title="התורנות"
+        title="הסבב"
         description="שבוע לכל אחד. השוטף לוקח את הבאגים, את התקלות ואת כל מה שנופל באמצע."
       />
       <ShotefRoulette

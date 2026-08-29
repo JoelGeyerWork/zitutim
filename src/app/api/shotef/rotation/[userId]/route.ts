@@ -25,13 +25,13 @@ export async function DELETE(request: Request, { params }: Params) {
   try {
     const outcome = await removeShotefMember(userId);
     if (outcome === "not-found") {
-      return NextResponse.json({ error: "לא נמצא בתורנות" }, { status: 404 });
+      return NextResponse.json({ error: "לא נמצא בסבב" }, { status: 404 });
     }
     if (outcome === "last") {
       // An empty rotation has nobody on duty and no week to render, so the last
       // member cannot be removed — the same refusal the ישב״צ rotation makes.
       return NextResponse.json(
-        { error: "צריך שיישאר לפחות אדם אחד בתורנות" },
+        { error: "צריך שיישאר לפחות אדם אחד בסבב" },
         { status: 409 },
       );
     }
@@ -39,7 +39,7 @@ export async function DELETE(request: Request, { params }: Params) {
   } catch (error) {
     console.error(`DELETE /api/shotef/rotation/${userId} failed`, error);
     return NextResponse.json(
-      { error: "לא הצלחנו להוציא מהתורנות" },
+      { error: "לא הצלחנו להוציא מהסבב" },
       { status: 500 },
     );
   }
@@ -72,13 +72,13 @@ export async function PATCH(request: Request, { params }: Params) {
   try {
     const updated = await setShotefGender(userId, parsed.data.gender);
     if (!updated) {
-      return NextResponse.json({ error: "לא נמצא בתורנות" }, { status: 404 });
+      return NextResponse.json({ error: "לא נמצא בסבב" }, { status: 404 });
     }
     return NextResponse.json({ userId, gender: parsed.data.gender });
   } catch (error) {
     console.error(`PATCH /api/shotef/rotation/${userId} failed`, error);
     return NextResponse.json(
-      { error: "לא הצלחנו לעדכן את התורנות" },
+      { error: "לא הצלחנו לעדכן את הסבב" },
       { status: 500 },
     );
   }

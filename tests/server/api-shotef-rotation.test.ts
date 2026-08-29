@@ -158,7 +158,7 @@ describe("POST /api/shotef/rotation", () => {
     await add("guid-noa");
     const again = await post({ directoryId: "guid-noa", gender: "m" });
     expect(again.status).toBe(409);
-    await expect(again.json()).resolves.toMatchObject({ error: "כבר בתורנות" });
+    await expect(again.json()).resolves.toMatchObject({ error: "כבר בסבב" });
   });
 
   it("reports a directory outage as 503, not as bad input", async () => {

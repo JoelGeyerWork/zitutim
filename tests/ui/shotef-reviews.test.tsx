@@ -306,7 +306,7 @@ describe("ShotefReviews", () => {
     await actor.click(screen.getByRole("button", { name: /סיכום חדש/ }));
     const dialog = await screen.findByRole("dialog");
 
-    expect(within(dialog).queryByText(/אין אף אחד בתורנות/)).toBeNull();
+    expect(within(dialog).queryByText(/אין אף אחד בסבב/)).toBeNull();
     expect(
       within(dialog).getByRole("button", { name: "פרסום הסיכום" }),
     ).toBeInTheDocument();

@@ -297,7 +297,7 @@ export function ReviewFormDialog({
         {weeks.length === 0 ? (
           <p className="text-muted-foreground py-4 text-sm text-balance">
             כל השבועות האחרונים כבר מסוכמים. השבוע שרץ עכשיו יהיה זמין לסיכום
-            ביום ראשון, כשהתורנות תעבור.
+            ביום ראשון, כשהסבב יעבור.
           </p>
         ) : (
           <form onSubmit={handleSubmit} className="space-y-5">
@@ -390,7 +390,7 @@ export function ReviewFormDialog({
                 className="text-muted-foreground gap-1.5 px-0"
               >
                 <SearchIcon className="size-3.5" />
-                מי שהיה בתורנות לא ברשימה? חיפוש בספריית הארגון
+                מי שהיה בסבב לא ברשימה? חיפוש בספריית הארגון
               </Button>
             )}
 

@@ -130,13 +130,13 @@ export function ShotefRoulette({
         <div className="bg-card rounded-2xl border p-8 text-center shadow-sm">
           <LifeBuoyIcon className="text-muted-foreground mx-auto size-8" />
           <p className="text-muted-foreground mt-3 text-sm text-balance">
-            עדיין אין אף אחד בתורנות.
+            עדיין אין אף אחד בסבב.
           </p>
           {/* Drawn for everyone: the editor's own calls answer 401 and send
               them to login, and a fresh database otherwise shows a signed-out
               visitor a dead end. */}
           <Button className="mt-4" onClick={() => setEditing(true)}>
-            הוספת אנשים לתורנות
+            הוספת אנשים לסבב
           </Button>
         </div>
 
@@ -169,7 +169,7 @@ export function ShotefRoulette({
             {/* Counted to the handover, not to the start — what matters when
                 you are on duty is how much of the week is left. */}
             <span className="text-xs font-medium">
-              התורנות עוברת {daysUntil(handoverOf(thisWeek.date), now)}
+              הסבב עובר {daysUntil(handoverOf(thisWeek.date), now)}
             </span>
           </div>
 
@@ -246,14 +246,14 @@ export function ShotefRoulette({
               size="lg"
               disabled={spinning}
               onClick={() => setEditing(true)}
-              aria-label="עריכת התורנות"
+              aria-label="עריכת הסבב"
             >
               <PencilIcon className="size-4" />
             </Button>
           </div>
 
           <p className="text-muted-foreground mt-3 text-center text-xs text-balance">
-            התורנות מתגלגלת לבד בכל יום ראשון. הגלגל הוא בשביל השבועות שבהם
+            הסבב מתגלגל לבד בכל יום ראשון. הגלגל הוא בשביל השבועות שבהם
             צריך להחליף.
           </p>
         </div>

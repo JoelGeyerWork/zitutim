@@ -78,7 +78,7 @@ describe("ShotefRoulette", () => {
     for (const member of ROSTER) {
       expect(screen.getAllByText(member.name).length).toBeGreaterThan(0);
     }
-    expect(screen.queryByText("עדיין אין אף אחד בתורנות.")).not.toBeInTheDocument();
+    expect(screen.queryByText("עדיין אין אף אחד בסבב.")).not.toBeInTheDocument();
   });
 
   it("says so instead of crashing when nobody is in the rotation", () => {
@@ -86,9 +86,9 @@ describe("ShotefRoulette", () => {
     // the card used to dereference `shifts[0].member` straight through it.
     renderWheel([]);
 
-    expect(screen.getByText("עדיין אין אף אחד בתורנות.")).toBeInTheDocument();
+    expect(screen.getByText("עדיין אין אף אחד בסבב.")).toBeInTheDocument();
     expect(
-      screen.getByRole("button", { name: "הוספת אנשים לתורנות" }),
+      screen.getByRole("button", { name: "הוספת אנשים לסבב" }),
     ).toBeInTheDocument();
     expect(
       screen.queryByRole("button", { name: "סובבו את הגלגל" }),
@@ -102,7 +102,7 @@ describe("ShotefRoulette", () => {
     renderWheel([], { signedIn: false });
 
     expect(
-      screen.getByRole("button", { name: "הוספת אנשים לתורנות" }),
+      screen.getByRole("button", { name: "הוספת אנשים לסבב" }),
     ).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: /כניסה/ })).toBeNull();
   });
@@ -115,17 +115,17 @@ describe("ShotefRoulette", () => {
 
     expect(screen.getByRole("button", { name: "סובבו את הגלגל" })).toBeInTheDocument();
     expect(
-      screen.getByRole("button", { name: "עריכת התורנות" }),
+      screen.getByRole("button", { name: "עריכת הסבב" }),
     ).toBeInTheDocument();
   });
 
   it("opens the on-call roster behind the pencil, in its own words", async () => {
     const user = renderWheel(ROSTER);
 
-    await user.click(screen.getByRole("button", { name: "עריכת התורנות" }));
+    await user.click(screen.getByRole("button", { name: "עריכת הסבב" }));
     const dialog = await screen.findByRole("dialog");
 
-    expect(within(dialog).getByText("התורנות")).toBeInTheDocument();
+    expect(within(dialog).getByText("הסבב")).toBeInTheDocument();
     // The verb the gender choice conjugates is this rotation's, not the ישב״צ's.
     expect(within(dialog).getAllByRole("radio", { name: "שוטפת" }).length).toBe(
       ROSTER.length,
@@ -138,7 +138,7 @@ describe("ShotefRoulette", () => {
     // where a pointer drag (which measures row heights) cannot.
     const user = renderWheel(ROSTER);
 
-    await user.click(screen.getByRole("button", { name: "עריכת התורנות" }));
+    await user.click(screen.getByRole("button", { name: "עריכת הסבב" }));
     const dialog = await screen.findByRole("dialog");
 
     const firstRow = within(dialog).getByText("רותם אבידן").closest("li")!;
@@ -168,14 +168,14 @@ describe("ShotefRoulette", () => {
   it("removes through the on-call routes", async () => {
     const user = renderWheel(ROSTER);
 
-    await user.click(screen.getByRole("button", { name: "עריכת התורנות" }));
+    await user.click(screen.getByRole("button", { name: "עריכת הסבב" }));
     const dialog = await screen.findByRole("dialog");
 
     await user.click(
       within(dialog).getByRole("button", { name: "פעולות על רותם אבידן" }),
     );
     await user.click(
-      await screen.findByRole("menuitem", { name: "הוצאה מהתורנות" }),
+      await screen.findByRole("menuitem", { name: "הוצאה מהסבב" }),
     );
 
     await waitFor(() =>

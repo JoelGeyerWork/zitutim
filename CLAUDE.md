@@ -189,7 +189,10 @@ one `users` row**, since both point at the same `upsertRosterUser` identity.
 silently forgotten on the other. The three prepositional forms
 (`inRotation`/`toRotation`/`fromRotation`) are separate fields rather than
 derived from one stem because Hebrew folds the preposition into the definite
-article, and the two nouns disagree on grammatical gender (`שבו` vs `שבה`). The
+article. Both sides say `סבב` today, so the forms happen to agree — they are
+still stored per-rotation rather than shared, because the moment one is renamed
+(as שוטף's was, from `תורנות`) the whole set moves with it, `joinTail`'s
+relative pronoun included. The
 `copy` prop is deliberately **required, not defaulted**: which API a component
 POSTs to should not be implicit. `slots` is the structural
 `Turn = { date, weeksAway }`, which both `MeetupSlot` and `ShotefShift` satisfy.

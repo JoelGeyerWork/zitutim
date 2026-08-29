@@ -101,16 +101,16 @@ export const MEETUP_COPY: RotationCopy = {
 /** The on-call rotation: the same store and the same routes one level down. */
 export const SHOTEF_COPY: RotationCopy = {
   api: "/api/shotef/rotation",
-  title: "התורנות",
+  title: "הסבב",
   hint: "מי שוטף, ובאיזה סדר. גוררים כדי לשנות.",
-  inRotation: "בתורנות",
-  toRotation: "לתורנות",
-  fromRotation: "מהתורנות",
-  joinTail: "לסוף התורנות, שבה יהיו מעכשיו",
+  inRotation: "בסבב",
+  toRotation: "לסבב",
+  fromRotation: "מהסבב",
+  joinTail: "לסוף הסבב, שבו יהיו מעכשיו",
   verb: { f: "שוטפת", m: "שוטף" },
   verbObject: "השבוע",
   footnote:
-    "השם והתפקיד מגיעים מספריית הארגון ומתעדכנים משם. הסדר ולשון הפנייה נקבעים כאן — ומי שיוצא מהתורנות נשאר רשום על השבועות שכבר עברו עליו.",
+    "השם והתפקיד מגיעים מספריית הארגון ומתעדכנים משם. הסדר ולשון הפנייה נקבעים כאן — ומי שיוצא מהסבב נשאר רשום על השבועות שכבר עברו עליו.",
   // The day the week opens, not its range: a range that crosses a month is
   // long enough to squeeze the name beside it.
   formatTurn: formatDayMonth,
