@@ -30,9 +30,16 @@ export function SiteNav() {
       <div className="mx-auto flex max-w-2xl flex-wrap items-center gap-x-2 px-4 sm:h-16 sm:flex-nowrap">
         <div className="flex h-16 min-w-0 shrink-0 items-center gap-1.5 sm:h-auto">
           <Link href="/" aria-label="מרכז הצוות" className="shrink-0">
-            <span className="bg-primary text-primary-foreground quote-mark flex size-9 items-center justify-center rounded-xl pt-2.5 text-3xl font-bold">
-              ״
-            </span>
+            {/* The card diamond, drawn rather than set as ♦ so it keeps the
+                same weight in every font. Its sides bow out very slightly, so
+                it reads as the suit and not as a square stood on its corner. */}
+            <svg
+              viewBox="0 0 64 64"
+              aria-hidden
+              className="fill-primary size-9"
+            >
+              <path d="M32 2 Q45 17 54 32 Q45 47 32 62 Q19 47 10 32 Q19 17 32 2 Z" />
+            </svg>
           </Link>
 
           <DropdownMenu>
