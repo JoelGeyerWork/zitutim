@@ -19,6 +19,14 @@ import type { Quote } from "@/lib/quote-schema";
  * Server-side only — not for the usual Mongo reason, but because it inlines
  * the font, which has no business in the browser bundle. The transitive
  * `server-only` comes from `@/lib/fonts/heebo-embedded`.
+ *
+ * There is no script here, not even an inline `onclick`, and that is a rule
+ * rather than an omission. The same string is served as `text/html` from the
+ * app's own origin, so any escaping that ever slips becomes stored XSS against
+ * a real session — a document that has already opted into script is one where
+ * that lands. It is also why a Windows mail gateway eats an `.html` attachment,
+ * which would drop the printable file while the mail itself sailed through.
+ * The print stylesheet does the work; the keyboard does the rest.
  */
 
 /**
@@ -179,30 +187,24 @@ ${fontFace(HEEBO_LATIN_WOFF2_BASE64, LATIN_RANGE)}
     overflow-wrap: break-word;
   }
 
-  .print-action {
+  /* A hint, not a control: see the note on the element itself. */
+  .print-hint {
     position: fixed;
     inset-block-start: 1rem;
     inset-inline-end: 1rem;
-    padding: 0.5rem 1rem;
-    font: inherit;
-    font-size: 0.85rem;
-    color: var(--ink);
-    background: #fff;
-    border: 1px solid #ccc;
-    border-radius: 999px;
-    cursor: pointer;
+    margin: 0;
+    font-size: 0.8rem;
+    color: var(--muted);
   }
-
-  .print-action:hover { border-color: var(--accent); color: var(--accent); }
 
   @media print {
     body { padding: 0; }
-    .print-action { display: none; }
+    .print-hint { display: none; }
   }
 </style>
 </head>
 <body>
-<button type="button" class="print-action" onclick="window.print()">הדפסה</button>
+<p class="print-hint">Ctrl+P / ⌘P להדפסה</p>
 <main>
   <blockquote class="quote ${sizeClass(quote.text.length)}">${text}</blockquote>
   <hr class="rule">

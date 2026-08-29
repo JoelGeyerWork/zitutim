@@ -114,10 +114,12 @@ export function QuoteCard({
                 <Button
                   variant="ghost"
                   size="icon"
-                  /* Revealed on hover from `sm` up, but always visible below it:
-                     touch devices have no hover, and this is now the only way
-                     to reach any of these actions. */
-                  className="text-muted-foreground size-8 opacity-100 transition-opacity sm:opacity-0 sm:group-hover:opacity-100 sm:focus-visible:opacity-100 sm:data-popup-open:opacity-100"
+                  /* Hidden until hover, and only where hover exists. The
+                     media query, not `sm:` — an iPad in landscape is `sm+` with
+                     no pointer to hover, and this is now the only way to reach
+                     any of these actions, so getting the split wrong leaves a
+                     transparent 32px target as the whole menu. */
+                  className="text-muted-foreground size-8 opacity-100 transition-opacity [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100 [@media(hover:hover)]:focus-visible:opacity-100 [@media(hover:hover)]:data-popup-open:opacity-100"
                   aria-label="אפשרויות נוספות"
                 >
                   <MoreHorizontalIcon className="size-4" />

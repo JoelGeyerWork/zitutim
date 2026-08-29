@@ -2,7 +2,7 @@ import { simpleParser } from "mailparser";
 import nodemailer from "nodemailer";
 import { describe, expect, it } from "vitest";
 
-import { buildQuoteEmail } from "@/lib/quote-email";
+import { buildQuoteEmail, replyAddress } from "@/lib/quote-email";
 import type { Quote } from "@/lib/quote-schema";
 
 /**
@@ -114,6 +114,44 @@ describe("buildQuoteEmail", () => {
     expect(parsed.text).toContain("יואל");
   });
 
+  it("keeps the author's own line breaks in the body people read", async () => {
+    const parsed = await roundTrip(
+      buildQuoteEmail(
+        makeQuote({
+          text: "שורה ראשונה\nשורה שנייה",
+          context: "הקשר ראשון\r\nהקשר שני",
+        }),
+        "יואל",
+      ),
+    );
+
+    // Quotes are typed into a textarea, so multi-line is ordinary rather than
+    // an edge case. `white-space: pre-wrap` — what the wall and the attachment
+    // use — is not available: Word's engine ignores it the same way it ignores
+    // max-width, and Outlook is what this team reads mail in.
+    const html = parsed.html as string;
+    expect(html).toContain("שורה ראשונה<br>שורה שנייה");
+    expect(html).toContain("הקשר ראשון<br>הקשר שני");
+
+    // The two alternatives that already kept them must not have regressed.
+    expect(parsed.text).toContain("שורה ראשונה\nשורה שנייה");
+    expect(parsed.attachments[0].content.toString("utf8")).toContain(
+      "שורה ראשונה\nשורה שנייה",
+    );
+  });
+
+  it("breaks a pasted URL rather than letting it widen the message", async () => {
+    const parsed = await roundTrip(
+      buildQuoteEmail(makeQuote({ text: "a".repeat(200) }), "יואל"),
+    );
+
+    const html = parsed.html as string;
+    // `word-wrap` is the spelling Word's engine knows, `overflow-wrap` the one
+    // everything else does; the printable page already has the latter.
+    expect(html).toMatch(/<blockquote[^>]*word-wrap:break-word/);
+    expect(html).toMatch(/<blockquote[^>]*overflow-wrap:break-word/);
+  });
+
   it("points replies at whoever shared it, when their address is known", async () => {
     const withAddress = await roundTrip(
       buildQuoteEmail(makeQuote(), "יואל", "yoel@test.local"),
@@ -140,6 +178,20 @@ describe("buildQuoteEmail", () => {
     expect(html).toContain("&lt;script&gt;");
   });
 
+  it("drops a stored address that is not one, rather than failing the send", async () => {
+    // getUserMail hands back whatever AD put in `mail`, which is free text.
+    // Nodemailer emits a bad value rather than refusing it, so without this the
+    // message ships a Reply-To header no relay should be asked to accept.
+    const parsed = await roundTrip(
+      buildQuoteEmail(makeQuote(), "יואל", "Yoel Geyer"),
+    );
+
+    expect(parsed.replyTo).toBeUndefined();
+    // The message still goes out — the same state as a rotation-only user who
+    // has never signed in.
+    expect(parsed.subject).toBe("ציטוט מקיר הציטוטים - דנה");
+  });
+
   it("keeps a mangled author name from breaking the subject header", async () => {
     const parsed = await roundTrip(
       buildQuoteEmail(makeQuote({ author: "דנה\r\nX-Injected: yes" }), "יואל"),
@@ -147,5 +199,34 @@ describe("buildQuoteEmail", () => {
 
     expect(parsed.subject).not.toMatch(/[\r\n]/);
     expect(parsed.headers.has("x-injected")).toBe(false);
+  });
+});
+
+describe("replyAddress", () => {
+  it("accepts a plain mailbox", () => {
+    expect(replyAddress("yoel@test.local")).toBe("yoel@test.local");
+    expect(replyAddress("  yoel@test.local  ")).toBe("yoel@test.local");
+  });
+
+  it("drops everything a header could not carry", () => {
+    // Each of these has been in a real AD `mail` attribute at some point: an
+    // unfilled field, a display name, an Exchange proxy prefix, a name with the
+    // address beside it, a list, and a value that arrived with a newline.
+    for (const value of [
+      null,
+      undefined,
+      "",
+      "   ",
+      "Yoel Geyer",
+      "smtp:yoel@test.local",
+      "Yoel <yoel@test.local>",
+      "yoel@test.local, team@test.local",
+      "yoel@test.local\r\nBcc: evil@example.com",
+      "yoel@localhost",
+      "@test.local",
+      "yoel@",
+    ]) {
+      expect(replyAddress(value)).toBeUndefined();
+    }
   });
 });

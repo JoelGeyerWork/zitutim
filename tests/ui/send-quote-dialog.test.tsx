@@ -94,6 +94,30 @@ describe("SendQuoteDialog", () => {
     expect(toast.error).toHaveBeenCalledWith("אין חיבור לשרת");
   });
 
+  it("refuses to close while a send is in flight", async () => {
+    const user = userEvent.setup();
+    let release: (value: Response) => void = () => {};
+    vi.mocked(fetch).mockReturnValue(
+      new Promise<Response>((resolve) => {
+        release = resolve;
+      }),
+    );
+
+    const onOpenChange = renderDialog();
+    await user.click(sendButton());
+
+    // The lock is state in this component and the card unmounts the dialog on
+    // close, so a successful Escape here would throw the lock away and let the
+    // card open a fresh dialog and send a second copy to the whole team. The
+    // disabled-button test below never reaches this: it clicks a button on a
+    // dialog that is still mounted.
+    await user.keyboard("{Escape}");
+    expect(onOpenChange).not.toHaveBeenCalled();
+    expect(screen.getByRole("alertdialog")).toBeInTheDocument();
+
+    release(new Response(JSON.stringify({ sent: true }), { status: 200 }));
+  });
+
   it("cannot be sent twice by double-clicking", async () => {
     const user = userEvent.setup();
     let release: (value: Response) => void = () => {};

@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { POST } from "@/app/api/quotes/[id]/send/route";
 import { resetTransporterCache } from "@/lib/mail";
 import { getDb } from "@/lib/mongodb";
+import { ObjectId } from "mongodb";
 import { createQuote, type QuoteActor } from "@/lib/quotes";
 import type { QuoteValues } from "@/lib/quote-schema";
 import { TEST_USER, sessionCookie } from "./factories";
@@ -78,7 +79,16 @@ beforeEach(async () => {
 
   const db = await getDb();
   await db.collection("quotes").deleteMany({});
+  await db.collection("users").deleteMany({});
 });
+
+/** The `users` row the session's `sub` points at, as a real sign-in leaves it. */
+async function storeMail(mail: string) {
+  const db = await getDb();
+  await db
+    .collection("users")
+    .insertOne({ _id: new ObjectId(TEST_USER.id), mail } as never);
+}
 
 afterEach(() => {
   for (const key of MAIL_ENV) {
@@ -106,6 +116,35 @@ describe("POST /api/quotes/[id]/send", () => {
     expect(message.subject).toContain("דנה");
     expect(message.attachments).toHaveLength(1);
     expect(message.attachments[0].filename).toBe("ציטוט - דנה.html");
+  });
+
+  it("points replies at the sender's stored address", async () => {
+    // The route's own lookup, which the MIME tests cannot reach: they pass
+    // replyTo in by hand, so nothing proved getUserMail was actually wired.
+    await storeMail("dana@test.local");
+    const quote = await createQuote(input(), ACTOR);
+
+    expect((await send(quote.id)).status).toBe(200);
+    expect(sendMailMock.mock.calls[0][0].replyTo).toBe("dana@test.local");
+  });
+
+  it("still sends when the stored address is not one", async () => {
+    // AD's `mail` is free text. Nodemailer does not refuse a value like this,
+    // it emits it — a malformed Reply-To a strict relay may bounce the message
+    // over, for a reply address that could never have worked anyway.
+    await storeMail("Dana Cohen");
+    const quote = await createQuote(input(), ACTOR);
+
+    expect((await send(quote.id)).status).toBe(200);
+    expect(sendMailMock.mock.calls[0][0].replyTo).toBeUndefined();
+  });
+
+  it("sends with no Reply-To for someone who has never signed in", async () => {
+    // The rotation editor creates a `users` row without a mail attribute.
+    const quote = await createQuote(input(), ACTOR);
+
+    expect((await send(quote.id)).status).toBe(200);
+    expect(sendMailMock.mock.calls[0][0].replyTo).toBeUndefined();
   });
 
   it("refuses a cross-site request before anything else", async () => {

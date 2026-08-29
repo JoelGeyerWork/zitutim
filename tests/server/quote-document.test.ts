@@ -128,12 +128,29 @@ describe("renderQuoteDocument", () => {
     expect(html).toMatch(/\.context \{[^}]*overflow-wrap: break-word;/);
   });
 
-  it("hides the print button when printing", () => {
+  it("carries no script at all, not even an inline handler", () => {
     const html = renderQuoteDocument(makeQuote());
 
-    expect(html).toContain("window.print()");
+    // The same string is served as text/html from the app's own origin, so a
+    // document that has opted into script is a document where a missed escape
+    // runs with the session cookie in reach. It is also the handler a Windows
+    // mail gateway strips the whole attachment for. The print stylesheet does
+    // the work; the keyboard does the rest.
+    //
+    // Matched against the markup only: the quote body legitimately contains
+    // whatever someone typed, escaped, so `onerror=` as *text* is not a finding.
+    const markup = html.replace(/&[a-z]+;|&#\d+;/g, "");
+    expect(markup).not.toMatch(/<script\b/i);
+    expect(markup).not.toMatch(/\son[a-z]+\s*=/i);
+    expect(markup).not.toContain("window.print()");
+  });
+
+  it("hides the print hint when printing", () => {
+    const html = renderQuoteDocument(makeQuote());
+
+    expect(html).toContain("print-hint");
     expect(html).toMatch(
-      /@media print[\s\S]*\.print-action \{ display: none; \}/,
+      /@media print[\s\S]*\.print-hint \{ display: none; \}/,
     );
   });
 });

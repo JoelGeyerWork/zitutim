@@ -399,6 +399,42 @@ Consequences worth keeping:
   STARTTLS entirely and send the credential in clear text. On anything routable,
   `NODE_EXTRA_CA_CERTS` is the right answer instead. It is part of the pooled
   transport's cache key, or flipping it would keep using the old transport.
+- **The document carries no script, not even an inline `onclick`.** It is also
+  served as `text/html` from the app's own origin, so a document that had opted
+  into script is one where a future missed escape runs first-party with the
+  session cookie in reach — and `Content-Disposition: attachment` is not the
+  guard it looks like, since "open in new tab" and iOS Safari both ignore it. A
+  Windows mail gateway is also likelier to eat an `.html` attachment that has a
+  handler in it, which would drop the printable file while the mail sailed
+  through. The print stylesheet does the work and the keyboard does the rest, so
+  the old print button is a hint now. The route sends a `default-src 'none'`
+  CSP with `sandbox` on top as the net under the escaping — but only for the
+  *served* copy: a saved file opens from `file://` with no CSP at all, which is
+  why the rule is "no script", not "CSP".
+- **The mail body converts newlines to `<br>`; everything else uses
+  `pre-wrap`.** Quotes are typed into a textarea, so multi-line is the common
+  case, and the body is the part almost every client actually shows. `white-space:
+  pre-wrap` is not available there for the same reason `max-width` isn't —
+  Word's engine ignores both. Escape *first*, then replace, or the `<br>` is
+  escaped along with the text.
+- **`Reply-To` is dropped unless it is a bare `local@domain`.** AD's `mail` is
+  free text — a display-name leftover, an Exchange `smtp:` proxy prefix, a value
+  with a newline in it. Nodemailer does not refuse those, it emits them:
+  measured, `smtp:x@y` becomes `Reply-To: smtp:x@y;`, RFC 5322 group syntax with
+  no members, and a bare display name vanishes silently. A strict relay may
+  bounce the message over a header that could never have worked, so
+  `replyAddress` drops it and the mail goes out with none — the state a
+  rotation-only user is in anyway.
+- **The card's menu hides on `(hover: hover)`, never on a breakpoint.** It is
+  the only way to reach copy, download, share, edit and delete, and an iPad in
+  landscape is `sm`-and-wider with no pointer to hover — under a width query it
+  became an invisible 32px target that was still in the hit map. Tailwind v4
+  already wraps `hover:`/`group-hover:` in the media query; it is the
+  `opacity-0` that needs saying so explicitly.
+- **The send dialog refuses to close while a send is in flight.** The in-flight
+  lock is state in the dialog and the card unmounts it on close, so letting
+  Escape through would throw the lock away mid-request and let a second copy go
+  to the whole team — the exact thing the confirmation exists to prevent.
 - **Sharing is not hidden from signed-out visitors.** Like the like button, the
   control stays visible and becomes a link to `/login?next=…`; the API's 401 is
   the boundary. The download needs no session at all.

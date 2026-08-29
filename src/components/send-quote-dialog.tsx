@@ -63,7 +63,17 @@ export function SendQuoteDialog({
   }
 
   return (
-    <AlertDialog open={open} onOpenChange={onOpenChange}>
+    <AlertDialog
+      open={open}
+      onOpenChange={(next) => {
+        // The in-flight lock is state in this component, and the card unmounts
+        // the dialog on close — so letting Escape through mid-send throws the
+        // lock away and the next click sends a second copy to the whole team.
+        // Exactly what the confirmation exists to prevent.
+        if (!next && sending) return;
+        onOpenChange(next);
+      }}
+    >
       <AlertDialogContent>
         <AlertDialogHeader>
           <AlertDialogMedia className="bg-primary/10 text-primary">

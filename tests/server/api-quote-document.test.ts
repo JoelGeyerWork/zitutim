@@ -88,6 +88,24 @@ describe("GET /api/quotes/[id]/document", () => {
     expect((await get(quote.id)).headers.get("Cache-Control")).toBe("no-store");
   });
 
+  it("refuses script even though the document contains none", async () => {
+    const quote = await createQuote(input(), ACTOR);
+    const csp = (await get(quote.id)).headers.get("Content-Security-Policy");
+
+    // Defence in depth under the escaping, not instead of it: this is served
+    // as text/html from the app's own origin, so a missed escape would run
+    // first-party with the session cookie in reach. Content-Disposition is not
+    // the guard it looks like — "open in new tab" and iOS Safari ignore it.
+    expect(csp).toContain("default-src 'none'");
+    expect(csp).toContain("sandbox");
+    expect(csp).not.toMatch(/script-src[^;]*'unsafe-inline'/);
+
+    // The font is a data: URI and the CSS is a <style> block, so those two are
+    // the only things the document is allowed.
+    expect(csp).toContain("font-src data:");
+    expect(csp).toContain("style-src 'unsafe-inline'");
+  });
+
   it("404s for a missing quote", async () => {
     const response = await get("6b0000000000000000000009");
     expect(response.status).toBe(404);
