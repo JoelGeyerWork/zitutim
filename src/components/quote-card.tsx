@@ -62,9 +62,9 @@ export function QuoteCard({
     }
   }
 
-  const downloadLabel = "הורד";
-  const sendLabel = "שלח";
-  // Not shown: the item reads "שלח" like the signed-in one, but a screen reader
+  const downloadLabel = "הורדה";
+  const sendLabel = "שליחה";
+  // Not shown: the item reads "שליחה" like the signed-in one, but a screen reader
   // should still say where it actually goes.
   const sendLoginLabel = "התחברות כדי לשלוח";
 
@@ -129,7 +129,7 @@ export function QuoteCard({
             <DropdownMenuContent align="end" className="min-w-44">
               <DropdownMenuItem onClick={copy}>
                 <CopyIcon />
-                העתק
+                העתקה
               </DropdownMenuItem>
 
               {/* A plain <a>, never a <Link>: the response is an attachment, and

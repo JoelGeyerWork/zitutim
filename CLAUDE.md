@@ -677,6 +677,9 @@ All of these are already handled in `tests/setup/`; don't be surprised by them.
 - Comments explain *why*, not what. Most existing ones mark a non-obvious
   constraint; match that density rather than annotating the obvious.
 - New user-facing strings are Hebrew, including API error messages.
+- **Actions are named with a שם פעולה, not an imperative** — הורדה/שליחה/העתקה,
+  alongside the עריכה/מחיקה that were already there. One menu mixing the two
+  forms reads as two menus stapled together.
 - `addedBy` is a display-name snapshot taken from the session when a quote is
   created; `addedById` is the real reference into `users`. A client cannot set
   either — `quoteInputSchema` has no `addedBy` key, so anything sent under it is

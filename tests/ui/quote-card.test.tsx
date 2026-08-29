@@ -40,7 +40,7 @@ describe("QuoteCard", () => {
     await user.click(screen.getByRole("button", { name: "אפשרויות נוספות" }));
 
     const link = await screen.findByRole("menuitem", {
-      name: "הורד",
+      name: "הורדה",
     });
     expect(link).toHaveAttribute("href", "/api/quotes/abc123/document");
     // Without `download` the browser would navigate to the HTML instead of
@@ -57,9 +57,9 @@ describe("QuoteCard", () => {
     await user.click(screen.getByRole("button", { name: "אפשרויות נוספות" }));
 
     expect(
-      await screen.findByRole("menuitem", { name: "הורד" }),
+      await screen.findByRole("menuitem", { name: "הורדה" }),
     ).toBeInTheDocument();
-    expect(screen.getByRole("menuitem", { name: "העתק" })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "העתקה" })).toBeInTheDocument();
     // The writes stay out of it.
     expect(
       screen.queryByRole("menuitem", { name: /עריכה/ }),
@@ -110,7 +110,7 @@ describe("QuoteCard", () => {
 
     render(<QuoteCard quote={makeQuote()} />);
     await user.click(screen.getByRole("button", { name: "אפשרויות נוספות" }));
-    await user.click(await screen.findByRole("menuitem", { name: "העתק" }));
+    await user.click(await screen.findByRole("menuitem", { name: "העתקה" }));
 
     expect(writeText).toHaveBeenCalledOnce();
     const copied = writeText.mock.calls[0][0] as string;
@@ -185,7 +185,7 @@ describe("QuoteCard", () => {
     renderSignedIn(<QuoteCard quote={makeQuote()} />);
 
     await user.click(screen.getByRole("button", { name: "אפשרויות נוספות" }));
-    await user.click(await screen.findByRole("menuitem", { name: "שלח" }));
+    await user.click(await screen.findByRole("menuitem", { name: "שליחה" }));
 
     // One stray click would reach every colleague's inbox, so the dialog names
     // what is about to happen rather than sending on the first click.
@@ -210,7 +210,7 @@ describe("QuoteCard", () => {
     expect(link).toHaveAttribute("href", "/login?next=%2Fquotes");
 
     expect(
-      screen.queryByRole("menuitem", { name: "שלח" }),
+      screen.queryByRole("menuitem", { name: "שליחה" }),
     ).not.toBeInTheDocument();
   });
 
@@ -220,7 +220,7 @@ describe("QuoteCard", () => {
     render(<QuoteCard quote={makeQuote()} />);
 
     await user.click(screen.getByRole("button", { name: "אפשרויות נוספות" }));
-    await screen.findByRole("menuitem", { name: "העתק" });
+    await screen.findByRole("menuitem", { name: "העתקה" });
 
     expect(
       screen.queryByRole("menuitem", { name: /עריכה/ }),
