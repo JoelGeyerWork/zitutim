@@ -1,0 +1,33 @@
+# A throwaway SMTP sink for exercising src/lib/mail.ts against a real relay.
+#
+# Deliberately a separate file from docker-compose.yml, for the same reason
+# docker-compose.ldap.yml is: `npm run db:up` must keep meaning "Mongo only".
+# Start it with `npm run mail:up`.
+#
+# Mailpit rather than MailHog: MailHog has had no meaningful release since 2020.
+# Mailpit is the maintained successor and keeps the same ports and API, so this
+# is a one-line swap if anything ever needs the older one.
+services:
+  mailpit:
+    image: axllent/mailpit:latest
+    container_name: zitutim-mailpit
+    ports:
+      # 1025 rather than 25 so it needs no privileged port on the host.
+      - "1025:1025"
+      # The web UI — the whole point of using a sink with one. A quote email is
+      # a visual artifact, and http://localhost:8025 is where you look at it.
+      - "8025:8025"
+    environment:
+      # Keep everything in memory: this is a test sink, and a fresh start per
+      # run is a feature rather than something to work around.
+      MP_MAX_MESSAGES: "500"
+      MP_SMTP_AUTH_ACCEPT_ANY: "true"
+      MP_SMTP_AUTH_ALLOW_INSECURE: "true"
+    # The image carries no shell or curl, so this uses Mailpit's own subcommand
+    # rather than the usual wget probe.
+    healthcheck:
+      test: ["CMD", "/mailpit", "readyz"]
+      interval: 2s
+      timeout: 5s
+      retries: 15
+      start_period: 2s

@@ -116,6 +116,23 @@ export async function getUser(id: string): Promise<SessionUser | null> {
 }
 
 /**
+ * The address to answer to, for mail sent on someone's behalf.
+ *
+ * Null is ordinary rather than exceptional: the session carries no address, and
+ * `upsertRosterUser` deliberately leaves `mail` unset for anyone added to the
+ * rotation who has never signed in. Callers drop `Reply-To` when it is null.
+ */
+export async function getUserMail(id: string): Promise<string | null> {
+  if (!ObjectId.isValid(id)) return null;
+  const collection = await users();
+  const doc = await collection.findOne(
+    { _id: new ObjectId(id) },
+    { projection: { mail: 1 } },
+  );
+  return doc?.mail ?? null;
+}
+
+/**
  * Upsert the `users` row for someone being added to the rotation, keyed on the
  * same `directoryId`. Returns their `users._id` — the value a rotation member
  * and a theme both point at.

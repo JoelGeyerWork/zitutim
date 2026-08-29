@@ -1,10 +1,13 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
+import { usePathname } from "next/navigation";
 import {
   CalendarIcon,
-  CheckIcon,
   CopyIcon,
+  DownloadIcon,
+  MailIcon,
   MoreHorizontalIcon,
   PencilIcon,
   Trash2Icon,
@@ -13,6 +16,7 @@ import { toast } from "sonner";
 
 import { DeleteQuoteDialog } from "@/components/delete-quote-dialog";
 import { EditQuoteDialog } from "@/components/edit-quote-dialog";
+import { SendQuoteDialog } from "@/components/send-quote-dialog";
 import { toneFor } from "@/components/person-avatar";
 import { QuoteEngagement } from "@/components/quote-engagement";
 import { useSession } from "@/components/session-provider";
@@ -21,6 +25,7 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { formatRelative, formatSaidAt, initial } from "@/lib/format";
@@ -39,23 +44,29 @@ export function QuoteCard({
   onChanged?: () => void;
 }) {
   const user = useSession();
-  const [copied, setCopied] = useState(false);
+  const pathname = usePathname();
+  const loginHref = `/login?next=${encodeURIComponent(pathname)}`;
   const [editing, setEditing] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [sending, setSending] = useState(false);
 
   async function copy() {
     const payload = `״${quote.text}״\n— ${quote.author}, ${formatSaidAt(quote.saidAt)}`;
     try {
       await navigator.clipboard.writeText(payload);
-      setCopied(true);
+      // No checkmark state any more: the menu closes on click, so the toast is
+      // the only feedback that would actually be seen.
       toast.success("הציטוט הועתק");
-      setTimeout(() => setCopied(false), 1800);
     } catch {
       toast.error("ההעתקה נכשלה");
     }
   }
 
-  const copyLabel = copied ? "הציטוט הועתק" : "העתקת הציטוט";
+  const downloadLabel = "הורד";
+  const sendLabel = "שלח";
+  // Not shown: the item reads "שלח" like the signed-in one, but a screen reader
+  // should still say where it actually goes.
+  const sendLoginLabel = "התחברות כדי לשלוח";
 
   return (
     <article className="bg-card group relative rounded-2xl border p-5 shadow-sm transition-shadow hover:shadow-md">
@@ -92,52 +103,78 @@ export function QuoteCard({
           </p>
         </div>
 
-        <div className="ms-auto flex shrink-0 items-center gap-1">
-          {/* Hidden when signed out because the actions would only 401 — this is
-              presentation, not a permission check. The API is the boundary. */}
-          {user ? (
-            <DropdownMenu>
-              <DropdownMenuTrigger
-                render={
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="text-muted-foreground size-8 opacity-0 transition-opacity focus-visible:opacity-100 group-hover:opacity-100 data-popup-open:opacity-100"
-                    aria-label="אפשרויות נוספות"
-                  >
-                    <MoreHorizontalIcon className="size-4" />
-                  </Button>
-                }
-              />
-              <DropdownMenuContent align="end" className="min-w-40">
-                <DropdownMenuItem onClick={() => setEditing(true)}>
-                  <PencilIcon />
-                  עריכה
-                </DropdownMenuItem>
-                <DropdownMenuItem
-                  variant="destructive"
-                  onClick={() => setDeleting(true)}
+        {/* Every action lives behind the one trigger, so the card reads as a
+            quote rather than a toolbar. The menu is drawn for signed-out
+            visitors too: copying and downloading need no session, and sharing
+            routes them to sign-in rather than vanishing. */}
+        <div className="ms-auto shrink-0">
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              render={
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  /* Revealed on hover from `sm` up, but always visible below it:
+                     touch devices have no hover, and this is now the only way
+                     to reach any of these actions. */
+                  className="text-muted-foreground size-8 opacity-100 transition-opacity sm:opacity-0 sm:group-hover:opacity-100 sm:focus-visible:opacity-100 sm:data-popup-open:opacity-100"
+                  aria-label="אפשרויות נוספות"
                 >
-                  <Trash2Icon />
-                  מחיקה
+                  <MoreHorizontalIcon className="size-4" />
+                </Button>
+              }
+            />
+            <DropdownMenuContent align="end" className="min-w-44">
+              <DropdownMenuItem onClick={copy}>
+                <CopyIcon />
+                העתק
+              </DropdownMenuItem>
+
+              {/* A plain <a>, never a <Link>: the response is an attachment, and
+                  routing it through the client router would navigate instead of
+                  download. */}
+              <DropdownMenuItem
+                render={
+                  <a href={`/api/quotes/${quote.id}/document`} download />
+                }
+              >
+                <DownloadIcon />
+                {downloadLabel}
+              </DropdownMenuItem>
+
+              {user ? (
+                <DropdownMenuItem onClick={() => setSending(true)}>
+                  <MailIcon />
+                  {sendLabel}
                 </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-          ) : null}
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={copy}
-            className="text-muted-foreground hover:text-primary size-8"
-            aria-label={copyLabel}
-            title={copyLabel}
-          >
-            {copied ? (
-              <CheckIcon className="size-4" />
-            ) : (
-              <CopyIcon className="size-4" />
-            )}
-          </Button>
+              ) : (
+                <DropdownMenuItem
+                  render={<Link href={loginHref} />}
+                  aria-label={sendLoginLabel}
+                >
+                  <MailIcon />
+                  {sendLabel}
+                </DropdownMenuItem>
+              )}
+
+              {user ? (
+                <>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem onClick={() => setEditing(true)}>
+                    <PencilIcon />
+                    עריכה
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    variant="destructive"
+                    onClick={() => setDeleting(true)}
+                  >
+                    <Trash2Icon />
+                    מחיקה
+                  </DropdownMenuItem>
+                </>
+              ) : null}
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
       </header>
 
@@ -169,6 +206,9 @@ export function QuoteCard({
           onOpenChange={setDeleting}
           onDeleted={onChanged}
         />
+      ) : null}
+      {sending ? (
+        <SendQuoteDialog quote={quote} open onOpenChange={setSending} />
       ) : null}
     </article>
   );
