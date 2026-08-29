@@ -46,6 +46,21 @@ export default defineConfig({
         },
       },
       {
+        // Integration tests against the Mailpit sink from
+        // docker-compose.mail.yml. Excluded from `npm test` for the same reason
+        // the ldap project is — no Docker for the default suite — so run it
+        // with `npm run test:mail` after `npm run mail:up`.
+        resolve,
+        test: {
+          name: "mail",
+          environment: "node",
+          include: ["tests/mail/**/*.test.ts"],
+          setupFiles: ["tests/setup/env.ts"],
+          fileParallelism: false,
+          testTimeout: 20_000,
+        },
+      },
+      {
         // React components against jsdom.
         resolve,
         test: {

@@ -437,6 +437,9 @@ phantom "cannot find name" on a file you did not touch.
 `npm run db:seed` creates the indexes without the sample data. `npm run db:down`
 stops Mongo but keeps the `mongo-data` volume.
 
+`docker-compose.mail.yml` is a third profile-less file, like the LDAP one, so
+`db:up` keeps meaning "Mongo only".
+
 `npm run app:up` / `app:down` build and run the containerised app alongside
 Mongo. The `app` service sits behind a compose profile precisely so `db:up`
 (plain `docker compose up -d`) keeps meaning "Mongo only" for the dev loop.
@@ -482,6 +485,21 @@ npm run ldap:up        # OpenLDAP on :1636 from docker-compose.ldap.yml
 npm run test:ldap      # the `ldap` project — skips entirely if nothing is listening
 npm run ldap:down      # stops it and drops the volumes
 ```
+
+```bash
+npm run mail:up        # Mailpit on :1025, web UI on :8025, from docker-compose.mail.yml
+npm run test:mail      # the `mail` project — skips entirely if nothing is listening
+npm run mail:down      # stops it and drops the volumes
+```
+
+The `mail` project is the same shape as `ldap`: a real SMTP conversation against
+a throwaway sink, skipped when nothing answers on 1025, and out of `npm test` on
+purpose. Mailpit rather than MailHog, which has had no meaningful release since
+2020. Two things make it worth running by hand: the web UI is where you *look*
+at a quote email, which is a visual artifact a string assertion cannot judge, and
+its HTML-check report is what caught `max-width` being unsupported in Outlook
+2007–2016. Note that report scores *properties*, so it still flags `max-width`
+despite the ghost table that fixes it — don't chase the number.
 
 The `ldap` project drives the real `authenticate()` against a real directory:
 real BER encoding, a real TLS handshake, a real bind. It is **not** AD, so it
@@ -575,6 +593,96 @@ layer as well as hiding controls in the UI. Quote deletion removes the quote and
 then its engagement without a transaction because standalone Mongo and
 mongodb-memory-server do not support one; cleanup also runs on a repeated delete,
 so retrying can finish a partial infrastructure failure.
+
+### The printable document, and mailing it
+
+A quote can be downloaded as a standalone HTML page
+(`GET /api/quotes/[id]/document`, public like every other GET) and mailed to the
+team list (`POST /api/quotes/[id]/send`, a session and same-origin required).
+Both render the same document from `src/lib/quote-document.ts`.
+
+**HTML rather than PDF, because of bidi.** No JavaScript PDF library implements
+the Unicode Bidirectional Algorithm — not pdfkit, not `@react-pdf/renderer`, and
+`pdf-lib` has been unpublished-to since 2022. Laying a PDF out ourselves would
+mean hand-rolling UAX #9 reordering, bracket mirroring and UAX #14 line breaking,
+whose failure mode is silently scrambled Hebrew on any line that also contains
+Latin or digits — which is most of them here. The browser that opens the file
+does all of it correctly and for free. If a real `.pdf` is ever required, Typst
+handles bidi natively; pdfkit + `bidi-js` is the pure-JS fallback.
+
+Consequences worth keeping:
+
+- **The document references nothing outside itself.** Heebo is inlined as base64
+  in `src/lib/fonts/heebo-embedded.ts` — a variable font, so one file per subset
+  covers every weight, with a `unicode-range` each or the browser picks whichever
+  face was declared last and loses a script. Base64 rather than a file read
+  precisely to avoid `outputFileTracingIncludes`, a `public/` entry and its
+  matching Dockerfile `COPY`: three ways to work in dev and fail in the container.
+  It is why `quote-document.ts` is `server-only` despite being pure.
+- **The email body and the attachment are different documents.** The attachment
+  opens in a browser, so it keeps the webfont and the print stylesheet. The body
+  is rendered by a mail client — Outlook uses Word's engine — so it stays on
+  system fonts and inline styles, and is wrapped in an MSO "ghost table" because
+  Word ignores `max-width` outright and the column would otherwise stretch to the
+  full window.
+- **Print backgrounds default to off**, so the page carries on type, rules and
+  whitespace, never a filled shape. Fixed-width blocks need `margin-inline: auto`
+  (centring the flex item does not centre its children) and `overflow-wrap`, or a
+  pasted URL runs off the sheet — where, unlike on screen, it cannot be scrolled
+  to.
+- **`src/lib/mail.ts` splits config faults from relay faults** the way `ldap.ts`
+  does: `ConfigError` → 500 *misconfigured*, anything else → 503 *unavailable*.
+  `MAIL_DRY_RUN` builds and logs without sending, which is the setting for a
+  first send against production, where `MAIL_TO` is a whole team. Setting only
+  one of `SMTP_USER`/`SMTP_PASSWORD` is refused rather than half-applied: SMTP
+  auth always carries a username, so an API key alone would otherwise drop
+  `auth` silently and the relay would reject a config that looks complete.
+- **`SMTP_TLS_INSECURE` is the sibling of `LDAP_TLS_INSECURE`** and is accepted
+  on the same air-gapped grounds — the connection stays encrypted, what it drops
+  is authenticating the relay, which lets an active MITM harvest whatever
+  `SMTP_PASSWORD` holds. It is *not* nodemailer's `ignoreTLS`, which would skip
+  STARTTLS entirely and send the credential in clear text. On anything routable,
+  `NODE_EXTRA_CA_CERTS` is the right answer instead. It is part of the pooled
+  transport's cache key, or flipping it would keep using the old transport.
+- **The document carries no script, not even an inline `onclick`.** It is also
+  served as `text/html` from the app's own origin, so a document that had opted
+  into script is one where a future missed escape runs first-party with the
+  session cookie in reach — and `Content-Disposition: attachment` is not the
+  guard it looks like, since "open in new tab" and iOS Safari both ignore it. A
+  Windows mail gateway is also likelier to eat an `.html` attachment that has a
+  handler in it, which would drop the printable file while the mail sailed
+  through. The print stylesheet does the work and the keyboard does the rest, so
+  the old print button is a hint now. The route sends a `default-src 'none'`
+  CSP with `sandbox` on top as the net under the escaping — but only for the
+  *served* copy: a saved file opens from `file://` with no CSP at all, which is
+  why the rule is "no script", not "CSP".
+- **The mail body converts newlines to `<br>`; everything else uses
+  `pre-wrap`.** Quotes are typed into a textarea, so multi-line is the common
+  case, and the body is the part almost every client actually shows. `white-space:
+  pre-wrap` is not available there for the same reason `max-width` isn't —
+  Word's engine ignores both. Escape *first*, then replace, or the `<br>` is
+  escaped along with the text.
+- **`Reply-To` is dropped unless it is a bare `local@domain`.** AD's `mail` is
+  free text — a display-name leftover, an Exchange `smtp:` proxy prefix, a value
+  with a newline in it. Nodemailer does not refuse those, it emits them:
+  measured, `smtp:x@y` becomes `Reply-To: smtp:x@y;`, RFC 5322 group syntax with
+  no members, and a bare display name vanishes silently. A strict relay may
+  bounce the message over a header that could never have worked, so
+  `replyAddress` drops it and the mail goes out with none — the state a
+  rotation-only user is in anyway.
+- **The card's menu hides on `(hover: hover)`, never on a breakpoint.** It is
+  the only way to reach copy, download, share, edit and delete, and an iPad in
+  landscape is `sm`-and-wider with no pointer to hover — under a width query it
+  became an invisible 32px target that was still in the hit map. Tailwind v4
+  already wraps `hover:`/`group-hover:` in the media query; it is the
+  `opacity-0` that needs saying so explicitly.
+- **The send dialog refuses to close while a send is in flight.** The in-flight
+  lock is state in the dialog and the card unmounts it on close, so letting
+  Escape through would throw the lock away mid-request and let a second copy go
+  to the whole team — the exact thing the confirmation exists to prevent.
+- **Sharing is not hidden from signed-out visitors.** Like the like button, the
+  control stays visible and becomes a link to `/login?next=…`; the API's 401 is
+  the boundary. The download needs no session at all.
 
 ### Auth
 
@@ -816,6 +924,9 @@ All of these are already handled in `tests/setup/`; don't be surprised by them.
 - Comments explain *why*, not what. Most existing ones mark a non-obvious
   constraint; match that density rather than annotating the obvious.
 - New user-facing strings are Hebrew, including API error messages.
+- **Actions are named with a שם פעולה, not an imperative** — הורדה/שליחה/העתקה,
+  alongside the עריכה/מחיקה that were already there. One menu mixing the two
+  forms reads as two menus stapled together.
 - `addedBy` is a display-name snapshot taken from the session when a quote is
   created; `addedById` is the real reference into `users`. A client cannot set
   either — `quoteInputSchema` has no `addedBy` key, so anything sent under it is

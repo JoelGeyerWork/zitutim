@@ -1,6 +1,7 @@
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
+import { toast } from "sonner";
 
 import { QuoteCard } from "@/components/quote-card";
 import { SessionProvider } from "@/components/session-provider";
@@ -32,6 +33,42 @@ describe("QuoteCard", () => {
     expect(screen.getByText(/28 ביולי 2026/)).toBeInTheDocument();
   });
 
+  it("offers a download of the printable document", async () => {
+    const user = userEvent.setup();
+    render(<QuoteCard quote={makeQuote({ id: "abc123" })} />);
+
+    await user.click(screen.getByRole("button", { name: "אפשרויות נוספות" }));
+
+    const link = await screen.findByRole("menuitem", {
+      name: "הורדה",
+    });
+    expect(link).toHaveAttribute("href", "/api/quotes/abc123/document");
+    // Without `download` the browser would navigate to the HTML instead of
+    // saving it, whatever Content-Disposition says.
+    expect(link).toHaveAttribute("download");
+  });
+
+  it("opens the actions menu for signed-out visitors too", async () => {
+    const user = userEvent.setup();
+    render(<QuoteCard quote={makeQuote()} />);
+
+    // Copying and downloading need no session, so the trigger cannot be gated
+    // on one — everything reachable without a session stays reachable.
+    await user.click(screen.getByRole("button", { name: "אפשרויות נוספות" }));
+
+    expect(
+      await screen.findByRole("menuitem", { name: "הורדה" }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "העתקה" })).toBeInTheDocument();
+    // The writes stay out of it.
+    expect(
+      screen.queryByRole("menuitem", { name: /עריכה/ }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("menuitem", { name: /מחיקה/ }),
+    ).not.toBeInTheDocument();
+  });
+
   it("renders the context only when there is one", () => {
     const { rerender } = render(<QuoteCard quote={makeQuote()} />);
     expect(screen.queryByText("לפני הריטרו")).not.toBeInTheDocument();
@@ -46,24 +83,22 @@ describe("QuoteCard", () => {
     const credit = screen.getByText("נוסף על ידי יואל");
     const saidAt = screen.getByText(/28 ביולי 2026/);
     expect(credit.closest("p")).toBe(saidAt.closest("p"));
-    expect(credit.closest("article")?.querySelector("footer")).not.toBeInTheDocument();
+    expect(
+      credit.closest("article")?.querySelector("footer"),
+    ).not.toBeInTheDocument();
   });
 
-  it("places an accessible copy action in the card header", () => {
+  it("puts one trigger in the header rather than a row of buttons", () => {
     renderSignedIn(<QuoteCard quote={makeQuote()} />);
 
-    const copyButton = screen.getByRole("button", {
-      name: "העתקת הציטוט",
-    });
-    const header = copyButton.closest("header");
+    const trigger = screen.getByRole("button", { name: "אפשרויות נוספות" });
+    const header = trigger.closest("header");
 
-    expect(copyButton).toHaveAttribute("title", "העתקת הציטוט");
     expect(header).toBeInTheDocument();
-    expect(header?.lastElementChild?.lastElementChild).toBe(copyButton);
-    expect(
-      within(header!).getByRole("button", { name: "אפשרויות נוספות" }),
-    ).toBeInTheDocument();
-    expect(screen.queryByText("העתקה")).not.toBeInTheDocument();
+    // The card should read as a quote, not a toolbar: the trigger is the only
+    // control in the header, and everything else lives behind it.
+    expect(within(header!).getAllByRole("button")).toEqual([trigger]);
+    expect(within(header!).queryAllByRole("link")).toHaveLength(0);
   });
 
   it("copies the quote and attribution to the clipboard", async () => {
@@ -74,9 +109,8 @@ describe("QuoteCard", () => {
       .mockResolvedValue(undefined);
 
     render(<QuoteCard quote={makeQuote()} />);
-    await user.click(
-      screen.getByRole("button", { name: "העתקת הציטוט" }),
-    );
+    await user.click(screen.getByRole("button", { name: "אפשרויות נוספות" }));
+    await user.click(await screen.findByRole("menuitem", { name: "העתקה" }));
 
     expect(writeText).toHaveBeenCalledOnce();
     const copied = writeText.mock.calls[0][0] as string;
@@ -84,9 +118,9 @@ describe("QuoteCard", () => {
     expect(copied).toContain("דנה");
     expect(copied).toContain("28 ביולי 2026");
 
-    expect(
-      await screen.findByRole("button", { name: "הציטוט הועתק" }),
-    ).toHaveAttribute("title", "הציטוט הועתק");
+    // The menu closes on click, so a checkmark on the item would never be seen.
+    // The toast is the whole of the feedback.
+    expect(toast.success).toHaveBeenCalledWith("הציטוט הועתק");
   });
 
   it("highlights the search term without dropping any text", () => {
@@ -102,14 +136,20 @@ describe("QuoteCard", () => {
 
   it("highlights every occurrence, case-insensitively", () => {
     render(
-      <QuoteCard quote={makeQuote({ text: "Ship it, then ship it again" })} highlight="ship" />,
+      <QuoteCard
+        quote={makeQuote({ text: "Ship it, then ship it again" })}
+        highlight="ship"
+      />,
     );
-    expect(screen.getAllByText(/ship/i).filter((el) => el.tagName === "MARK"))
-      .toHaveLength(2);
+    expect(
+      screen.getAllByText(/ship/i).filter((el) => el.tagName === "MARK"),
+    ).toHaveLength(2);
   });
 
   it("treats a regex metacharacter in the term as literal text", () => {
-    render(<QuoteCard quote={makeQuote({ text: "אמר .* בכוונה" })} highlight=".*" />);
+    render(
+      <QuoteCard quote={makeQuote({ text: "אמר .* בכוונה" })} highlight=".*" />,
+    );
 
     const marks = document.querySelectorAll("mark");
     expect(marks).toHaveLength(1);
@@ -140,17 +180,52 @@ describe("QuoteCard", () => {
     expect(within(dialog).getByText(/דנה/)).toBeInTheDocument();
   });
 
-  it("hides the actions menu when signed out", () => {
-    // Presentation only — the API's 401 is what actually stops the edit.
+  it("asks for confirmation before mailing the team", async () => {
+    const user = userEvent.setup();
+    renderSignedIn(<QuoteCard quote={makeQuote()} />);
+
+    await user.click(screen.getByRole("button", { name: "אפשרויות נוספות" }));
+    await user.click(await screen.findByRole("menuitem", { name: "שליחה" }));
+
+    // One stray click would reach every colleague's inbox, so the dialog names
+    // what is about to happen rather than sending on the first click.
+    const dialog = await screen.findByRole("alertdialog");
+    expect(
+      within(dialog).getByText("לשלוח את הציטוט לצוות?"),
+    ).toBeInTheDocument();
+    expect(within(dialog).getByText(/רשימת התפוצה/)).toBeInTheDocument();
+  });
+
+  it("sends a signed-out visitor to sign in rather than hiding the action", async () => {
+    const user = userEvent.setup();
     render(<QuoteCard quote={makeQuote()} />);
 
+    await user.click(screen.getByRole("button", { name: "אפשרויות נוספות" }));
+
+    // The same shape as the like button: the action stays present and becomes a
+    // route to sign-in, instead of disappearing for anyone without a session.
+    const link = await screen.findByRole("menuitem", {
+      name: "התחברות כדי לשלוח",
+    });
+    expect(link).toHaveAttribute("href", "/login?next=%2Fquotes");
+
     expect(
-      screen.queryByRole("button", { name: "אפשרויות נוספות" }),
+      screen.queryByRole("menuitem", { name: "שליחה" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("keeps the editing actions out of the menu when signed out", async () => {
+    // Presentation only — the API's 401 is what actually stops the edit.
+    const user = userEvent.setup();
+    render(<QuoteCard quote={makeQuote()} />);
+
+    await user.click(screen.getByRole("button", { name: "אפשרויות נוספות" }));
+    await screen.findByRole("menuitem", { name: "העתקה" });
+
+    expect(
+      screen.queryByRole("menuitem", { name: /עריכה/ }),
     ).not.toBeInTheDocument();
     // The rest of the card is still fully readable.
     expect(screen.getByText("תמיד יש זמן לעוד קפה אחד")).toBeInTheDocument();
-    expect(
-      screen.getByRole("button", { name: "העתקת הציטוט" }),
-    ).toBeInTheDocument();
   });
 });

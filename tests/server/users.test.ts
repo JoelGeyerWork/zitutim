@@ -2,7 +2,13 @@ import { beforeEach, describe, expect, it } from "vitest";
 
 import { getDb } from "@/lib/mongodb";
 import { type DirectoryUser } from "@/lib/ldap";
-import { getUser, upsertUserFromDirectory, type UserDoc } from "@/lib/users";
+import {
+  getUser,
+  getUserMail,
+  upsertRosterUser,
+  upsertUserFromDirectory,
+  type UserDoc,
+} from "@/lib/users";
 
 const DANA: DirectoryUser = {
   directoryId: "03020100-0504-0706-0809-0a0b0c0d0e0f",
@@ -40,7 +46,9 @@ describe("upsertUserFromDirectory", () => {
       username: "dana",
     });
 
-    const doc = await (await collection()).findOne({
+    const doc = await (
+      await collection()
+    ).findOne({
       directoryId: DANA.directoryId,
     });
     expect(doc).toMatchObject({
@@ -98,7 +106,9 @@ describe("upsertUserFromDirectory", () => {
     await upsertUserFromDirectory(DANA, first);
     await upsertUserFromDirectory(DANA, second);
 
-    const doc = await (await collection()).findOne({
+    const doc = await (
+      await collection()
+    ).findOne({
       directoryId: DANA.directoryId,
     });
     expect(doc?.createdAt).toEqual(first);
@@ -108,7 +118,9 @@ describe("upsertUserFromDirectory", () => {
   it("stores nothing password-derived", async () => {
     await upsertUserFromDirectory(DANA);
 
-    const doc = await (await collection()).findOne({
+    const doc = await (
+      await collection()
+    ).findOne({
       directoryId: DANA.directoryId,
     });
     expect(Object.keys(doc!).sort()).toEqual([
@@ -139,5 +151,31 @@ describe("getUser", () => {
 
   it("returns null for a malformed id rather than throwing", async () => {
     await expect(getUser("not-an-object-id")).resolves.toBeNull();
+  });
+});
+
+describe("getUserMail", () => {
+  it("returns the address a real sign-in stored", async () => {
+    const user = await upsertUserFromDirectory(DANA);
+
+    expect(await getUserMail(user.id)).toBe("dana@test.local");
+  });
+
+  it("returns null for someone only ever added to the rotation", async () => {
+    // upsertRosterUser deliberately leaves `mail` unset — the directory search
+    // does not return it — so a Reply-To for them is simply not available.
+    const id = await upsertRosterUser({
+      directoryId: "11111111-2222-3333-4444-555555555555",
+      displayName: "עומר לוי",
+      title: "מפתח",
+      username: "omer",
+    });
+
+    expect(await getUserMail(id)).toBeNull();
+  });
+
+  it("returns null rather than throwing for an unknown or malformed id", async () => {
+    expect(await getUserMail("6b0000000000000000000009")).toBeNull();
+    expect(await getUserMail("not-an-object-id")).toBeNull();
   });
 });
