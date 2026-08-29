@@ -1,9 +1,8 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="מרכז הצוות">
   <!-- The header's brand mark (`site-nav.tsx`): the card diamond, in the
-       palette's one chromatic hue. The sides bow out very slightly so it reads
-       as the suit rather than as a square stood on its corner. -->
+       palette's one chromatic hue. -->
   <path
-    d="M32 2 Q49 15 62 32 Q49 49 32 62 Q15 49 2 32 Q15 15 32 2 Z"
+    d="M32 2 L62 32 L32 62 L2 32 Z"
     fill="#d30013"
   />
 </svg>

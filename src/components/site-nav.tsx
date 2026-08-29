@@ -31,14 +31,13 @@ export function SiteNav() {
         <div className="flex h-16 min-w-0 shrink-0 items-center gap-1.5 sm:h-auto">
           <Link href="/" aria-label="מרכז הצוות" className="shrink-0">
             {/* The card diamond, drawn rather than set as ♦ so it keeps the
-                same weight in every font. Its sides bow out very slightly, so
-                it reads as the suit and not as a square stood on its corner. */}
+                same weight in every font. */}
             <svg
               viewBox="0 0 64 64"
               aria-hidden
-              className="fill-primary size-9"
+              className="fill-primary size-7"
             >
-              <path d="M32 2 Q49 15 62 32 Q49 49 32 62 Q15 49 2 32 Q15 15 32 2 Z" />
+              <path d="M32 2 L62 32 L32 62 L2 32 Z" />
             </svg>
           </Link>
 
