@@ -28,7 +28,7 @@ export default async function HallOfFamePage() {
     <PageShell>
       <PageHeader
         title="היכל התהילה"
-        description="מוניטורים שצעקו, ומה בסוף השתיק אותם. הפעם הבאה שהם יצעקו כבר לא תהיה מאפס."
+        description="ניטורים שפעם נחשבו לבלתי מובסים, והיום הם תעודה על הקיר."
       />
       <HallOfFame initial={initial} roster={withoutDirectoryId(roster)} />
     </PageShell>
