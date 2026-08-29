@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="מרכז הצוות">
+  <!-- The header's brand mark (`site-nav.tsx`): the card diamond, in the
+       palette's one chromatic hue. -->
+  <path
+    d="M32 2 L62 32 L32 62 L2 32 Z"
+    fill="#d30013"
+  />
+</svg>
