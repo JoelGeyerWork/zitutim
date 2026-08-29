@@ -38,7 +38,7 @@ export function SiteNav() {
               aria-hidden
               className="fill-primary size-9"
             >
-              <path d="M32 2 Q45 17 54 32 Q45 47 32 62 Q19 47 10 32 Q19 17 32 2 Z" />
+              <path d="M32 2 Q49 15 62 32 Q49 49 32 62 Q15 49 2 32 Q15 15 32 2 Z" />
             </svg>
           </Link>
 
