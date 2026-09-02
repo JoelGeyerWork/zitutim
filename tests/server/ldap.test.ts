@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { AndFilter, BerWriter, EqualityFilter } from "ldapts";
 
 import {
   authenticate,
@@ -27,7 +28,7 @@ const ldap = vi.hoisted(() => {
   /** Just the fields the tests assert on. */
   interface FakeSearchOptions {
     scope?: string;
-    filter?: string;
+    filter?: unknown;
     attributes?: string[];
     explicitBufferAttributes?: string[];
     sizeLimit?: number;
@@ -109,7 +110,10 @@ const ldap = vi.hoisted(() => {
   };
 });
 
-vi.mock("ldapts", () => ({ Client: ldap.Client }));
+vi.mock("ldapts", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("ldapts")>();
+  return { ...actual, Client: ldap.Client };
+});
 
 /** The 16 bytes AD would return for objectGUID. */
 const GUID_BYTES = Buffer.from([
@@ -524,6 +528,15 @@ describe("the pooled service connection", () => {
   });
 });
 
+function guidEquality(filter: unknown): EqualityFilter | undefined {
+  if (!(filter instanceof AndFilter)) return undefined;
+  return filter.filters.find(
+    (clause): clause is EqualityFilter =>
+      clause instanceof EqualityFilter &&
+      clause.attribute.toLowerCase() === "objectguid",
+  );
+}
+
 describe("findPersonById", () => {
   it("filters objectGUID by its raw bytes, not the dashed string", async () => {
     ldap.state.searchEntries = [ENTRY];
@@ -532,11 +545,30 @@ describe("findPersonById", () => {
     const person = await findPersonById(guid);
 
     const options = ldap.service().search.mock.calls[0]![1];
-    expect(options.filter).toContain(
-      "(objectGUID=\\00\\01\\02\\03\\04\\05\\06\\07\\08\\09\\0a\\0b\\0c\\0d\\0e\\0f)",
-    );
-    expect(options.filter).not.toContain(guid);
+    expect(String(options.filter)).not.toContain(guid);
+    expect(guidEquality(options.filter)?.value).toEqual(GUID_BYTES);
     expect(person?.directoryId).toBe(guid);
+  });
+
+  it("puts bytes above 0x7f on the wire as octets, not UTF-8", async () => {
+    // ldapts parses a `\xx` filter string into a JS string and writeString
+    // UTF-8-encodes it, so 0x80 becomes C2 80 and AD matches nobody. The
+    // previous test's GUID is 0x00–0x0f, which survives that path — this one
+    // would have 422'd in production.
+    const bytes = Buffer.from([
+      0x80, 0x00, 0xff, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b,
+      0x0c, 0x0d, 0x0e, 0x0f,
+    ]);
+    ldap.state.searchEntries = [{ ...ENTRY, objectGUID: bytes }];
+
+    await findPersonById(guidToString(bytes));
+
+    const filter = ldap.service().search.mock.calls[0]![1].filter;
+    expect(guidEquality(filter)?.value).toEqual(bytes);
+
+    const writer = new BerWriter();
+    (filter as AndFilter).write(writer);
+    expect(writer.buffer.includes(bytes)).toBe(true);
   });
 
   it("returns null for a non-GUID id without contacting the directory", async () => {
@@ -841,6 +873,23 @@ describe("authenticate", () => {
       expect(options.filter).toBe(
         "(&(objectClass=inetOrgPerson)(|(uid=dana)(mail=dana)))",
       );
+    });
+
+    it("re-resolves a person by the string entryUUID", async () => {
+      useOpenLdap();
+      ldap.state.searchEntries = [OPENLDAP_ENTRY];
+      const id = "9F8E7D6C-5B4A-3928-1706-A5B4C3D2E1F0";
+
+      const person = await findPersonById(id);
+
+      const options = ldap.service().search.mock.calls[0]![1];
+      expect(options.filter).toBe(
+        `(&(objectClass=inetOrgPerson)(entryUUID=${id}))`,
+      );
+      expect(person).toMatchObject({
+        directoryId: "9f8e7d6c-5b4a-3928-1706-a5b4c3d2e1f0",
+        username: "dana",
+      });
     });
 
     it("does not request a string identifier as a buffer", async () => {
