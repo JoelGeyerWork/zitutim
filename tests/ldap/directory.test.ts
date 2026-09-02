@@ -41,6 +41,10 @@ if (up) {
   process.env.LDAP_USER_FILTER = "(objectClass=inetOrgPerson)";
   process.env.LDAP_LOGIN_ATTRS = "uid,mail";
   process.env.LDAP_ID_ATTR = "entryUUID";
+  // OpenLDAP implements no `anr`, which is the production default. This is the
+  // mode that exists for directories like it — and the reason the mode is
+  // configuration rather than a constant.
+  process.env.LDAP_SEARCH_MODE = "substring";
 } else {
   console.warn(
     `\nNo LDAP server on ${HOST}:${PORT} — skipping. Start one with: npm run ldap:up\n`,

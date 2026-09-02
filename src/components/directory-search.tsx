@@ -53,7 +53,9 @@ export function DirectorySearch({
   // derivation rather than a synchronous setState in the effect — an error in
   // this config, the same rule `QuoteFeed` works around.
   const [resolvedFor, setResolvedFor] = useState("");
-  const [errored, setErrored] = useState(false);
+  // Not a boolean: a search the directory gave up on is the one failure here the
+  // person typing can actually do something about, so it gets its own message.
+  const [failure, setFailure] = useState<"failed" | "timeout" | null>(null);
 
   const trimmed = query.trim();
   const signedIn = Boolean(session);
@@ -82,19 +84,19 @@ export function DirectorySearch({
         }
         if (!response.ok) {
           setResults([]);
-          setErrored(true);
+          setFailure(response.status === 504 ? "timeout" : "failed");
           setResolvedFor(q);
           return;
         }
         const data: { people: DirectoryPerson[] } = await response.json();
         if (cancelled) return;
         setResults(data.people);
-        setErrored(false);
+        setFailure(null);
         setResolvedFor(q);
       } catch {
         if (cancelled) return;
         setResults([]);
-        setErrored(true);
+        setFailure("failed");
         setResolvedFor(q);
       }
     }, 300);
@@ -151,7 +153,14 @@ export function DirectorySearch({
         </p>
       ) : loading ? (
         <p className="text-muted-foreground py-6 text-center text-sm">מחפשים…</p>
-      ) : errored ? (
+      ) : failure === "timeout" ? (
+        // The one failure worth spelling out, because it is the only one the
+        // reader can act on: the directory answered, it just would not spend
+        // longer on this query, and a longer fragment is a faster search.
+        <p className="text-muted-foreground py-6 text-center text-sm text-balance">
+          החיפוש ארך זמן רב מדי. נסו שם מלא יותר.
+        </p>
+      ) : failure ? (
         // Covers both the 503 and the 500: from here they are the same fact —
         // the directory did not answer — and which of the two it was is a line
         // in the server's log, not something to spell out on a form.

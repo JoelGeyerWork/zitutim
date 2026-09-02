@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   authenticate,
+  closeDirectoryConnection,
   escapeFilterValue,
   findPeople,
   findPersonById,
@@ -67,7 +68,13 @@ const ldap = vi.hoisted(() => {
       };
     });
 
-    unbind = vi.fn(async () => {});
+    // The pool reuses a client only while it is connected, so the fake has to
+    // model that much: unbinding is what takes it out of circulation.
+    isConnected = true;
+
+    unbind = vi.fn(async () => {
+      this.isConnected = false;
+    });
     startTLS = vi.fn(async () => {});
 
     constructor(options: unknown) {
@@ -123,7 +130,11 @@ function adError(subCode: string) {
   );
 }
 
-beforeEach(() => {
+beforeEach(async () => {
+  // The service connection is pooled in module scope, so it outlives
+  // `ldap.reset()` — without this every case after the first would silently
+  // reuse the previous one's client and find `ldap.clients` empty.
+  await closeDirectoryConnection();
   ldap.reset();
   vi.spyOn(console, "error").mockImplementation(() => {});
 });
@@ -208,18 +219,60 @@ describe("guidToBytes / guidFilterValue", () => {
 });
 
 describe("findPeople", () => {
-  it("escapes RFC 4515 metacharacters before adding the wildcards", async () => {
-    await findPeople("admin)(objectClass=*");
+  it("searches by ANR, with no wildcard, by default", async () => {
+    await findPeople("dana");
 
     const options = ldap.service().search.mock.calls[0]![1];
-    // Escaped first, THEN wrapped in `*…*` — the injection payload is inert.
-    expect(options.filter).toContain(
-      "(displayName=*admin\\29\\28objectClass=\\2a*)",
+    // One indexed clause the DC expands itself. A wildcard here would not widen
+    // the match, it would break it: anr is a prefix match already.
+    expect(options.filter).toBe(
+      "(&(&(objectCategory=person)(objectClass=user))(anr=dana))",
     );
-    expect(options.filter).toContain(
-      "(sAMAccountName=*admin\\29\\28objectClass=\\2a*)",
+  });
+
+  it("escapes RFC 4515 metacharacters in every mode", async () => {
+    await findPeople("admin)(objectClass=*");
+    expect(ldap.service().search.mock.calls[0]![1].filter).toBe(
+      "(&(&(objectCategory=person)(objectClass=user))(anr=admin\\29\\28objectClass=\\2a))",
     );
-    expect(options.filter).not.toContain("admin)(objectClass=*");
+
+    for (const mode of ["prefix", "substring"] as const) {
+      await closeDirectoryConnection();
+      ldap.reset();
+      vi.stubEnv("LDAP_SEARCH_MODE", mode);
+
+      await findPeople("admin)(objectClass=*");
+
+      const filter = ldap.service().search.mock.calls[0]![1].filter!;
+      // Escaped first, THEN wrapped — the injection payload is inert either way.
+      expect(filter).toContain("admin\\29\\28objectClass=\\2a");
+      expect(filter).not.toContain("admin)(objectClass=*");
+    }
+  });
+
+  it("wraps the fragment according to LDAP_SEARCH_MODE", async () => {
+    vi.stubEnv("LDAP_SEARCH_MODE", "prefix");
+    await findPeople("dan");
+    expect(ldap.service().search.mock.calls[0]![1].filter).toBe(
+      "(&(&(objectCategory=person)(objectClass=user))(|(displayName=dan*)(sAMAccountName=dan*)(userPrincipalName=dan*)))",
+    );
+
+    await closeDirectoryConnection();
+    ldap.reset();
+    vi.stubEnv("LDAP_SEARCH_MODE", "substring");
+    await findPeople("dan");
+    expect(ldap.service().search.mock.calls[0]![1].filter).toBe(
+      "(&(&(objectCategory=person)(objectClass=user))(|(displayName=*dan*)(sAMAccountName=*dan*)(userPrincipalName=*dan*)))",
+    );
+  });
+
+  it("refuses an unknown LDAP_SEARCH_MODE rather than guessing", async () => {
+    vi.stubEnv("LDAP_SEARCH_MODE", "fuzzy");
+
+    await expect(findPeople("dana")).rejects.toMatchObject({
+      name: "ConfigError",
+    });
+    expect(ldap.clients).toHaveLength(0);
   });
 
   it("opens no connection for a query under two characters", async () => {
@@ -261,6 +314,130 @@ describe("findPeople", () => {
       // A ConfigError instance — the route maps this to `misconfigured` → 500.
       name: "ConfigError",
     });
+  });
+});
+
+describe("LDAP_TIMEOUT_SECONDS", () => {
+  it("sets both the search's timeLimit and the socket timeout above it", async () => {
+    vi.stubEnv("LDAP_TIMEOUT_SECONDS", "12");
+
+    await findPeople("dana");
+
+    expect(ldap.service().search.mock.calls[0]![1].timeLimit).toBe(12);
+    expect(ldap.service().options).toMatchObject({ timeout: 17_000 });
+  });
+
+  it("refuses a value that is not a whole number of seconds", async () => {
+    for (const value of ["0", "-5", "2.5", "soon"]) {
+      await closeDirectoryConnection();
+      ldap.reset();
+      vi.stubEnv("LDAP_TIMEOUT_SECONDS", value);
+
+      await expect(findPeople("dana")).rejects.toMatchObject({
+        name: "ConfigError",
+      });
+      expect(ldap.clients).toHaveLength(0);
+    }
+  });
+});
+
+describe("a search the directory gives up on", () => {
+  /** result code 3 is timeLimitExceeded, 11 is AD's own adminLimitExceeded. */
+  const limitError = (code: number) =>
+    Object.assign(new Error("limit exceeded"), { code });
+
+  it.each([3, 11])(
+    "reports result code %i as a timeout, not an outage",
+    async (code) => {
+      ldap.state.searchError = limitError(code);
+
+      await expect(findPeople("dana")).rejects.toMatchObject({
+        name: "DirectoryTimeoutError",
+      });
+    },
+  );
+
+  it("reports anything else as the directory being unavailable", async () => {
+    ldap.state.searchError = Object.assign(new Error("connection reset"), {
+      code: 80,
+    });
+
+    await expect(findPeople("dana")).rejects.not.toMatchObject({
+      name: "DirectoryTimeoutError",
+    });
+  });
+
+  it("does not retry a timeout — the second wait buys the same answer", async () => {
+    // Warm the pool, so the retry path is the one that would otherwise be taken.
+    await findPeople("dana");
+    ldap.state.searchError = limitError(3);
+
+    await expect(findPeople("dana")).rejects.toMatchObject({
+      name: "DirectoryTimeoutError",
+    });
+    // Two searches on the one pooled client: the warm-up and this. Not three.
+    expect(ldap.clients).toHaveLength(1);
+    expect(ldap.service().search).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("the pooled service connection", () => {
+  it("binds once across several searches", async () => {
+    await findPeople("dana");
+    await findPeople("dan");
+    await findPersonById("03020100-0504-0706-0809-0a0b0c0d0e0f");
+
+    expect(ldap.clients).toHaveLength(1);
+    expect(ldap.service().bind).toHaveBeenCalledTimes(1);
+    expect(ldap.service().search).toHaveBeenCalledTimes(3);
+  });
+
+  it("reconnects and retries once when a pooled connection has gone stale", async () => {
+    await findPeople("dana");
+
+    // What a reaped connection looks like from here: the client is still pooled,
+    // and only the next search on it discovers otherwise.
+    ldap.service().search.mockImplementationOnce(async () => {
+      throw Object.assign(new Error("socket hang up"), { code: 80 });
+    });
+    ldap.state.searchEntries = [ENTRY];
+
+    const people = await findPeople("dana");
+
+    expect(people).toHaveLength(1);
+    // A second client, bound in its own right — not the stale one retried.
+    expect(ldap.clients).toHaveLength(2);
+    expect(ldap.clients[1]!.bind).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not retry a fresh connection — that failure is real", async () => {
+    ldap.state.searchError = Object.assign(new Error("socket hang up"), {
+      code: 80,
+    });
+
+    await expect(findPeople("dana")).rejects.toThrow();
+    expect(ldap.clients).toHaveLength(1);
+  });
+
+  it("drops the connection when the configuration changes under it", async () => {
+    await findPeople("dana");
+    vi.stubEnv("LDAP_TIMEOUT_SECONDS", "12");
+
+    await findPeople("dana");
+
+    expect(ldap.clients).toHaveLength(2);
+  });
+
+  it("never pools the login path's clients", async () => {
+    ldap.state.searchEntries = [ENTRY];
+
+    await authenticate("dana", "correct-horse");
+    await authenticate("dana", "correct-horse");
+
+    // Two per attempt, every attempt: the service search and the user bind. A
+    // pooled connection is shared bind state, which is the one thing the
+    // two-client dance exists to avoid.
+    expect(ldap.clients).toHaveLength(4);
   });
 });
 
@@ -515,8 +692,11 @@ describe("authenticate", () => {
     expect(ldap.service().options).toMatchObject({
       url: "ldaps://dc.test.local:636",
       connectTimeout: 5_000,
-      timeout: 10_000,
+      // Five seconds above the default 30s timeLimit: the socket has to outlive
+      // the server-side limit, or a timeout reports as a connection failure.
+      timeout: 35_000,
     });
+    expect(ldap.service().search.mock.calls[0]![1].timeLimit).toBe(30);
   });
 
   describe("against a non-AD directory", () => {
