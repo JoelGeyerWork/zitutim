@@ -3,7 +3,14 @@ import "server-only";
 import { readFileSync } from "node:fs";
 import type { ConnectionOptions } from "node:tls";
 
-import { Client, type Entry } from "ldapts";
+import {
+  AndFilter,
+  Client,
+  EqualityFilter,
+  FilterParser,
+  type Entry,
+  type Filter,
+} from "ldapts";
 
 import { ConfigError } from "@/lib/config-error";
 import { type DirectoryPerson } from "@/lib/directory-schema";
@@ -404,9 +411,11 @@ export function guidToBytes(guid: string): Buffer {
 }
 
 /**
- * A GUID as an LDAP filter assertion value: the 16 raw bytes, each as a `\xx`
- * escape. RFC 4515 §3 already treats these pairs as the literal byte, so no
- * further escaping is applied — the bytes are the value.
+ * A GUID as an RFC 4515 filter assertion: the 16 raw bytes, each as a `\xx`
+ * escape. Kept as the string form of the same permutation `guidToBytes`
+ * produces — tests pin the round-trip here. `findPersonById` does not put this
+ * on the wire: ldapts parses a `\xx` string into a JS string and UTF-8-encodes
+ * it, so any byte above 0x7f becomes two octets and AD matches nobody.
  */
 export function guidFilterValue(guid: string): string {
   let out = "";
@@ -912,7 +921,7 @@ class LostBindError extends Error {
 
 async function searchAsService(
   settings: LdapConfig,
-  filter: string,
+  filter: Filter | string,
   sizeLimit: number,
 ): Promise<Entry[]> {
   const idIsBinary = settings.idAttr.toLowerCase() === BINARY_ID_ATTR;
@@ -1019,10 +1028,11 @@ export async function findPeople(query: string): Promise<DirectoryPerson[]> {
  * row's fields itself rather than trusting anything the client typed.
  *
  * With a string id (`entryUUID`) the value is an ordinary escaped equality. With
- * `objectGUID` it has to be the 16 raw bytes as `\xx` pairs in AD's mixed-endian
- * order — see `guidFilterValue`. Chosen over re-reading by `dn` with
- * `scope: "base"` so the id, not a transient DN, stays the key everything hangs
- * off. Returns null when nobody (or more than one) matches.
+ * `objectGUID` the assertion has to be the 16 raw bytes in AD's mixed-endian
+ * order — see `guidToBytes` — handed to ldapts as a `Buffer`, not a `\xx`
+ * string. Chosen over re-reading by `dn` with `scope: "base"` so the id, not a
+ * transient DN, stays the key everything hangs off. Returns null when nobody
+ * (or more than one) matches.
  */
 export async function findPersonById(
   directoryId: string,
@@ -1033,20 +1043,32 @@ export async function findPersonById(
   const settings = config();
   const idIsBinary = settings.idAttr.toLowerCase() === BINARY_ID_ATTR;
 
-  let value: string;
+  let filter: Filter | string;
   if (idIsBinary) {
+    let bytes: Buffer;
     try {
-      value = guidFilterValue(trimmed);
+      bytes = guidToBytes(trimmed);
     } catch {
       // Not a canonical GUID string — it can match nobody, and that is the
       // caller's "unknown id", not a fault.
       return null;
     }
+    // A `\xx` filter string is the RFC 4515 spelling, but ldapts parses it
+    // into a JS string and `writeString` UTF-8-encodes that onto the wire.
+    // Bytes 0x80–0xff become two-byte sequences, so a perfectly good GUID
+    // matches nobody and the add 422s. A Buffer is written as raw octets.
+    filter = new AndFilter({
+      filters: [
+        FilterParser.parseString(settings.userFilter),
+        new EqualityFilter({
+          attribute: settings.idAttr,
+          value: bytes,
+        }),
+      ],
+    });
   } else {
-    value = escapeFilterValue(trimmed);
+    filter = `(&${settings.userFilter}(${settings.idAttr}=${escapeFilterValue(trimmed)}))`;
   }
-
-  const filter = `(&${settings.userFilter}(${settings.idAttr}=${value}))`;
 
   let entries: Entry[];
   try {
