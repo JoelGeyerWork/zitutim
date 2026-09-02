@@ -604,13 +604,29 @@ consequences:
 - **The data layer takes the resolved author as an argument**, like
   `createShotefReview` takes its `member`: `createQuote(input, author, actor)`.
   `input.author` is a *reference*, and resolving a reference is the route's job.
-- **The edit dialog passes no roster.** A quote with an `authorId` opens on that
-  person; one without opens on the name it already carries, in the typed arm.
-  Drilling the rotation through the feed and every card to offer a shortcut
-  there buys nothing the search does not already cover.
+- **Both callers offer the rotation, by different routes.** `/quotes/create`
+  reads it server-side; `EditQuoteDialog` loads the public `GET /api/rotation`
+  when it opens, rather than drilling a prop through the feed and every card.
+  Without it the only `{ source: "user" }` reference the edit form could send is
+  the quote's own `authorId` — so *changing* the speaker to a colleague, as
+  opposed to correcting a typo, would demand the directory, which is precisely
+  the path `resolvePeople` exists to keep working with no domain controller.
+  A failed load costs the shortcut and nothing else.
+- **The create page keeps `directoryId`; the edit dialog cannot.** The same
+  person is `user:<_id>` off the rotation and `directory:<objectGUID>` off the
+  search, and only the objectGUID correlates the two — without it a teammate
+  found in the search is appended as a second button with the same name on it.
+  `withoutDirectoryId` guards pages that render *anonymously* and `/quotes/create`
+  redirects, so it keeps the field, exactly as `RotationEditor` does and for the
+  same purpose. `GET /api/rotation` never returns one, so the edit dialog can
+  still show that twin; the server folds them together either way.
 - **The names are a row of buttons, not a `Select`** — see the Base UI note
   below. A list that grows when the search finds somebody cannot be a Select
   here, which is the same reason `MonitorFormDialog` names people with buttons.
+- **Both ways out of the row stay on screen while the search is open.** An empty
+  rotation opens straight onto the search panel, and the typed name is the arm
+  that survives the directory being down — putting it behind "סגירת החיפוש"
+  hides the escape hatch behind the panel reporting the outage.
 
 ### Quote engagement
 

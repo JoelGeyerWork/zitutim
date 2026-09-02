@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { QuoteForm } from "@/components/quote-form";
 import { SessionProvider } from "@/components/session-provider";
-import type { Member } from "@/lib/team";
+import type { RosterMember } from "@/lib/roster";
 import { jsonResponse, makeQuote, makeSessionUser } from "./factories";
 
 // The factory must be self-contained — vi.mock is hoisted above the imports.
@@ -19,10 +19,14 @@ vi.mock("next/navigation", () => ({
   usePathname: () => "/quotes/create",
 }));
 
-/** The team, as the create page hands it down — the picker's fast path. */
-const ROSTER: Member[] = [
-  { id: "6b0000000000000000000011", name: "מאיה גלעד", role: "עיצוב מוצר", gender: "f" },
-  { id: "6b0000000000000000000012", name: "יונתן כץ", role: "שרת", gender: "m" },
+/**
+ * The team, as the create page hands it down — the picker's fast path. It keeps
+ * `directoryId` there, which is what lets a search result be recognised as
+ * somebody already on the row.
+ */
+const ROSTER: RosterMember[] = [
+  { id: "6b0000000000000000000011", name: "מאיה גלעד", role: "עיצוב מוצר", gender: "f", directoryId: "guid-maya" },
+  { id: "6b0000000000000000000012", name: "יונתן כץ", role: "שרת", gender: "m", directoryId: "guid-yonatan" },
 ];
 
 const ROI = {
@@ -277,6 +281,67 @@ describe("QuoteForm — who said it", () => {
     expect(pickedAuthor()).toBe("מאיה גלעד");
   });
 
+  it("lights up the button a teammate already has, rather than a second one", async () => {
+    // The same person is two *keys* — `user:<_id>` off the rotation and
+    // `directory:<objectGUID>` off the search — and the server folds them
+    // together only after resolving. Two identical names with one pressed is
+    // the version of that the person filling the form has to look at.
+    fetchMock.mockImplementation(async (url: string) =>
+      String(url).startsWith("/api/directory")
+        ? jsonResponse({
+            people: [
+              {
+                directoryId: ROSTER[0].directoryId,
+                displayName: ROSTER[0].name,
+                title: ROSTER[0].role,
+                username: "maya.gilad",
+              },
+            ],
+          })
+        : jsonResponse(makeQuote(), 201),
+    );
+
+    const user = renderForm();
+    await user.type(screen.getByLabelText(/מה נאמר/), "משהו שנאמר");
+    await user.click(
+      screen.getByRole("button", { name: /חיפוש בספריית הארגון/ }),
+    );
+    await user.type(screen.getByLabelText(/חיפוש בספריית הארגון/), "מאיה");
+    await user.click(await screen.findByRole("button", { name: "בחירה" }));
+
+    expect(screen.getAllByRole("button", { name: ROSTER[0].name })).toHaveLength(1);
+    expect(pickedAuthor()).toBe(ROSTER[0].name);
+
+    await user.click(screen.getByRole("button", { name: "הוספה לקיר" }));
+    await waitFor(() =>
+      // The reference that needs no directory is the better of the two to send.
+      expect(lastRequest().body.author).toEqual({
+        source: "user",
+        id: ROSTER[0].id,
+      }),
+    );
+  });
+
+  it("keeps the typed-name way out reachable while the search is open", async () => {
+    // An empty rotation opens straight onto the search, and the typed name is
+    // the arm that survives the directory being down — so it must not sit
+    // behind the panel that is reporting the outage.
+    const user = renderForm({ roster: [] });
+    expect(screen.getByLabelText("חיפוש בספריית הארגון")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /כתיבת שם/ }));
+    await user.type(screen.getByLabelText(/מי אמר/), "שירה מהלקוח");
+    await user.type(screen.getByLabelText(/מה נאמר/), "משהו שנאמר");
+    await user.click(screen.getByRole("button", { name: "הוספה לקיר" }));
+
+    await waitFor(() =>
+      expect(lastRequest().body.author).toEqual({
+        source: "name",
+        name: "שירה מהלקוח",
+      }),
+    );
+  });
+
   it("carries a picked name over when switching to typing it", async () => {
     const user = renderForm();
     await pickAuthor(user, "מאיה גלעד");
@@ -376,6 +441,27 @@ describe("QuoteForm — editing", () => {
   it("starts on the person a quote already points at", () => {
     renderEdit(picked);
     expect(pickedAuthor()).toBe("מאיה גלעד");
+  });
+
+  it("retargets the speaker to another teammate without the directory", async () => {
+    // The gap the roster closes here: with only the quote's own author on
+    // offer, "it was actually the person next to them" would need `GET
+    // /api/directory` — the one path that is supposed to work with no domain
+    // controller on the network.
+    const user = renderEdit(picked, { roster: ROSTER });
+    fetchMock.mockImplementation(async (url: string) => {
+      if (String(url).startsWith("/api/directory")) throw new Error("no DC");
+      return jsonResponse(picked);
+    });
+
+    await pickAuthor(user, "יונתן כץ");
+    await user.click(screen.getByRole("button", { name: "שמירת שינויים" }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+    expect(lastRequest().body.author).toEqual({
+      source: "user",
+      id: ROSTER[1].id,
+    });
   });
 
   it("PUTs to the quote's own endpoint", async () => {

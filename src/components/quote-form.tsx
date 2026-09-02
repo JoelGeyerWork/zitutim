@@ -24,6 +24,18 @@ import { type Member } from "@/lib/team";
 import { cn } from "@/lib/utils";
 
 /**
+ * A name the picker offers without being asked.
+ *
+ * `directoryId` is optional because the two callers come by the rotation
+ * differently: `/quotes/create` reads it server-side and may keep the
+ * objectGUID (it redirects anonymous visitors, so nothing is shipped to one),
+ * while the edit dialog loads the *public* `GET /api/rotation`, which never
+ * returns one. Where it is present, a search result can be recognised as
+ * somebody already on the row instead of being appended as a second button.
+ */
+type PickerMember = Member & { directoryId?: string };
+
+/**
  * Somebody the "מי אמר?" picker can offer, and the reference the server will
  * resolve them by.
  *
@@ -36,7 +48,7 @@ import { cn } from "@/lib/utils";
  */
 type Candidate = { key: string; ref: PersonRef; name: string };
 
-function fromRoster(member: Member): Candidate {
+function fromRoster(member: PickerMember): Candidate {
   const ref = userRef(member.id);
   return { key: personKey(ref), ref, name: member.name };
 }
@@ -104,7 +116,7 @@ export function QuoteForm({
    * already the standing answer, and drilling the roster through the feed and
    * every card to reach it would buy a shortcut nobody needs.
    */
-  roster?: Member[];
+  roster?: PickerMember[];
   onSuccess?: (quote: Quote) => void;
   onCancel?: () => void;
   submitLabel?: string;
@@ -146,6 +158,26 @@ export function QuoteForm({
     candidates.push(candidate);
   }
 
+  // The same person reached two ways is two *keys* — `user:<_id>` off the
+  // rotation, `directory:<objectGUID>` off the search — and only the server can
+  // tell they are one person (`resolvePeople` dedupes after resolving). This is
+  // the one correlation the browser can do honestly, so a teammate found in the
+  // search lights up the button they already have rather than growing a second
+  // one with the same name on it.
+  const keyByDirectoryId = new Map<string, string>();
+  for (const member of roster) {
+    if (member.directoryId) {
+      keyByDirectoryId.set(member.directoryId, fromRoster(member).key);
+    }
+  }
+
+  /** The key this person is already offered under, whichever way they arrived. */
+  function keyFor(person: DirectoryPerson): string {
+    return (
+      keyByDirectoryId.get(person.directoryId) ?? fromDirectory(person).key
+    );
+  }
+
   function clearError(key: string) {
     setErrors((current) => {
       if (!current[key]) return current;
@@ -163,6 +195,16 @@ export function QuoteForm({
 
   /** A directory result becomes an option, and the answer, in one press. */
   function pickFromDirectory(person: DirectoryPerson) {
+    const existing = keyByDirectoryId.get(person.directoryId);
+    if (existing) {
+      // Already on the row: select that button rather than appending a twin.
+      // Their `{ source: "user" }` reference is also the one that needs no
+      // directory at all, so it is the better of the two to send.
+      set("author", existing);
+      setSearching(false);
+      return;
+    }
+
     const candidate = fromDirectory(person);
     setFound((current) =>
       current.some((entry) => entry.key === candidate.key)
@@ -342,9 +384,9 @@ export function QuoteForm({
                 <DirectorySearch
                   autoFocus
                   loginHref={loginHref}
-                  taken={(person) => values.author === fromDirectory(person).key}
+                  taken={(person) => values.author === keyFor(person)}
                   action={(person) =>
-                    values.author === fromDirectory(person).key ? (
+                    values.author === keyFor(person) ? (
                       <Badge variant="secondary" className="shrink-0 font-normal">
                         נבחר
                       </Badge>
@@ -369,8 +411,15 @@ export function QuoteForm({
                   סגירת החיפוש
                 </Button>
               </div>
-            ) : (
-              <div className="flex flex-wrap items-center gap-x-4">
+            ) : null}
+
+            {/* Both ways out are always on screen, and that matters most while
+                the search is open: an empty rotation opens straight onto it, so
+                hiding the typed name behind "סגירת החיפוש" would put the one
+                arm that survives a directory outage behind the panel that is
+                reporting the outage. */}
+            <div className="flex flex-wrap items-center gap-x-4">
+              {searching ? null : (
                 <Button
                   type="button"
                   variant="ghost"
@@ -381,17 +430,17 @@ export function QuoteForm({
                   <SearchIcon className="size-3.5" />
                   מי שאמר לא ברשימה? חיפוש בספריית הארגון
                 </Button>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  onClick={typeInstead}
-                  className="text-muted-foreground px-0"
-                >
-                  לא מהארגון? כתיבת שם
-                </Button>
-              </div>
-            )}
+              )}
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={typeInstead}
+                className="text-muted-foreground px-0"
+              >
+                לא מהארגון? כתיבת שם
+              </Button>
+            </div>
           </div>
         )}
       </Field>

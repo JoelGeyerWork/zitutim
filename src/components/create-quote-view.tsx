@@ -10,10 +10,10 @@ import { QuoteForm } from "@/components/quote-form";
 import { buttonVariants } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import type { Quote } from "@/lib/quote-schema";
-import { type Member } from "@/lib/team";
+import { type RosterMember } from "@/lib/roster";
 import { cn } from "@/lib/utils";
 
-export function CreateQuoteView({ roster }: { roster: Member[] }) {
+export function CreateQuoteView({ roster }: { roster: RosterMember[] }) {
   const router = useRouter();
   /** Everything added in this sitting, newest first — instant feedback. */
   const [justAdded, setJustAdded] = useState<Quote[]>([]);
