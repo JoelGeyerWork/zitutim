@@ -85,14 +85,80 @@ to reconcile between the two. `getRotation` resolves the members to their rows;
 | `src/lib/directory-schema.ts` | client-safe `DirectoryPerson` — the four fields (`directoryId`, `displayName`, `title`, `username`) safe for the browser |
 
 **The directory search is real now.** `ldap.ts` grew `findPeople(query)` — a
-service-account substring search that escapes with `escapeFilterValue` *before*
-adding the `*` wildcards, refuses under two characters, and never opens a second
-bind or touches `badPwdCount` — and `findPersonById(directoryId)`, which encodes
-an objectGUID as `\xx` raw bytes in AD's mixed-endian order (`guidToBytes`, the
+service-account search that escapes with `escapeFilterValue` *before* any
+wildcard is added, refuses under two characters, and never opens a second bind
+or touches `badPwdCount` — and `findPersonById(directoryId)`, which encodes an
+objectGUID as `\xx` raw bytes in AD's mixed-endian order (`guidToBytes`, the
 tested inverse of `guidToString`; a string `entryUUID` is escaped plainly). Both
 throw on a directory fault and let a `ConfigError` propagate, so the route maps
 them to 503 vs 500 exactly like login. The **mock `src/lib/directory.ts` is
 deleted.**
+
+#### Why that search is fast, and the three settings that keep it so
+
+It began as `(displayName=*typed*)` over each login attribute, and on a real AD
+that is the slowest thing this app does: **a leading wildcard cannot seek into an
+index**, so the DC reads every user object under `LDAP_BASE_DN` on every
+debounced keystroke. Three things followed from fixing it, and each is worth not
+undoing:
+
+- **`LDAP_SEARCH_MODE` defaults to `anr`** — Active Directory's Ambiguous Name
+  Resolution, one indexed clause the DC expands across givenName, sn,
+  displayName, sAMAccountName and more, each matched as a prefix. It is what
+  Outlook's address book uses. Note `anr` is a *prefix* match by behaviour and an
+  equality by syntax: wrapping it in `*` does not widen it, it breaks it. The
+  other two modes (`prefix`, `substring`) exist because OpenLDAP implements no
+  `anr`, which is what the `ldap` test project runs against — that suite pins
+  `substring` itself.
+- **`LDAP_TIMEOUT_SECONDS` (default 30) is the search's `timeLimit`, and the
+  socket timeout is set five seconds above it.** If the socket gave up first, a
+  search the DC *did* answer — with `timeLimitExceeded` — would surface as a
+  connection failure, which reports an outage. Exceeding the limit is not a slow
+  answer, it is no answer: ldapts tolerates `sizeLimitExceeded` when a
+  `sizeLimit` was asked for and does **not** extend that to the time limit.
+  **It reaches the people search only.** `createClient` takes its budget as an
+  argument rather than reading it off the settings, and login keeps its own
+  `LOGIN_TIMEOUT_MS` / `LOGIN_TIME_LIMIT_SECONDS` — sharing them would mean
+  raising the search's budget silently stretches how long a stalled DC can hold
+  a colleague's sign-in, three times over before the throttle stops them.
+- **A timeout is not an outage.** `findPeople` throws `DirectoryTimeoutError` for
+  result codes 3 (`timeLimitExceeded`) and 11 (AD's `adminLimitExceeded`), and
+  the route answers **504**, not the 503 a real fault gets — the same
+  ConfigError-versus-outage split login already draws, for the same reason. It is
+  also the one directory failure the person typing can act on, so
+  `DirectorySearch` gives it its own message instead of the generic one.
+
+**The service-account connection is pooled** (`closeDirectoryConnection`), keyed
+on the settings like `mail.ts`'s transport, with **one retry — but only on a
+connection that was already open, and never on a timeout**. A reaped or reset
+connection is only discovered by the search that fails on it, so without the
+retry, pooling would trade the old per-keystroke handshake for a fresh
+intermittent failure; retrying a *timeout* just makes the caller wait twice for
+the same answer. It is deliberately **not** extended to
+`findUser`/`verifyPassword`: a pooled connection is shared bind state, which is
+the exact thing the login path's two separate clients exist to avoid.
+
+Overlapping searches are the ordinary case, not an edge one — `DirectorySearch`
+debounces on the client, but an in-flight `GET /api/directory` is never aborted
+on the server — and three parts of the pool exist only because of that:
+
+- **Checkout is serialized** through one promise chain. Two searches arriving
+  together would otherwise both miss the pool, both connect and bind, and the
+  loser would be left bound and unreferenced on the DC with nothing holding a
+  handle to unbind it. Serializing costs the second caller the first one's
+  handshake, which is the wait it should have been doing anyway.
+- **A client is reused only while `isBound`, and the check is repeated after the
+  search.** ldapts reconnects transparently inside `search()` and does *not*
+  replay the bind unless `autoRebind` is set — and refuses to replay it even then
+  on a StartTLS session. An anonymous AD search answers **zero entries rather
+  than an error**, so a client that reconnected unbound would quietly report
+  "nobody by that name" for every keystroke after, with nothing thrown for the
+  retry to catch. `autoRebind` is left off on purpose: it retains the bind
+  credentials for the client's lifetime, and `createClient` is shared with the
+  login path, where those are a colleague's domain password.
+- **Only the last holder unbinds** (`inUse`). A failing search must not pull the
+  socket out from under a sibling mid-`search()`, or a timeout on a broad query
+  kills the narrow one that was about to succeed.
 
 **The directory owns identity, the app owns membership.** Adding someone is
 *picking them out of the directory*, never typing a name: the client posts a

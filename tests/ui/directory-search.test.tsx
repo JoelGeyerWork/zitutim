@@ -123,6 +123,22 @@ describe("DirectorySearch", () => {
     ).toBeInTheDocument();
   });
 
+  // The one failure the reader can act on, so it does not get folded into the
+  // generic message with the other two.
+  it("tells a search that timed out apart, and says what to do about it", async () => {
+    vi.mocked(fetch).mockImplementation(async () =>
+      jsonResponse({ error: "החיפוש ארך זמן רב מדי. נסו חיפוש ממוקד יותר" }, 504),
+    );
+    const actor = search();
+
+    await actor.type(screen.getByLabelText("חיפוש בספריית הארגון"), "רועי");
+
+    expect(
+      await screen.findByText("החיפוש ארך זמן רב מדי. נסו שם מלא יותר."),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("לא הצלחנו לחפש בספרייה.")).toBeNull();
+  });
+
   it("says the same for a server that was never configured", async () => {
     vi.mocked(fetch).mockImplementation(async () =>
       jsonResponse({ error: "החיפוש בספרייה לא מוגדר בשרת" }, 500),

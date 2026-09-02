@@ -10,9 +10,19 @@ import { sessionCookie } from "./factories";
 vi.mock("@/lib/ldap", () => ({
   findPersonById: vi.fn(),
   findPeople: vi.fn(),
+  // The route branches on `instanceof`, so the mocked module has to carry the
+  // real class rather than a stand-in — a bare Error here would silently take
+  // the 503 path and the 504 case would pass for the wrong reason.
+  DirectoryTimeoutError: class DirectoryTimeoutError extends Error {
+    constructor() {
+      super("directory search timed out");
+      this.name = "DirectoryTimeoutError";
+    }
+  },
 }));
 
-import { findPeople, findPersonById } from "@/lib/ldap";
+import { DirectoryTimeoutError, findPeople, findPersonById } from "@/lib/ldap";
+import { ConfigError } from "@/lib/config-error";
 import { GET as GET_DIRECTORY } from "@/app/api/directory/route";
 import { GET as GET_ROTATION, POST } from "@/app/api/rotation/route";
 import { DELETE, PATCH } from "@/app/api/rotation/[userId]/route";
@@ -255,6 +265,39 @@ describe("GET /api/directory", () => {
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({ people: [] });
     expect(mockFindPeople).not.toHaveBeenCalled();
+  });
+
+  // 504 rather than the 503 below, and the split is the point: the directory
+  // answered, it just would not spend longer on this query. Calling that an
+  // outage points whoever reads the log at a domain controller that is fine.
+  it("answers 504 when the directory gave up on the search", async () => {
+    mockFindPeople.mockRejectedValue(new DirectoryTimeoutError());
+
+    const request = await mutate(`${DIRECTORY_URL}?q=noa`, "GET");
+    const response = await GET_DIRECTORY(request);
+
+    expect(response.status).toBe(504);
+    await expect(response.json()).resolves.toEqual({
+      error: "החיפוש ארך זמן רב מדי. נסו חיפוש ממוקד יותר",
+    });
+  });
+
+  it("answers 503 when the directory did not answer at all", async () => {
+    mockFindPeople.mockRejectedValue(new Error("directory unavailable"));
+
+    const request = await mutate(`${DIRECTORY_URL}?q=noa`, "GET");
+    const response = await GET_DIRECTORY(request);
+
+    expect(response.status).toBe(503);
+  });
+
+  it("answers 500 when the directory was never configured", async () => {
+    mockFindPeople.mockRejectedValue(new ConfigError("LDAP_URL is not set"));
+
+    const request = await mutate(`${DIRECTORY_URL}?q=noa`, "GET");
+    const response = await GET_DIRECTORY(request);
+
+    expect(response.status).toBe(500);
   });
 });
 

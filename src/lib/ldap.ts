@@ -47,6 +47,20 @@ export type LdapResult =
   | { ok: true; user: DirectoryUser }
   | { ok: false; reason: LdapFailureReason };
 
+/**
+ * The directory ran the search and gave up on it — not the same fact as the
+ * directory being unreachable, and not the same thing to tell the person who
+ * typed the query. `findPeople` throws this so the route can answer 504 and ask
+ * them to narrow it down, rather than 503 and a claim that the directory is
+ * down, which sends whoever reads the log to a domain controller that is fine.
+ */
+export class DirectoryTimeoutError extends Error {
+  constructor() {
+    super("directory search timed out");
+    this.name = "DirectoryTimeoutError";
+  }
+}
+
 /** What the directory search alone can conclude — no password involved. */
 export type FindUserResult =
   | { ok: true; user: DirectoryUser }
@@ -117,7 +131,47 @@ interface LdapConfig {
   idAttr: string;
   /** Narrows the search to user objects. AD spells this differently to everyone else. */
   userFilter: string;
+  /** How a typed fragment becomes a filter. See `peopleFilter`. */
+  searchMode: SearchMode;
+  /**
+   * The server-side limit on a single search, in seconds. Also sets the socket
+   * timeout, which is deliberately the larger of the two — see `createClient`.
+   */
+  timeoutSeconds: number;
 }
+
+/**
+ * How a typed fragment is turned into a filter, and the single biggest lever on
+ * how fast the roster editor feels.
+ *
+ * `anr` is Active Directory's Ambiguous Name Resolution: one indexed clause the
+ * DC expands across givenName, sn, displayName, sAMAccountName and the rest,
+ * each matched as a *prefix*. It is what Outlook's address book uses, and it is
+ * the default here for the same reason.
+ *
+ * `substring` — the behaviour this started with — asks for `*fragment*` on each
+ * attribute in turn. A leading wildcard cannot seek into an index, so the DC
+ * reads every user object under the base DN on every keystroke: seconds on a
+ * real directory, and past `LDAP_TIMEOUT_SECONDS` it stops being merely slow and
+ * starts being a 504. It stays available because it is the only one of the three
+ * a plain LDAP directory can answer — OpenLDAP has no `anr` — which is what the
+ * `ldap` test project runs against.
+ *
+ * `prefix` is the middle ground: `fragment*`, which an index can seek, for a
+ * non-AD directory whose attributes are indexed.
+ */
+export type SearchMode = "anr" | "prefix" | "substring";
+
+const SEARCH_MODES: SearchMode[] = ["anr", "prefix", "substring"];
+
+/**
+ * Generous next to the 5 seconds this used to hard-code, because that number was
+ * chosen for the login search — an indexed equality that resolves in
+ * milliseconds — and then reused for a directory search that legitimately takes
+ * longer. Exceeding it is not a slow answer, it is `timeLimitExceeded` and no
+ * answer at all.
+ */
+const DEFAULT_TIMEOUT_SECONDS = 30;
 
 function attrList(value: string | undefined, fallback: string[]): string[] {
   const parsed = (value ?? "")
@@ -219,7 +273,35 @@ function config(): LdapConfig {
     userFilter:
       process.env.LDAP_USER_FILTER?.trim() ||
       "(&(objectCategory=person)(objectClass=user))",
+    searchMode: readSearchMode(),
+    timeoutSeconds: readTimeoutSeconds(),
   };
+}
+
+function readSearchMode(): SearchMode {
+  const raw = process.env.LDAP_SEARCH_MODE?.trim().toLowerCase();
+  if (!raw) return "anr";
+  if (!(SEARCH_MODES as string[]).includes(raw)) {
+    throw new ConfigError(
+      `LDAP_SEARCH_MODE must be one of ${SEARCH_MODES.join(", ")}, not "${raw}".`,
+    );
+  }
+  return raw as SearchMode;
+}
+
+function readTimeoutSeconds(): number {
+  const raw = process.env.LDAP_TIMEOUT_SECONDS?.trim();
+  if (!raw) return DEFAULT_TIMEOUT_SECONDS;
+  const parsed = Number(raw);
+  // A whole number of seconds, because that is the unit the LDAP protocol's own
+  // timeLimit is measured in — a fractional value would be silently truncated by
+  // the server rather than rejected here.
+  if (!Number.isInteger(parsed) || parsed < 1) {
+    throw new ConfigError(
+      `LDAP_TIMEOUT_SECONDS must be a whole number of seconds of 1 or more, not "${raw}".`,
+    );
+  }
+  return parsed;
 }
 
 /**
@@ -388,19 +470,48 @@ function bindFailureReason(error: unknown): LdapFailureReason {
   return (subCode && SUBCODE_REASONS[subCode]) || "credentials";
 }
 
-function createClient(settings: LdapConfig): Client {
+/**
+ * The login path's own budget, deliberately **not** `LDAP_TIMEOUT_SECONDS`.
+ *
+ * That variable exists because the *people search* needed a longer budget than
+ * the 5 seconds this file started with. Signing in is the opposite case: it is
+ * an indexed equality on `sAMAccountName` plus a bind, both of which resolve in
+ * milliseconds or not at all. Letting the search's budget reach it would mean a
+ * DC that completes TLS and then stalls holds a colleague's sign-in — and a
+ * worker — for half a minute, three times over before the login throttle stops
+ * them. `connectTimeout` covers a DC that never accepts TCP either way.
+ */
+const LOGIN_TIMEOUT_MS = 10_000;
+const LOGIN_TIME_LIMIT_SECONDS = 5;
+
+/** The socket budget for a pooled directory search: the DC's own limit, plus slack. */
+function searchTimeoutMs(settings: LdapConfig): number {
+  // Deliberately longer than the search's `timeLimit`. If the socket gave up
+  // first, a search the DC did answer — with `timeLimitExceeded` — would surface
+  // as a connection failure, which reports an outage instead of a timeout and
+  // sends whoever reads the log to a domain controller that is working perfectly.
+  return (settings.timeoutSeconds + 5) * 1_000;
+}
+
+function createClient(settings: LdapConfig, timeoutMs: number): Client {
   return new Client({
     url: settings.url,
     // Without these an unreachable DC pins the request until the socket gives
     // up, rather than failing in a few seconds.
     connectTimeout: 5_000,
-    timeout: 10_000,
+    // Passed in rather than derived from `settings`, so that raising the people
+    // search's budget cannot silently stretch how long `/login` hangs on to a
+    // half-dead directory. The two operations have nothing in common but a URL.
+    timeout: timeoutMs,
     tlsOptions: settings.tlsOptions,
   });
 }
 
-async function connect(settings: LdapConfig): Promise<Client> {
-  const client = createClient(settings);
+async function connect(
+  settings: LdapConfig,
+  timeoutMs: number,
+): Promise<Client> {
+  const client = createClient(settings, timeoutMs);
   if (settings.startTls) await client.startTLS(settings.tlsOptions);
   return client;
 }
@@ -449,7 +560,7 @@ export async function findUser(username: string): Promise<FindUserResult> {
 
   let serviceClient: Client | undefined;
   try {
-    serviceClient = await connect(settings);
+    serviceClient = await connect(settings, LOGIN_TIMEOUT_MS);
 
     try {
       await serviceClient.bind(settings.bindDN, settings.bindPassword);
@@ -475,7 +586,7 @@ export async function findUser(username: string): Promise<FindUserResult> {
         // as a buffer of its own ASCII.
         explicitBufferAttributes: idIsBinary ? [settings.idAttr] : [],
         sizeLimit: 2,
-        timeLimit: 5,
+        timeLimit: LOGIN_TIME_LIMIT_SECONDS,
       });
       entries = result.searchEntries;
     } catch (error) {
@@ -564,7 +675,7 @@ export async function verifyPassword(
 
   let client: Client | undefined;
   try {
-    client = await connect(settings);
+    client = await connect(settings, LOGIN_TIMEOUT_MS);
     try {
       await client.bind(user.dn, password);
     } catch (error) {
@@ -635,39 +746,240 @@ function toDirectoryPerson(
  * is no second bind here — resolving a person for the roster never needs their
  * password.
  */
+/**
+ * The service-account connection, kept open between searches.
+ *
+ * `searchAsService` runs on every debounced keystroke in the roster editor, and
+ * a client per call means a TCP connect, a TLS handshake and a bind before the
+ * search can even start — several times over while somebody types a name. One
+ * long-lived connection is what every other directory client does, and the
+ * sibling of the pooled transport in `mail.ts`, keyed the same way so a test
+ * that changes the environment is not served a connection built from the old
+ * one.
+ *
+ * Deliberately **not** extended to `findUser`/`verifyPassword`. A pooled
+ * connection is shared bind state, and the entire reason those two hold separate
+ * clients is that a bind which fails leaves the connection in an undefined bind
+ * state — see `verifyPassword`. The login path stays one client per attempt.
+ */
+interface Pooled {
+  key: string;
+  client: Client;
+  /** Searches currently running on this client. */
+  inUse: number;
+  /** Out of circulation: unbind as soon as the last search lets go. */
+  retired: boolean;
+}
+
+let pooled: Pooled | undefined;
+
+/**
+ * Checkout is serialized through this. Connecting and binding is the slow part,
+ * and two searches arriving together — which is what typing does, since the
+ * client debounces but the server never aborts a request in flight — would
+ * otherwise both find no pooled client, both build one, and the loser would be
+ * left bound and forgotten on the DC with nothing holding a reference to unbind
+ * it. Serializing costs the second caller the first one's handshake, which is
+ * exactly the wait it should be doing.
+ */
+let checkout: Promise<unknown> = Promise.resolve();
+
+function serialize<T>(step: () => Promise<T>): Promise<T> {
+  const next = checkout.then(step, step);
+  checkout = next.then(
+    () => undefined,
+    () => undefined,
+  );
+  return next;
+}
+
+function poolKey(settings: LdapConfig): string {
+  return JSON.stringify([
+    settings.url,
+    settings.baseDN,
+    settings.bindDN,
+    settings.bindPassword,
+    settings.startTls,
+    settings.timeoutSeconds,
+    settings.tlsOptions?.rejectUnauthorized ?? null,
+  ]);
+}
+
+/**
+ * `isBound`, not just `isConnected`.
+ *
+ * ldapts reconnects transparently inside `search()` when the socket has gone,
+ * and does **not** replay the bind unless `autoRebind` is set — and it refuses
+ * to replay it even then on a StartTLS session, because the replay would land
+ * before the connection was upgraded again. An anonymous search against AD
+ * typically returns *zero entries rather than an error*, so a client that
+ * reconnected unbound would quietly answer "nobody by that name" to every
+ * keystroke from then on, with nothing thrown for the retry below to catch.
+ *
+ * `autoRebind` is the other half of ldapts' answer to this and is deliberately
+ * left off: it keeps the bind credentials in memory for the client's lifetime,
+ * and `createClient` is shared with the login path, where those credentials are
+ * a colleague's domain password. Detecting the lost bind and reconnecting costs
+ * one round trip in a case that should be rare, and needs nothing held.
+ */
+function live(entry: Pooled | undefined, key: string): entry is Pooled {
+  return Boolean(
+    entry && !entry.retired && entry.key === key && entry.client.isBound,
+  );
+}
+
+function retire(entry: Pooled | undefined): void {
+  if (!entry || entry.retired) return;
+  entry.retired = true;
+  if (pooled === entry) pooled = undefined;
+  // Only the last holder unbinds. A search that fails must not tear the socket
+  // out from under a sibling that is mid-`search()` on the same client — ldapts
+  // would reject that one with "connection closed before message response", so
+  // a timeout on a broad query would kill the narrow one about to succeed.
+  if (entry.inUse <= 0) void entry.client.unbind().catch(() => {});
+}
+
+function release(entry: Pooled, failed: boolean): void {
+  entry.inUse -= 1;
+  if (failed) retire(entry);
+  else if (entry.retired && entry.inUse <= 0) {
+    void entry.client.unbind().catch(() => {});
+  }
+}
+
+/**
+ * Drop the pooled connection, waiting for it only if nobody is using it — a
+ * search still in flight unbinds it itself on the way out.
+ *
+ * Exported because the tests need each case to start from no connection (the
+ * pool outlives a `vi.mock` reset otherwise), and because it is the right thing
+ * to call on shutdown.
+ */
+export async function closeDirectoryConnection(): Promise<void> {
+  const entry = pooled;
+  if (!entry) return;
+  entry.retired = true;
+  pooled = undefined;
+  if (entry.inUse <= 0) await entry.client.unbind().catch(() => {});
+}
+
+async function acquire(
+  settings: LdapConfig,
+): Promise<{ entry: Pooled; reused: boolean }> {
+  const key = poolKey(settings);
+
+  return serialize(async () => {
+    if (live(pooled, key)) {
+      pooled.inUse += 1;
+      return { entry: pooled, reused: true };
+    }
+    retire(pooled);
+
+    const client = await connect(settings, searchTimeoutMs(settings));
+    try {
+      await client.bind(settings.bindDN, settings.bindPassword);
+    } catch (error) {
+      await client.unbind().catch(() => {});
+      throw error;
+    }
+    pooled = { key, client, inUse: 1, retired: false };
+    return { entry: pooled, reused: false };
+  });
+}
+
+/**
+ * The directory cut the search short rather than the search failing — result
+ * code 3 (`timeLimitExceeded`, the limit we asked for) or 11
+ * (`adminLimitExceeded`, AD enforcing its own MaxQueryDuration). They mean the
+ * same thing to whoever typed the query.
+ *
+ * Duck-typed on the numeric code rather than `instanceof`, because
+ * `vi.mock("ldapts")` replaces the error classes — the same reason
+ * `reasonFromBindError` reads AD's sub-codes out of the message text.
+ */
+function isSearchTimeout(error: unknown): boolean {
+  const code = (error as { code?: unknown } | null)?.code;
+  return code === 3 || code === 11;
+}
+
+/** Thrown internally when a pooled client reconnected unbound mid-search. */
+class LostBindError extends Error {
+  constructor() {
+    super("service connection lost its bind mid-search");
+    this.name = "LostBindError";
+  }
+}
+
 async function searchAsService(
   settings: LdapConfig,
   filter: string,
   sizeLimit: number,
 ): Promise<Entry[]> {
   const idIsBinary = settings.idAttr.toLowerCase() === BINARY_ID_ATTR;
+  const options = {
+    scope: "sub" as const,
+    filter,
+    attributes: [...BASE_ATTRIBUTES, settings.idAttr, ...settings.loginAttrs],
+    // Same reasoning as findUser: only objectGUID is asked for as raw bytes.
+    explicitBufferAttributes: idIsBinary ? [settings.idAttr] : [],
+    sizeLimit,
+    timeLimit: settings.timeoutSeconds,
+  };
 
-  let client: Client | undefined;
-  try {
-    client = await connect(settings);
-    await client.bind(settings.bindDN, settings.bindPassword);
-    const result = await client.search(settings.baseDN, {
-      scope: "sub",
-      filter,
-      attributes: [...BASE_ATTRIBUTES, settings.idAttr, ...settings.loginAttrs],
-      // Same reasoning as findUser: only objectGUID is asked for as raw bytes.
-      explicitBufferAttributes: idIsBinary ? [settings.idAttr] : [],
-      sizeLimit,
-      timeLimit: 5,
-    });
-    return result.searchEntries;
-  } finally {
-    await client?.unbind().catch(() => {});
+  // Exactly one retry, and only on a connection that was already open: a DC
+  // restarts, an idle connection is reaped, a firewall forgets the flow — and a
+  // pooled client only discovers it when a search fails on it. Without this,
+  // pooling would trade the old per-keystroke handshake for a new intermittent
+  // failure, which is the symptom it is here to remove. A *fresh* client failing
+  // is a real fault, and a timeout is never retried: running the same slow
+  // search twice only makes the caller wait twice as long for the same answer.
+  for (let attempt = 0; ; attempt += 1) {
+    const { entry, reused } = await acquire(settings);
+    let failed = true;
+    try {
+      const result = await entry.client.search(settings.baseDN, options);
+      // Checked *after* the search as well as before it. `live()` closes the
+      // window where the socket was already gone at checkout; this one closes
+      // the window where it went during the search and ldapts reconnected
+      // underneath us, which returns an empty result rather than throwing.
+      if (!entry.client.isBound) throw new LostBindError();
+      failed = false;
+      return result.searchEntries;
+    } catch (error) {
+      if (attempt === 0 && reused && !isSearchTimeout(error)) continue;
+      throw error;
+    } finally {
+      release(entry, failed);
+    }
   }
 }
 
+/** Builds the search clause for the configured `LDAP_SEARCH_MODE`. */
+function peopleFilter(settings: LdapConfig, escaped: string): string {
+  // One clause, and the DC decides which attributes it spans. `anr` is an
+  // equality by syntax and a prefix match by behaviour — no wildcard belongs
+  // here, and adding one makes it match nothing at all.
+  if (settings.searchMode === "anr") {
+    return `(&${settings.userFilter}(anr=${escaped}))`;
+  }
+
+  const attrs = [...new Set(["displayName", ...settings.loginAttrs])];
+  const clause =
+    settings.searchMode === "prefix"
+      ? (attr: string) => `(${attr}=${escaped}*)`
+      : (attr: string) => `(${attr}=*${escaped}*)`;
+  return `(&${settings.userFilter}(|${attrs.map(clause).join("")}))`;
+}
+
 /**
- * Substring search of the directory for the roster editor.
+ * The directory search behind the roster editor.
  *
  * A `ConfigError` from the lazy config reader propagates (the route maps it to
  * `misconfigured` → 500); a directory failure is logged and rethrown as a
- * generic error (→ `unavailable` → 503). Success is a plain array — `[]` on no
- * match.
+ * generic error (→ `unavailable` → 503); the directory cutting the search short
+ * is a `DirectoryTimeoutError` (→ 504), which is a different fact and a
+ * different thing to tell the person who typed it. Success is a plain array —
+ * `[]` on no match.
  */
 export async function findPeople(query: string): Promise<DirectoryPerson[]> {
   const trimmed = query.trim();
@@ -677,18 +989,19 @@ export async function findPeople(query: string): Promise<DirectoryPerson[]> {
 
   const settings = config();
 
-  // Escape the value *before* wrapping it in the `*` wildcards, never after —
-  // the invariant `escapeRegex` has for search. Unescaped, `admin)(objectClass=*`
+  // Escape the value *before* any wildcard is added, never after — the
+  // invariant `escapeRegex` has for search. Unescaped, `admin)(objectClass=*`
   // restructures the `(|...)` into a match on the first user in the directory.
-  const escaped = escapeFilterValue(trimmed);
-  const attrs = [...new Set(["displayName", ...settings.loginAttrs])];
-  const clauses = attrs.map((attr) => `(${attr}=*${escaped}*)`).join("");
-  const filter = `(&${settings.userFilter}(|${clauses}))`;
+  const filter = peopleFilter(settings, escapeFilterValue(trimmed));
 
   let entries: Entry[];
   try {
     entries = await searchAsService(settings, filter, 25);
   } catch (error) {
+    if (isSearchTimeout(error)) {
+      console.error("LDAP people search timed out", error);
+      throw new DirectoryTimeoutError();
+    }
     console.error("LDAP people search failed", error);
     throw new Error("directory unavailable");
   }
