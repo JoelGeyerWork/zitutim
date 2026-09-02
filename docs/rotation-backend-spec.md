@@ -147,6 +147,12 @@ export interface DirectoryPerson {
   `badPwdCount`. Do **not** add a third bind.
 - Reject `query.trim().length < 2` before opening a connection. `sizeLimit: 25`,
   `timeLimit: 5`. Returns `[]` on no match.
+  - **Superseded.** This shipped as written and was then rewritten for speed: a
+    leading wildcard cannot use an index, so `*typed*` made the DC read every
+    user object under the base DN per keystroke. The filter is now chosen by
+    `LDAP_SEARCH_MODE` (default `anr`), the limit by `LDAP_TIMEOUT_SECONDS`
+    (default 30), and the service connection is pooled. See CLAUDE.md, "Why that
+    search is fast".)
 - Ask for `title` in the search attributes. `BASE_ATTRIBUTES` in `ldap.ts` does
   not currently request it and `DirectoryUser` has no field for it — add both,
   since the editor, the wheel's upcoming list and the standings all render a
@@ -300,6 +306,8 @@ Keep the visual design and every interaction except the one removal below.
 **`tests/ldap/`** — extend; stays excluded from `npm test`, still skips when
 nothing listens on `:1636`. Cover `findPeople` returning real substring matches
 from the container, and that it works with `entryUUID` as the id attribute.
+(That suite now pins `LDAP_SEARCH_MODE=substring` itself — OpenLDAP implements no
+`anr`, which is the production default.)
 
 **`tests/ui/`** — the rewired editor: a drag issues one `PUT /api/rotation/order`
 with the stored order; add posts `{ directoryId, gender }`; the former-members

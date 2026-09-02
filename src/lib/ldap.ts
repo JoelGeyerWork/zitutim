@@ -470,24 +470,48 @@ function bindFailureReason(error: unknown): LdapFailureReason {
   return (subCode && SUBCODE_REASONS[subCode]) || "credentials";
 }
 
-function createClient(settings: LdapConfig): Client {
+/**
+ * The login path's own budget, deliberately **not** `LDAP_TIMEOUT_SECONDS`.
+ *
+ * That variable exists because the *people search* needed a longer budget than
+ * the 5 seconds this file started with. Signing in is the opposite case: it is
+ * an indexed equality on `sAMAccountName` plus a bind, both of which resolve in
+ * milliseconds or not at all. Letting the search's budget reach it would mean a
+ * DC that completes TLS and then stalls holds a colleague's sign-in — and a
+ * worker — for half a minute, three times over before the login throttle stops
+ * them. `connectTimeout` covers a DC that never accepts TCP either way.
+ */
+const LOGIN_TIMEOUT_MS = 10_000;
+const LOGIN_TIME_LIMIT_SECONDS = 5;
+
+/** The socket budget for a pooled directory search: the DC's own limit, plus slack. */
+function searchTimeoutMs(settings: LdapConfig): number {
+  // Deliberately longer than the search's `timeLimit`. If the socket gave up
+  // first, a search the DC did answer — with `timeLimitExceeded` — would surface
+  // as a connection failure, which reports an outage instead of a timeout and
+  // sends whoever reads the log to a domain controller that is working perfectly.
+  return (settings.timeoutSeconds + 5) * 1_000;
+}
+
+function createClient(settings: LdapConfig, timeoutMs: number): Client {
   return new Client({
     url: settings.url,
     // Without these an unreachable DC pins the request until the socket gives
     // up, rather than failing in a few seconds.
     connectTimeout: 5_000,
-    // Deliberately longer than the search's own `timeLimit`. If the socket gave
-    // up first, a search the DC did answer — with `timeLimitExceeded` — would
-    // surface as a connection failure, which reports an outage instead of a
-    // timeout and sends whoever reads the log to a domain controller that is
-    // working perfectly.
-    timeout: (settings.timeoutSeconds + 5) * 1_000,
+    // Passed in rather than derived from `settings`, so that raising the people
+    // search's budget cannot silently stretch how long `/login` hangs on to a
+    // half-dead directory. The two operations have nothing in common but a URL.
+    timeout: timeoutMs,
     tlsOptions: settings.tlsOptions,
   });
 }
 
-async function connect(settings: LdapConfig): Promise<Client> {
-  const client = createClient(settings);
+async function connect(
+  settings: LdapConfig,
+  timeoutMs: number,
+): Promise<Client> {
+  const client = createClient(settings, timeoutMs);
   if (settings.startTls) await client.startTLS(settings.tlsOptions);
   return client;
 }
@@ -536,7 +560,7 @@ export async function findUser(username: string): Promise<FindUserResult> {
 
   let serviceClient: Client | undefined;
   try {
-    serviceClient = await connect(settings);
+    serviceClient = await connect(settings, LOGIN_TIMEOUT_MS);
 
     try {
       await serviceClient.bind(settings.bindDN, settings.bindPassword);
@@ -562,7 +586,7 @@ export async function findUser(username: string): Promise<FindUserResult> {
         // as a buffer of its own ASCII.
         explicitBufferAttributes: idIsBinary ? [settings.idAttr] : [],
         sizeLimit: 2,
-        timeLimit: settings.timeoutSeconds,
+        timeLimit: LOGIN_TIME_LIMIT_SECONDS,
       });
       entries = result.searchEntries;
     } catch (error) {
@@ -651,7 +675,7 @@ export async function verifyPassword(
 
   let client: Client | undefined;
   try {
-    client = await connect(settings);
+    client = await connect(settings, LOGIN_TIMEOUT_MS);
     try {
       await client.bind(user.dn, password);
     } catch (error) {
@@ -738,7 +762,36 @@ function toDirectoryPerson(
  * clients is that a bind which fails leaves the connection in an undefined bind
  * state — see `verifyPassword`. The login path stays one client per attempt.
  */
-let pooled: { client: Client; key: string } | undefined;
+interface Pooled {
+  key: string;
+  client: Client;
+  /** Searches currently running on this client. */
+  inUse: number;
+  /** Out of circulation: unbind as soon as the last search lets go. */
+  retired: boolean;
+}
+
+let pooled: Pooled | undefined;
+
+/**
+ * Checkout is serialized through this. Connecting and binding is the slow part,
+ * and two searches arriving together — which is what typing does, since the
+ * client debounces but the server never aborts a request in flight — would
+ * otherwise both find no pooled client, both build one, and the loser would be
+ * left bound and forgotten on the DC with nothing holding a reference to unbind
+ * it. Serializing costs the second caller the first one's handshake, which is
+ * exactly the wait it should be doing.
+ */
+let checkout: Promise<unknown> = Promise.resolve();
+
+function serialize<T>(step: () => Promise<T>): Promise<T> {
+  const next = checkout.then(step, step);
+  checkout = next.then(
+    () => undefined,
+    () => undefined,
+  );
+  return next;
+}
 
 function poolKey(settings: LdapConfig): string {
   return JSON.stringify([
@@ -753,39 +806,85 @@ function poolKey(settings: LdapConfig): string {
 }
 
 /**
- * Drop the pooled connection. Passing the client makes it a no-op unless that
- * client is still the pooled one, so a search failing does not unbind the
- * connection a concurrent search has already replaced it with.
+ * `isBound`, not just `isConnected`.
  *
- * Exported because the tests need each case to start from no connection — the
- * pool outlives a `vi.mock` reset otherwise — and because it is the right thing
- * to call on shutdown.
+ * ldapts reconnects transparently inside `search()` when the socket has gone,
+ * and does **not** replay the bind unless `autoRebind` is set — and it refuses
+ * to replay it even then on a StartTLS session, because the replay would land
+ * before the connection was upgraded again. An anonymous search against AD
+ * typically returns *zero entries rather than an error*, so a client that
+ * reconnected unbound would quietly answer "nobody by that name" to every
+ * keystroke from then on, with nothing thrown for the retry below to catch.
+ *
+ * `autoRebind` is the other half of ldapts' answer to this and is deliberately
+ * left off: it keeps the bind credentials in memory for the client's lifetime,
+ * and `createClient` is shared with the login path, where those credentials are
+ * a colleague's domain password. Detecting the lost bind and reconnecting costs
+ * one round trip in a case that should be rare, and needs nothing held.
  */
-export async function closeDirectoryConnection(client?: Client): Promise<void> {
-  if (client && pooled?.client !== client) return;
-  const current = pooled;
-  pooled = undefined;
-  await current?.client.unbind().catch(() => {});
+function live(entry: Pooled | undefined, key: string): entry is Pooled {
+  return Boolean(
+    entry && !entry.retired && entry.key === key && entry.client.isBound,
+  );
 }
 
-async function boundServiceClient(
-  settings: LdapConfig,
-): Promise<{ client: Client; reused: boolean }> {
-  const key = poolKey(settings);
-  if (pooled && pooled.key === key && pooled.client.isConnected) {
-    return { client: pooled.client, reused: true };
-  }
-  await closeDirectoryConnection();
+function retire(entry: Pooled | undefined): void {
+  if (!entry || entry.retired) return;
+  entry.retired = true;
+  if (pooled === entry) pooled = undefined;
+  // Only the last holder unbinds. A search that fails must not tear the socket
+  // out from under a sibling that is mid-`search()` on the same client — ldapts
+  // would reject that one with "connection closed before message response", so
+  // a timeout on a broad query would kill the narrow one about to succeed.
+  if (entry.inUse <= 0) void entry.client.unbind().catch(() => {});
+}
 
-  const client = await connect(settings);
-  try {
-    await client.bind(settings.bindDN, settings.bindPassword);
-  } catch (error) {
-    await client.unbind().catch(() => {});
-    throw error;
+function release(entry: Pooled, failed: boolean): void {
+  entry.inUse -= 1;
+  if (failed) retire(entry);
+  else if (entry.retired && entry.inUse <= 0) {
+    void entry.client.unbind().catch(() => {});
   }
-  pooled = { client, key };
-  return { client, reused: false };
+}
+
+/**
+ * Drop the pooled connection, waiting for it only if nobody is using it — a
+ * search still in flight unbinds it itself on the way out.
+ *
+ * Exported because the tests need each case to start from no connection (the
+ * pool outlives a `vi.mock` reset otherwise), and because it is the right thing
+ * to call on shutdown.
+ */
+export async function closeDirectoryConnection(): Promise<void> {
+  const entry = pooled;
+  if (!entry) return;
+  entry.retired = true;
+  pooled = undefined;
+  if (entry.inUse <= 0) await entry.client.unbind().catch(() => {});
+}
+
+async function acquire(
+  settings: LdapConfig,
+): Promise<{ entry: Pooled; reused: boolean }> {
+  const key = poolKey(settings);
+
+  return serialize(async () => {
+    if (live(pooled, key)) {
+      pooled.inUse += 1;
+      return { entry: pooled, reused: true };
+    }
+    retire(pooled);
+
+    const client = await connect(settings, searchTimeoutMs(settings));
+    try {
+      await client.bind(settings.bindDN, settings.bindPassword);
+    } catch (error) {
+      await client.unbind().catch(() => {});
+      throw error;
+    }
+    pooled = { key, client, inUse: 1, retired: false };
+    return { entry: pooled, reused: false };
+  });
 }
 
 /**
@@ -801,6 +900,14 @@ async function boundServiceClient(
 function isSearchTimeout(error: unknown): boolean {
   const code = (error as { code?: unknown } | null)?.code;
   return code === 3 || code === 11;
+}
+
+/** Thrown internally when a pooled client reconnected unbound mid-search. */
+class LostBindError extends Error {
+  constructor() {
+    super("service connection lost its bind mid-search");
+    this.name = "LostBindError";
+  }
 }
 
 async function searchAsService(
@@ -827,14 +934,22 @@ async function searchAsService(
   // is a real fault, and a timeout is never retried: running the same slow
   // search twice only makes the caller wait twice as long for the same answer.
   for (let attempt = 0; ; attempt += 1) {
-    const { client, reused } = await boundServiceClient(settings);
+    const { entry, reused } = await acquire(settings);
+    let failed = true;
     try {
-      const result = await client.search(settings.baseDN, options);
+      const result = await entry.client.search(settings.baseDN, options);
+      // Checked *after* the search as well as before it. `live()` closes the
+      // window where the socket was already gone at checkout; this one closes
+      // the window where it went during the search and ldapts reconnected
+      // underneath us, which returns an empty result rather than throwing.
+      if (!entry.client.isBound) throw new LostBindError();
+      failed = false;
       return result.searchEntries;
     } catch (error) {
-      await closeDirectoryConnection(client);
       if (attempt === 0 && reused && !isSearchTimeout(error)) continue;
       throw error;
+    } finally {
+      release(entry, failed);
     }
   }
 }

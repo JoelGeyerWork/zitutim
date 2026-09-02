@@ -116,6 +116,11 @@ undoing:
   connection failure, which reports an outage. Exceeding the limit is not a slow
   answer, it is no answer: ldapts tolerates `sizeLimitExceeded` when a
   `sizeLimit` was asked for and does **not** extend that to the time limit.
+  **It reaches the people search only.** `createClient` takes its budget as an
+  argument rather than reading it off the settings, and login keeps its own
+  `LOGIN_TIMEOUT_MS` / `LOGIN_TIME_LIMIT_SECONDS` — sharing them would mean
+  raising the search's budget silently stretches how long a stalled DC can hold
+  a colleague's sign-in, three times over before the throttle stops them.
 - **A timeout is not an outage.** `findPeople` throws `DirectoryTimeoutError` for
   result codes 3 (`timeLimitExceeded`) and 11 (AD's `adminLimitExceeded`), and
   the route answers **504**, not the 503 a real fault gets — the same
@@ -132,6 +137,28 @@ intermittent failure; retrying a *timeout* just makes the caller wait twice for
 the same answer. It is deliberately **not** extended to
 `findUser`/`verifyPassword`: a pooled connection is shared bind state, which is
 the exact thing the login path's two separate clients exist to avoid.
+
+Overlapping searches are the ordinary case, not an edge one — `DirectorySearch`
+debounces on the client, but an in-flight `GET /api/directory` is never aborted
+on the server — and three parts of the pool exist only because of that:
+
+- **Checkout is serialized** through one promise chain. Two searches arriving
+  together would otherwise both miss the pool, both connect and bind, and the
+  loser would be left bound and unreferenced on the DC with nothing holding a
+  handle to unbind it. Serializing costs the second caller the first one's
+  handshake, which is the wait it should have been doing anyway.
+- **A client is reused only while `isBound`, and the check is repeated after the
+  search.** ldapts reconnects transparently inside `search()` and does *not*
+  replay the bind unless `autoRebind` is set — and refuses to replay it even then
+  on a StartTLS session. An anonymous AD search answers **zero entries rather
+  than an error**, so a client that reconnected unbound would quietly report
+  "nobody by that name" for every keystroke after, with nothing thrown for the
+  retry to catch. `autoRebind` is left off on purpose: it retains the bind
+  credentials for the client's lifetime, and `createClient` is shared with the
+  login path, where those are a colleague's domain password.
+- **Only the last holder unbinds** (`inUse`). A failing search must not pull the
+  socket out from under a sibling mid-`search()`, or a timeout on a broad query
+  kills the narrow one that was about to succeed.
 
 **The directory owns identity, the app owns membership.** Adding someone is
 *picking them out of the directory*, never typing a name: the client posts a

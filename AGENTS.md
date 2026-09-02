@@ -48,5 +48,9 @@ the `fuse-overlayfs` storage driver and legacy iptables. Set it up on demand:
    container — `LDAP_URL=ldaps://localhost:1636`, `LDAP_BASE_DN=dc=test,dc=local`,
    `LDAP_BIND_DN=cn=admin,dc=test,dc=local`, `LDAP_BIND_PASSWORD=admin-password`,
    `LDAP_TLS_INSECURE=true`, `LDAP_USER_FILTER=(objectClass=inetOrgPerson)`,
-   `LDAP_LOGIN_ATTRS=uid,mail`, `LDAP_ID_ATTR=entryUUID` — and restart `npm run dev`.
+   `LDAP_LOGIN_ATTRS=uid,mail`, `LDAP_ID_ATTR=entryUUID`,
+   `LDAP_SEARCH_MODE=substring` — and restart `npm run dev`. That last one is not
+   optional against this container: the default is `anr`, which is Active
+   Directory's and which OpenLDAP does not implement, so the directory search
+   would come back empty for every query rather than reporting an error.
    Seeded users are in `ldap/bootstrap/01-people.ldif` (e.g. `dana` / `correct-horse`).

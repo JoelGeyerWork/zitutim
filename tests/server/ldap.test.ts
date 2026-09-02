@@ -53,6 +53,7 @@ const ldap = vi.hoisted(() => {
       const error =
         this.index === 0 ? state.serviceBindError : state.userBindError;
       if (error) throw error;
+      this.bound = true;
     });
 
     search = vi.fn<
@@ -68,12 +69,20 @@ const ldap = vi.hoisted(() => {
       };
     });
 
-    // The pool reuses a client only while it is connected, so the fake has to
-    // model that much: unbinding is what takes it out of circulation.
+    // The pool reuses a client only while it is still *bound*, so the fake has
+    // to model both halves the way ldapts does — `isBound` is derived, and a
+    // test can drop `bound` on its own to stand in for the reconnect ldapts
+    // performs inside `search()` without replaying the bind.
     isConnected = true;
+    bound = false;
+
+    get isBound() {
+      return this.isConnected && this.bound;
+    }
 
     unbind = vi.fn(async () => {
       this.isConnected = false;
+      this.bound = false;
     });
     startTLS = vi.fn(async () => {});
 
@@ -428,6 +437,80 @@ describe("the pooled service connection", () => {
     expect(ldap.clients).toHaveLength(2);
   });
 
+  it("builds one connection for searches that overlap", async () => {
+    // The client debounces, but an in-flight GET /api/directory is never
+    // aborted server-side, so two searches running at once is the ordinary
+    // typing pattern. Unserialized, both would miss the pool, both would bind,
+    // and the loser would be left bound and unreferenced on the DC forever.
+    const [a, b] = await Promise.all([findPeople("dan"), findPeople("dana")]);
+
+    expect(a).toEqual([]);
+    expect(b).toEqual([]);
+    expect(ldap.clients).toHaveLength(1);
+    expect(ldap.service().bind).toHaveBeenCalledTimes(1);
+    expect(ldap.service().search).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not hand out a connection that is no longer bound", async () => {
+    await findPeople("dana");
+    // ldapts reconnects inside search() without replaying the bind unless
+    // autoRebind is set, so connected is not the same as usable.
+    ldap.service().bound = false;
+
+    await findPeople("dana");
+
+    expect(ldap.clients).toHaveLength(2);
+  });
+
+  it("refuses an empty answer from a connection that lost its bind mid-search", async () => {
+    await findPeople("dana");
+    const stale = ldap.service();
+    stale.search.mockImplementationOnce(async () => {
+      // The reconnect happens underneath the search. An anonymous search
+      // against AD answers zero entries rather than throwing, so nothing here
+      // would otherwise reach the retry — and every later keystroke would stay
+      // anonymous on a client that still looks connected.
+      stale.bound = false;
+      return { searchEntries: [], searchReferences: [] };
+    });
+    ldap.state.searchEntries = [ENTRY];
+
+    const people = await findPeople("dana");
+
+    expect(people).toHaveLength(1);
+    expect(ldap.clients).toHaveLength(2);
+  });
+
+  it("does not tear down a connection a sibling search is still using", async () => {
+    await findPeople("dana");
+    const client = ldap.service();
+
+    let unblock = () => {};
+    const gate = new Promise<void>((resolve) => {
+      unblock = resolve;
+    });
+
+    client.search
+      .mockImplementationOnce(async () => {
+        await gate;
+        // What ldapts would raise if the socket had been pulled from under it.
+        if (!client.isConnected) throw new Error("connection closed");
+        return { searchEntries: [ENTRY], searchReferences: [] };
+      })
+      .mockImplementationOnce(async () => {
+        throw Object.assign(new Error("limit exceeded"), { code: 3 });
+      });
+
+    const slow = findPeople("dana");
+    const failing = findPeople("dan");
+
+    await expect(failing).rejects.toMatchObject({
+      name: "DirectoryTimeoutError",
+    });
+    unblock();
+    await expect(slow).resolves.toHaveLength(1);
+  });
+
   it("never pools the login path's clients", async () => {
     ldap.state.searchEntries = [ENTRY];
 
@@ -692,11 +775,25 @@ describe("authenticate", () => {
     expect(ldap.service().options).toMatchObject({
       url: "ldaps://dc.test.local:636",
       connectTimeout: 5_000,
-      // Five seconds above the default 30s timeLimit: the socket has to outlive
-      // the server-side limit, or a timeout reports as a connection failure.
-      timeout: 35_000,
+      timeout: 10_000,
     });
-    expect(ldap.service().search.mock.calls[0]![1].timeLimit).toBe(30);
+    expect(ldap.service().search.mock.calls[0]![1].timeLimit).toBe(5);
+  });
+
+  // LDAP_TIMEOUT_SECONDS exists because the *people search* needed longer than
+  // the 5 seconds this file started with. Signing in is the case those 5 seconds
+  // were chosen for, so it must not inherit the larger budget: a DC that
+  // completes TLS and then stalls would otherwise hold a colleague's sign-in for
+  // the whole of it, three times over before the throttle stops them.
+  it("does not let LDAP_TIMEOUT_SECONDS stretch the login path", async () => {
+    vi.stubEnv("LDAP_TIMEOUT_SECONDS", "120");
+    ldap.state.searchEntries = [ENTRY];
+
+    await authenticate("dana", "correct-horse");
+
+    expect(ldap.service().options).toMatchObject({ timeout: 10_000 });
+    expect(ldap.user().options).toMatchObject({ timeout: 10_000 });
+    expect(ldap.service().search.mock.calls[0]![1].timeLimit).toBe(5);
   });
 
   describe("against a non-AD directory", () => {
