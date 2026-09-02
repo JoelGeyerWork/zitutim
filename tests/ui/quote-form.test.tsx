@@ -4,7 +4,9 @@ import { toast } from "sonner";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { QuoteForm } from "@/components/quote-form";
-import { makeQuote, respondWith } from "./factories";
+import { SessionProvider } from "@/components/session-provider";
+import type { Member } from "@/lib/team";
+import { jsonResponse, makeQuote, makeSessionUser } from "./factories";
 
 // The factory must be self-contained — vi.mock is hoisted above the imports.
 vi.mock("sonner", () => ({
@@ -12,19 +14,70 @@ vi.mock("sonner", () => ({
 }));
 
 const push = vi.hoisted(() => vi.fn());
-vi.mock("next/navigation", () => ({ useRouter: () => ({ push }) }));
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ push }),
+  usePathname: () => "/quotes/create",
+}));
+
+/** The team, as the create page hands it down — the picker's fast path. */
+const ROSTER: Member[] = [
+  { id: "6b0000000000000000000011", name: "מאיה גלעד", role: "עיצוב מוצר", gender: "f" },
+  { id: "6b0000000000000000000012", name: "יונתן כץ", role: "שרת", gender: "m" },
+];
+
+const ROI = {
+  directoryId: "guid-roi",
+  displayName: "רועי אשכנזי",
+  title: "אבטחת מידע",
+  username: "roi.ashkenazi",
+};
 
 let fetchMock: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
-  fetchMock = vi.fn().mockImplementation(respondWith(makeQuote(), 201));
+  push.mockClear();
+  fetchMock = vi.fn(async (url: string) =>
+    String(url).startsWith("/api/directory")
+      ? jsonResponse({ people: [ROI] })
+      : jsonResponse(makeQuote(), 201),
+  );
   vi.stubGlobal("fetch", fetchMock);
 });
+
+/**
+ * Signed in and holding the roster, which is how the create page renders it.
+ * The session is what the directory search needs — `GET /api/directory` is the
+ * one read here that refuses to answer anonymously.
+ */
+function renderForm(props: Partial<Parameters<typeof QuoteForm>[0]> = {}) {
+  const user = userEvent.setup();
+  render(
+    <SessionProvider user={makeSessionUser()}>
+      <QuoteForm roster={ROSTER} {...props} />
+    </SessionProvider>,
+  );
+  return user;
+}
+
+/** Pick a name out of the "מי אמר?" row. */
+async function pickAuthor(
+  user: ReturnType<typeof userEvent.setup>,
+  name: string,
+) {
+  await user.click(screen.getByRole("button", { name, pressed: false }));
+}
+
+/** Whoever the row currently has picked, or undefined. */
+function pickedAuthor(): string | undefined {
+  return screen
+    .queryAllByRole("button", { pressed: true })
+    .map((button) => button.textContent ?? "")[0];
+}
 
 /** Fills the required fields; the date input defaults to today already. */
 async function fillRequired(user: ReturnType<typeof userEvent.setup>) {
   await user.type(screen.getByLabelText(/מה נאמר/), "משהו שנאמר");
-  await user.type(screen.getByLabelText(/מי אמר/), "דנה");
+  await pickAuthor(user, "מאיה גלעד");
 }
 
 function lastRequest() {
@@ -34,7 +87,7 @@ function lastRequest() {
 
 describe("QuoteForm — creating", () => {
   it("defaults the date to today", () => {
-    render(<QuoteForm />);
+    renderForm();
     const today = new Date();
     const expected = new Date(
       today.getTime() - today.getTimezoneOffset() * 60_000,
@@ -45,8 +98,7 @@ describe("QuoteForm — creating", () => {
   });
 
   it("POSTs the filled values to /api/quotes", async () => {
-    const user = userEvent.setup();
-    render(<QuoteForm />);
+    const user = renderForm();
     await fillRequired(user);
     await user.click(screen.getByRole("button", { name: "הוספה לקיר" }));
 
@@ -54,12 +106,15 @@ describe("QuoteForm — creating", () => {
     const { url, init, body } = lastRequest();
     expect(url).toBe("/api/quotes");
     expect(init.method).toBe("POST");
-    expect(body).toMatchObject({ text: "משהו שנאמר", author: "דנה" });
+    expect(body).toMatchObject({
+      text: "משהו שנאמר",
+      // A reference, never a name the client typed — the server resolves it.
+      author: { source: "user", id: ROSTER[0].id },
+    });
   });
 
   it("blocks submission and names the missing fields in Hebrew", async () => {
-    const user = userEvent.setup();
-    render(<QuoteForm />);
+    const user = renderForm();
     await user.click(screen.getByRole("button", { name: "הוספה לקיר" }));
 
     expect(fetchMock).not.toHaveBeenCalled();
@@ -68,26 +123,24 @@ describe("QuoteForm — creating", () => {
   });
 
   it("clears a field's error as soon as it is edited", async () => {
-    const user = userEvent.setup();
-    render(<QuoteForm />);
+    const user = renderForm();
     await user.click(screen.getByRole("button", { name: "הוספה לקיר" }));
     expect(await screen.findByText("צריך לציין מי אמר")).toBeInTheDocument();
 
-    await user.type(screen.getByLabelText(/מי אמר/), "ד");
+    await pickAuthor(user, "יונתן כץ");
     expect(screen.queryByText("צריך לציין מי אמר")).not.toBeInTheDocument();
     expect(screen.getByText("צריך לכתוב מה נאמר")).toBeInTheDocument();
   });
 
   it("renders server-side field errors from a 422", async () => {
-    fetchMock.mockImplementation(
-      respondWith(
+    fetchMock.mockImplementation(async () =>
+      jsonResponse(
         { error: "יש שדות לא תקינים", issues: { saidAt: "התאריך בעתיד" } },
         422,
       ),
     );
 
-    const user = userEvent.setup();
-    render(<QuoteForm />);
+    const user = renderForm();
     await fillRequired(user);
     await user.click(screen.getByRole("button", { name: "הוספה לקיר" }));
 
@@ -95,24 +148,22 @@ describe("QuoteForm — creating", () => {
   });
 
   it("resets the fields after a successful save", async () => {
-    const user = userEvent.setup();
-    render(<QuoteForm />);
+    const user = renderForm();
     await fillRequired(user);
     await user.click(screen.getByRole("button", { name: "הוספה לקיר" }));
 
     await waitFor(() =>
       expect(screen.getByLabelText(/מה נאמר/)).toHaveValue(""),
     );
-    expect(screen.getByLabelText(/מי אמר/)).toHaveValue("");
+    expect(pickedAuthor()).toBeUndefined();
   });
 
   it("hands the saved quote to onSuccess", async () => {
     const onSuccess = vi.fn();
     const saved = makeQuote({ id: "6a000000000000000000000f" });
-    fetchMock.mockImplementation(respondWith(saved, 201));
+    fetchMock.mockImplementation(async () => jsonResponse(saved, 201));
 
-    const user = userEvent.setup();
-    render(<QuoteForm onSuccess={onSuccess} />);
+    const user = renderForm({ onSuccess });
     await fillRequired(user);
     await user.click(screen.getByRole("button", { name: "הוספה לקיר" }));
 
@@ -125,10 +176,9 @@ describe("QuoteForm — creating", () => {
 
   it("does not call onSuccess when the request fails", async () => {
     const onSuccess = vi.fn();
-    fetchMock.mockImplementation(respondWith({ error: "נפל" }, 500));
+    fetchMock.mockImplementation(async () => jsonResponse({ error: "נפל" }, 500));
 
-    const user = userEvent.setup();
-    render(<QuoteForm onSuccess={onSuccess} />);
+    const user = renderForm({ onSuccess });
     await fillRequired(user);
     await user.click(screen.getByRole("button", { name: "הוספה לקיר" }));
 
@@ -137,11 +187,9 @@ describe("QuoteForm — creating", () => {
   });
 
   it("survives the network being down", async () => {
-    fetchMock.mockRejectedValue(new Error("offline"));
-
-    const user = userEvent.setup();
-    render(<QuoteForm />);
+    const user = renderForm();
     await fillRequired(user);
+    fetchMock.mockRejectedValue(new Error("offline"));
     await user.click(screen.getByRole("button", { name: "הוספה לקיר" }));
 
     // Still interactive, values intact, ready for a retry.
@@ -153,8 +201,7 @@ describe("QuoteForm — creating", () => {
   });
 
   it("confirms the save with a toast", async () => {
-    const user = userEvent.setup();
-    render(<QuoteForm />);
+    const user = renderForm();
     await fillRequired(user);
     await user.click(screen.getByRole("button", { name: "הוספה לקיר" }));
 
@@ -164,10 +211,109 @@ describe("QuoteForm — creating", () => {
   });
 });
 
+describe("QuoteForm — who said it", () => {
+  it("offers the team without asking the directory anything", () => {
+    renderForm();
+
+    for (const member of ROSTER) {
+      expect(
+        screen.getByRole("button", { name: member.name }),
+      ).toBeInTheDocument();
+    }
+    // The fast path is the whole point: no network for a name already on hand.
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("names somebody found in the directory, by reference", async () => {
+    const user = renderForm();
+    await user.type(screen.getByLabelText(/מה נאמר/), "משהו שנאמר");
+    await user.click(
+      screen.getByRole("button", { name: /חיפוש בספריית הארגון/ }),
+    );
+    await user.type(screen.getByLabelText(/חיפוש בספריית הארגון/), "רועי");
+
+    await user.click(await screen.findByRole("button", { name: "בחירה" }));
+    // The pick becomes the answer, and the search closes behind it. Base UI's
+    // Select used to drop it here — it clears a controlled value that is not
+    // among its registered items, which a freshly appended person never is.
+    expect(pickedAuthor()).toBe(ROI.displayName);
+
+    await user.click(screen.getByRole("button", { name: "הוספה לקיר" }));
+    await waitFor(() =>
+      expect(lastRequest().body.author).toEqual({
+        source: "directory",
+        id: ROI.directoryId,
+      }),
+    );
+  });
+
+  it("still takes a name typed by hand, for a speaker outside the organisation", async () => {
+    const user = renderForm();
+    await user.type(screen.getByLabelText(/מה נאמר/), "משהו שנאמר");
+    await user.click(screen.getByRole("button", { name: /כתיבת שם/ }));
+    await user.type(screen.getByLabelText(/מי אמר/), "שירה מהלקוח");
+
+    await user.click(screen.getByRole("button", { name: "הוספה לקיר" }));
+    await waitFor(() =>
+      expect(lastRequest().body.author).toEqual({
+        source: "name",
+        name: "שירה מהלקוח",
+      }),
+    );
+  });
+
+  it("keeps the pick through a re-render of the row", async () => {
+    // The regression this row exists for: picking, then anything that changes
+    // the list of names, must not quietly clear the answer.
+    const user = renderForm();
+    await pickAuthor(user, "מאיה גלעד");
+
+    await user.click(
+      screen.getByRole("button", { name: /חיפוש בספריית הארגון/ }),
+    );
+    await user.type(screen.getByLabelText(/חיפוש בספריית הארגון/), "רועי");
+    await screen.findByRole("button", { name: "בחירה" });
+
+    expect(pickedAuthor()).toBe("מאיה גלעד");
+  });
+
+  it("carries a picked name over when switching to typing it", async () => {
+    const user = renderForm();
+    await pickAuthor(user, "מאיה גלעד");
+    await user.click(screen.getByRole("button", { name: /כתיבת שם/ }));
+
+    expect(screen.getByLabelText(/מי אמר/)).toHaveValue("מאיה גלעד");
+  });
+
+  it("opens on the search when there is nobody to offer", async () => {
+    // An unseeded rotation: hiding the search behind a link would leave an
+    // empty select as the entire field.
+    renderForm({ roster: [] });
+    expect(
+      screen.getByLabelText("חיפוש בספריית הארגון"),
+    ).toBeInTheDocument();
+  });
+
+  it("sends a signed-out reader to log in rather than searching", () => {
+    // The search is the one control here that is gated on the session, because
+    // `GET /api/directory` would 401 on every keystroke.
+    render(
+      <SessionProvider user={null}>
+        <QuoteForm roster={[]} />
+      </SessionProvider>,
+    );
+
+    expect(screen.queryByLabelText("חיפוש בספריית הארגון")).toBeNull();
+    expect(screen.getByRole("link", { name: "כניסה" })).toHaveAttribute(
+      "href",
+      "/login?next=%2Fquotes%2Fcreate",
+    );
+  });
+});
+
 describe("QuoteForm — attribution", () => {
   it("never sends addedBy: the server takes it from the session", async () => {
-    const user = userEvent.setup();
-    render(<QuoteForm />);
+    const user = renderForm();
     await fillRequired(user);
     await user.click(screen.getByRole("button", { name: "הוספה לקיר" }));
 
@@ -176,19 +322,18 @@ describe("QuoteForm — attribution", () => {
   });
 
   it("has no submitter field to fill in", () => {
-    render(<QuoteForm />);
+    renderForm();
     expect(screen.queryByLabelText(/מי מוסיף/)).not.toBeInTheDocument();
   });
 
   it("sends the user to login when the session has lapsed", async () => {
+    const user = renderForm();
+    await fillRequired(user);
     // Sitting on the form for eight hours and then saving must not just say
     // "failed" — there is something the user can do about it.
-    fetchMock.mockImplementation(
-      respondWith({ error: "צריך להתחבר כדי לשנות משהו כאן" }, 401),
+    fetchMock.mockImplementation(async () =>
+      jsonResponse({ error: "צריך להתחבר כדי לשנות משהו כאן" }, 401),
     );
-    const user = userEvent.setup();
-    render(<QuoteForm />);
-    await fillRequired(user);
     await user.click(screen.getByRole("button", { name: "הוספה לקיר" }));
 
     await waitFor(() =>
@@ -200,20 +345,42 @@ describe("QuoteForm — attribution", () => {
 
 describe("QuoteForm — editing", () => {
   const quote = makeQuote({ context: "לפני הריטרו", addedBy: "יואל" });
+  /** The same quote, said by somebody the app holds a row for. */
+  const picked = makeQuote({
+    author: "מאיה גלעד",
+    authorId: ROSTER[0].id,
+    context: "לפני הריטרו",
+  });
+
+  /** The edit dialog passes no roster: the quote's own author is the answer. */
+  function renderEdit(subject = quote, props = {}) {
+    const user = userEvent.setup();
+    render(
+      <SessionProvider user={makeSessionUser()}>
+        <QuoteForm quote={subject} {...props} />
+      </SessionProvider>,
+    );
+    return user;
+  }
 
   it("pre-fills every field from the quote", () => {
-    render(<QuoteForm quote={quote} />);
+    renderEdit();
 
     expect(screen.getByLabelText(/מה נאמר/)).toHaveValue(quote.text);
+    // No `authorId` on this one, so the stored name is what is being edited.
     expect(screen.getByLabelText(/מי אמר/)).toHaveValue("דנה");
     expect(screen.getByLabelText(/מתי/)).toHaveValue("2026-07-28");
     expect(screen.getByLabelText(/הקשר/)).toHaveValue("לפני הריטרו");
   });
 
+  it("starts on the person a quote already points at", () => {
+    renderEdit(picked);
+    expect(pickedAuthor()).toBe("מאיה גלעד");
+  });
+
   it("PUTs to the quote's own endpoint", async () => {
-    const user = userEvent.setup();
-    fetchMock.mockImplementation(respondWith(quote));
-    render(<QuoteForm quote={quote} />);
+    const user = renderEdit();
+    fetchMock.mockImplementation(async () => jsonResponse(quote));
 
     await user.clear(screen.getByLabelText(/מה נאמר/));
     await user.type(screen.getByLabelText(/מה נאמר/), "ניסוח מתוקן");
@@ -224,12 +391,14 @@ describe("QuoteForm — editing", () => {
     expect(url).toBe(`/api/quotes/${quote.id}`);
     expect(init.method).toBe("PUT");
     expect(body.text).toBe("ניסוח מתוקן");
+    // A quote with no id keeps its name as a name: it may be somebody the
+    // directory cannot answer for, and a typo fix must not demand otherwise.
+    expect(body.author).toEqual({ source: "name", name: "דנה" });
   });
 
   it("keeps the edited values on screen after saving", async () => {
-    const user = userEvent.setup();
-    fetchMock.mockImplementation(respondWith(quote));
-    render(<QuoteForm quote={quote} />);
+    const user = renderEdit();
+    fetchMock.mockImplementation(async () => jsonResponse(quote));
 
     await user.click(screen.getByRole("button", { name: "שמירת שינויים" }));
     await waitFor(() => expect(fetchMock).toHaveBeenCalled());
@@ -238,11 +407,15 @@ describe("QuoteForm — editing", () => {
 
   it("shows a cancel button only when a handler is given", async () => {
     const onCancel = vi.fn();
-    const { rerender } = render(<QuoteForm quote={quote} />);
+    const user = renderEdit();
     expect(screen.queryByRole("button", { name: "ביטול" })).toBeNull();
 
-    rerender(<QuoteForm quote={quote} onCancel={onCancel} />);
-    await userEvent.setup().click(screen.getByRole("button", { name: "ביטול" }));
+    render(
+      <SessionProvider user={makeSessionUser()}>
+        <QuoteForm quote={quote} onCancel={onCancel} />
+      </SessionProvider>,
+    );
+    await user.click(screen.getAllByRole("button", { name: "ביטול" })[0]);
     expect(onCancel).toHaveBeenCalledOnce();
   });
 });

@@ -6,7 +6,7 @@ import { getDb } from "@/lib/mongodb";
 import { ObjectId } from "mongodb";
 import { createQuote, type QuoteActor } from "@/lib/quotes";
 import type { QuoteValues } from "@/lib/quote-schema";
-import { TEST_USER, sessionCookie } from "./factories";
+import { TEST_USER, nameRef, namedAuthor, sessionCookie } from "./factories";
 
 const sendMailMock = vi.hoisted(() => vi.fn());
 
@@ -33,14 +33,26 @@ const MAIL_ENV = [
 
 let saved: Record<string, string | undefined>;
 
-function input(overrides: Partial<QuoteValues> = {}): QuoteValues {
+/** `author` is a plain name — the arm that needs neither a row nor a directory. */
+type Overrides = Partial<Omit<QuoteValues, "author">> & { author?: string };
+
+function input({ author = "דנה", ...rest }: Overrides = {}): QuoteValues {
   return {
     text: "תמיד יש זמן לעוד קפה אחד",
-    author: "דנה",
+    author: nameRef(author),
     saidAt: "2026-07-28",
     context: null,
-    ...overrides,
+    ...rest,
   };
+}
+
+/** A stored quote, straight through the data layer. */
+function store(overrides: Overrides = {}) {
+  return createQuote(
+    input(overrides),
+    namedAuthor(overrides.author ?? "דנה"),
+    ACTOR,
+  );
 }
 
 async function send(
@@ -100,7 +112,7 @@ afterEach(() => {
 
 describe("POST /api/quotes/[id]/send", () => {
   it("mails the quote to the configured list", async () => {
-    const quote = await createQuote(input(), ACTOR);
+    const quote = await store();
 
     const response = await send(quote.id);
     expect(response.status).toBe(200);
@@ -122,7 +134,7 @@ describe("POST /api/quotes/[id]/send", () => {
     // The route's own lookup, which the MIME tests cannot reach: they pass
     // replyTo in by hand, so nothing proved getUserMail was actually wired.
     await storeMail("dana@test.local");
-    const quote = await createQuote(input(), ACTOR);
+    const quote = await store();
 
     expect((await send(quote.id)).status).toBe(200);
     expect(sendMailMock.mock.calls[0][0].replyTo).toBe("dana@test.local");
@@ -133,7 +145,7 @@ describe("POST /api/quotes/[id]/send", () => {
     // it emits it — a malformed Reply-To a strict relay may bounce the message
     // over, for a reply address that could never have worked anyway.
     await storeMail("Dana Cohen");
-    const quote = await createQuote(input(), ACTOR);
+    const quote = await store();
 
     expect((await send(quote.id)).status).toBe(200);
     expect(sendMailMock.mock.calls[0][0].replyTo).toBeUndefined();
@@ -141,14 +153,14 @@ describe("POST /api/quotes/[id]/send", () => {
 
   it("sends with no Reply-To for someone who has never signed in", async () => {
     // The rotation editor creates a `users` row without a mail attribute.
-    const quote = await createQuote(input(), ACTOR);
+    const quote = await store();
 
     expect((await send(quote.id)).status).toBe(200);
     expect(sendMailMock.mock.calls[0][0].replyTo).toBeUndefined();
   });
 
   it("refuses a cross-site request before anything else", async () => {
-    const quote = await createQuote(input(), ACTOR);
+    const quote = await store();
 
     const response = await send(quote.id, { origin: "https://evil.example" });
     expect(response.status).toBe(403);
@@ -156,7 +168,7 @@ describe("POST /api/quotes/[id]/send", () => {
   });
 
   it("refuses an anonymous caller", async () => {
-    const quote = await createQuote(input(), ACTOR);
+    const quote = await store();
 
     const response = await send(quote.id, { cookie: null });
     expect(response.status).toBe(401);
@@ -177,7 +189,7 @@ describe("POST /api/quotes/[id]/send", () => {
 
   it("builds but does not send under MAIL_DRY_RUN", async () => {
     process.env.MAIL_DRY_RUN = "true";
-    const quote = await createQuote(input(), ACTOR);
+    const quote = await store();
 
     const response = await send(quote.id);
     expect(response.status).toBe(200);
@@ -192,7 +204,7 @@ describe("POST /api/quotes/[id]/send", () => {
     // The distinction sends whoever investigates to .env.local rather than to
     // a mail server where nothing is wrong.
     delete process.env.SMTP_HOST;
-    const quote = await createQuote(input(), ACTOR);
+    const quote = await store();
 
     const response = await send(quote.id);
     expect(response.status).toBe(500);
@@ -200,7 +212,7 @@ describe("POST /api/quotes/[id]/send", () => {
 
   it("answers 503 when the relay will not take it", async () => {
     sendMailMock.mockRejectedValue(new Error("ECONNREFUSED"));
-    const quote = await createQuote(input(), ACTOR);
+    const quote = await store();
 
     const response = await send(quote.id);
     expect(response.status).toBe(503);

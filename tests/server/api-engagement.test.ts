@@ -14,7 +14,7 @@ import { getDb } from "@/lib/mongodb";
 import { createQuote, type QuoteActor } from "@/lib/quotes";
 import type { QuoteComment } from "@/lib/engagement-schema";
 import type { SessionUser } from "@/lib/auth-schema";
-import { authedRequest, TEST_USER } from "./factories";
+import { TEST_USER, authedRequest, nameRef, namedAuthor } from "./factories";
 
 const BASE = "http://localhost:3000/api/quotes";
 const ACTOR: QuoteActor = { id: TEST_USER.id, name: TEST_USER.name };
@@ -67,10 +67,11 @@ async function createTestQuote() {
   return createQuote(
     {
       text: "תמיד יש זמן לעוד קפה אחד",
-      author: "דנה",
+      author: nameRef("דנה"),
       saidAt: "2026-07-28",
       context: null,
     },
+    namedAuthor("דנה"),
     ACTOR,
   );
 }

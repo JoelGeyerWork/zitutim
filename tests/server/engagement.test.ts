@@ -17,6 +17,7 @@ import {
   type QuoteActor,
 } from "@/lib/quotes";
 import type { QuoteValues } from "@/lib/quote-schema";
+import { nameRef, namedAuthor } from "./factories";
 
 const DANA: QuoteActor = {
   id: "6b0000000000000000000001",
@@ -29,10 +30,13 @@ const NOA: QuoteActor = {
 
 const QUOTE_INPUT: QuoteValues = {
   text: "תמיד יש זמן לעוד קפה אחד",
-  author: "דנה",
+  author: nameRef("דנה"),
   saidAt: "2026-07-28",
   context: null,
 };
+
+/** The resolved half of `QUOTE_INPUT.author` — see `nameRef`. */
+const QUOTE_AUTHOR = namedAuthor("דנה");
 
 async function insertUser(actor: QuoteActor) {
   const now = new Date("2026-08-20T09:00:00.000Z");
@@ -69,7 +73,7 @@ afterEach(() => {
 
 describe("quote likes", () => {
   it("sets a desired like state idempotently and toggles it off", async () => {
-    const quote = await createQuote(QUOTE_INPUT, DANA);
+    const quote = await createQuote(QUOTE_INPUT, QUOTE_AUTHOR, DANA);
 
     await expect(setQuoteLike(quote.id, DANA.id, true)).resolves.toEqual({
       likeCount: 1,
@@ -92,7 +96,7 @@ describe("quote likes", () => {
   });
 
   it("keeps one database row under concurrent like requests", async () => {
-    const quote = await createQuote(QUOTE_INPUT, DANA);
+    const quote = await createQuote(QUOTE_INPUT, QUOTE_AUTHOR, DANA);
 
     await Promise.all(
       Array.from({ length: 8 }, () =>
@@ -110,7 +114,7 @@ describe("quote likes", () => {
   });
 
   it("includes counts and the current viewer state in quote reads", async () => {
-    const quote = await createQuote(QUOTE_INPUT, DANA);
+    const quote = await createQuote(QUOTE_INPUT, QUOTE_AUTHOR, DANA);
     await setQuoteLike(quote.id, DANA.id, true);
     await setQuoteLike(quote.id, NOA.id, true);
 
@@ -142,7 +146,7 @@ describe("quote likes", () => {
 
 describe("quote comments", () => {
   it("lists comments oldest first and resolves the current users name", async () => {
-    const quote = await createQuote(QUOTE_INPUT, DANA);
+    const quote = await createQuote(QUOTE_INPUT, QUOTE_AUTHOR, DANA);
     const first = await createComment(quote.id, { text: "ראשונה" }, DANA.id);
     await createComment(quote.id, { text: "שנייה" }, NOA.id);
 
@@ -164,7 +168,7 @@ describe("quote comments", () => {
   });
 
   it("edits and deletes only for the original author", async () => {
-    const quote = await createQuote(QUOTE_INPUT, DANA);
+    const quote = await createQuote(QUOTE_INPUT, QUOTE_AUTHOR, DANA);
     const comment = await createComment(
       quote.id,
       { text: "תגובה מקורית" },
@@ -200,7 +204,7 @@ describe("quote comments", () => {
   });
 
   it("returns not_found for malformed and missing comment ids", async () => {
-    const quote = await createQuote(QUOTE_INPUT, DANA);
+    const quote = await createQuote(QUOTE_INPUT, QUOTE_AUTHOR, DANA);
     await expect(
       updateComment(quote.id, "bad-id", { text: "טקסט" }, DANA.id),
     ).resolves.toEqual({ status: "not_found" });
@@ -213,7 +217,7 @@ describe("quote comments", () => {
   });
 
   it("does not edit or delete orphaned comments after their quote is gone", async () => {
-    const quote = await createQuote(QUOTE_INPUT, DANA);
+    const quote = await createQuote(QUOTE_INPUT, QUOTE_AUTHOR, DANA);
     const comment = await createComment(
       quote.id,
       { text: "תגובה מקורית" },
@@ -242,7 +246,7 @@ describe("quote comments", () => {
   });
 
   it("does not report a successful edit when the quote is deleted during the write", async () => {
-    const quote = await createQuote(QUOTE_INPUT, DANA);
+    const quote = await createQuote(QUOTE_INPUT, QUOTE_AUTHOR, DANA);
     const comment = await createComment(
       quote.id,
       { text: "תגובה מקורית" },
@@ -276,7 +280,7 @@ describe("quote comments", () => {
   });
 
   it("does not report a successful delete when the quote is deleted concurrently", async () => {
-    const quote = await createQuote(QUOTE_INPUT, DANA);
+    const quote = await createQuote(QUOTE_INPUT, QUOTE_AUTHOR, DANA);
     const comment = await createComment(
       quote.id,
       { text: "תגובה מקורית" },
@@ -300,7 +304,7 @@ describe("quote comments", () => {
   });
 
   it("previews only the latest two, in chronological order with id ties", async () => {
-    const quote = await createQuote(QUOTE_INPUT, DANA);
+    const quote = await createQuote(QUOTE_INPUT, QUOTE_AUTHOR, DANA);
     const db = await getDb();
     const createdAt = new Date("2026-08-20T10:00:00.000Z");
     await db.collection("quote_comments").insertMany(
@@ -322,7 +326,7 @@ describe("quote comments", () => {
   });
 
   it("removes likes and comments when deleting a quote", async () => {
-    const quote = await createQuote(QUOTE_INPUT, DANA);
+    const quote = await createQuote(QUOTE_INPUT, QUOTE_AUTHOR, DANA);
     await setQuoteLike(quote.id, DANA.id, true);
     await createComment(quote.id, { text: "למחיקה" }, DANA.id);
 

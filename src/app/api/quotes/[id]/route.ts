@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-import { fieldErrors } from "@/lib/api";
+import { fieldErrors, personFailureResponse } from "@/lib/api";
 import {
   forbiddenResponse,
   getSessionFrom,
@@ -11,10 +11,14 @@ import {
   deleteQuote,
   getQuote,
   quoteInputSchema,
+  resolveQuoteAuthor,
   updateQuote,
 } from "@/lib/quotes";
 
 export const dynamic = "force-dynamic";
+
+/** A reference naming nobody is bad input, and it is this field that is wrong. */
+const UNKNOWN_AUTHOR = "לא מצאנו את מי שנבחר";
 
 type Params = { params: Promise<{ id: string }> };
 
@@ -55,7 +59,13 @@ export async function PUT(request: Request, { params }: Params) {
   }
 
   try {
-    const quote = await updateQuote(id, parsed.data, {
+    // As in POST: the reference becomes a name, and an id when there is one.
+    const author = await resolveQuoteAuthor(parsed.data.author);
+    if (!author.ok) {
+      return personFailureResponse(author.reason, "author", UNKNOWN_AUTHOR);
+    }
+
+    const quote = await updateQuote(id, parsed.data, author.author, {
       id: session.id,
       name: session.name,
     });

@@ -10,12 +10,14 @@ import {
 import { deleteQuoteEngagement } from "@/lib/engagement";
 import type { QuoteComment } from "@/lib/engagement-schema";
 import { getDb } from "@/lib/mongodb";
+import { resolvePeople, type PersonFailure } from "@/lib/people";
 import {
   PAGE_SIZE,
   QUOTE_GAME_LENGTH,
   QUOTE_GAME_OPTION_COUNT,
   shuffled,
   type Quote,
+  type QuoteAuthorRef,
   type QuoteGameRound,
   type QuotePage,
   type QuoteValues,
@@ -32,11 +34,64 @@ export interface QuoteActor {
   name: string;
 }
 
+/**
+ * Whoever said it, resolved to what the document stores.
+ *
+ * The route hands this in already resolved — the same division the שוטף review
+ * route draws with `member`: a schema only knows that the body *names*
+ * somebody, and turning that into a person is a step of its own.
+ */
+export interface QuoteAuthor {
+  /** `users._id` as a hex string, or null for a name that was typed. */
+  id: string | null;
+  /** What the card renders and the search matches. */
+  name: string;
+}
+
+export type QuoteAuthorResolution =
+  | { ok: true; author: QuoteAuthor }
+  | { ok: false; reason: PersonFailure };
+
+/**
+ * Turn what the form said about the speaker into the name and id to store.
+ *
+ * A typed name resolves to itself, and that arm deliberately reaches nothing:
+ * no directory, no `users` row, not even a database round trip. It is the
+ * escape hatch for a speaker the organisation cannot answer for, so making it
+ * depend on the organisation answering would defeat it.
+ *
+ * The other two arms are `resolvePeople`'s, unchanged — including its rule that
+ * a `user` reference never opens an LDAP connection, so quoting a teammate the
+ * app already knows keeps working with no domain controller on the network.
+ */
+export async function resolveQuoteAuthor(
+  ref: QuoteAuthorRef,
+): Promise<QuoteAuthorResolution> {
+  if (ref.source === "name") {
+    return { ok: true, author: { id: null, name: ref.name } };
+  }
+
+  const resolution = await resolvePeople([ref]);
+  if (!resolution.ok) return { ok: false, reason: resolution.reason };
+
+  const person = resolution.people[0]!;
+  return { ok: true, author: { id: person.id, name: person.name } };
+}
+
 /** Shape stored in MongoDB. */
 export interface QuoteDoc {
   _id: ObjectId;
   text: string;
+  /**
+   * The speaker's name, snapshotted like `addedBy` and for the same reason: it
+   * is rendered directly, regex-searched, sorted on, and `distinct`ed for the
+   * game. Resolving it through `authorId` would need a $lookup on every one of
+   * those, and would leave the quotes that have no id — a typed name, anything
+   * from before the picker — with nothing to render.
+   */
   author: string;
+  /** The `users` row behind that name, when there is one. See `Quote.authorId`. */
+  authorId: ObjectId | null;
   /** When the quote was said. Stored as a UTC date at midnight. */
   saidAt: Date;
   /** Optional colour: where it happened, what prompted it. */
@@ -103,6 +158,8 @@ function serialize(doc: QuoteDoc | QuoteAggregateDoc): Quote {
     id: doc._id.toHexString(),
     text: doc.text,
     author: doc.author,
+    // Absent entirely on every quote stored before the author became a pick.
+    authorId: doc.authorId?.toHexString() ?? null,
     saidAt: doc.saidAt.toISOString(),
     context: doc.context,
     addedBy: doc.addedBy,
@@ -381,13 +438,17 @@ export async function getQuoteGame(
  */
 export async function createQuote(
   input: QuoteValues,
+  author: QuoteAuthor,
   actor: QuoteActor,
 ): Promise<Quote> {
   const collection = await quotes();
   const now = new Date();
   const doc: Omit<QuoteDoc, "_id"> = {
     text: input.text,
-    author: input.author,
+    // `input.author` is a reference; the resolved one is the argument, exactly
+    // as the שוטף review route hands its `member` in.
+    author: author.name,
+    authorId: author.id ? new ObjectId(author.id) : null,
     saidAt: new Date(input.saidAt),
     context: input.context,
     addedBy: actor.name,
@@ -411,6 +472,7 @@ export async function createQuote(
 export async function updateQuote(
   id: string,
   input: QuoteValues,
+  author: QuoteAuthor,
   actor: QuoteActor,
 ): Promise<Quote | null> {
   if (!ObjectId.isValid(id)) return null;
@@ -421,7 +483,8 @@ export async function updateQuote(
     {
       $set: {
         text: input.text,
-        author: input.author,
+        author: author.name,
+        authorId: author.id ? new ObjectId(author.id) : null,
         saidAt: new Date(input.saidAt),
         context: input.context,
         updatedBy: actor.name,
