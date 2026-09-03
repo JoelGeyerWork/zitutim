@@ -4,7 +4,9 @@ import { quoteInputSchema } from "@/lib/quote-schema";
 
 const valid = {
   text: "תמיד יש זמן לעוד קפה אחד",
-  author: "דנה",
+  // The form names a person rather than typing one wherever it can; a plain
+  // name is the third arm, for a speaker the organisation cannot answer for.
+  author: { source: "name", name: "דנה" },
   saidAt: "2026-07-28",
   context: "לפני הריטרו",
   addedBy: "יואל",
@@ -20,10 +22,29 @@ describe("quoteInputSchema", () => {
     const parsed = quoteInputSchema.parse({
       ...valid,
       text: "  יש רווחים  ",
-      author: "  דנה  ",
+      author: { source: "name", name: "  דנה  " },
     });
     expect(parsed.text).toBe("יש רווחים");
-    expect(parsed.author).toBe("דנה");
+    expect(parsed.author).toEqual({ source: "name", name: "דנה" });
+  });
+
+  it.each([
+    ["a users row", { source: "user", id: "6b0000000000000000000001" }],
+    ["the directory", { source: "directory", id: "guid-roi" }],
+  ])("accepts a speaker picked out of %s", (_label, author) => {
+    const parsed = quoteInputSchema.parse({ ...valid, author });
+    expect(parsed.author).toEqual(author);
+  });
+
+  it("rejects a source it does not know", () => {
+    // The tag is explicit rather than sniffed off the shape of the id, so an
+    // unknown one is refused rather than guessed at.
+    const result = quoteInputSchema.safeParse({
+      ...valid,
+      author: { source: "ldap", id: "guid-roi" },
+    });
+    expect(result.success).toBe(false);
+    expect(result.error?.issues[0]?.path[0]).toBe("author");
   });
 
   it("normalises blank and missing optionals to null", () => {
@@ -46,9 +67,14 @@ describe("quoteInputSchema", () => {
   it.each([
     ["empty text", { ...valid, text: "" }, "text"],
     ["whitespace-only text", { ...valid, text: "   " }, "text"],
-    ["empty author", { ...valid, author: "" }, "author"],
+    ["a missing author", { ...valid, author: undefined }, "author"],
+    ["empty author", { ...valid, author: { source: "name", name: "" } }, "author"],
     ["text over 2000 chars", { ...valid, text: "א".repeat(2001) }, "text"],
-    ["author over 120 chars", { ...valid, author: "א".repeat(121) }, "author"],
+    [
+      "author over 120 chars",
+      { ...valid, author: { source: "name", name: "א".repeat(121) } },
+      "author",
+    ],
     ["context over 400 chars", { ...valid, context: "א".repeat(401) }, "context"],
   ])("rejects %s", (_label, input, field) => {
     const result = quoteInputSchema.safeParse(input);
@@ -84,7 +110,10 @@ describe("quoteInputSchema", () => {
   });
 
   it("reports errors in Hebrew", () => {
-    const result = quoteInputSchema.safeParse({ ...valid, author: "" });
+    const result = quoteInputSchema.safeParse({
+      ...valid,
+      author: { source: "name", name: "" },
+    });
     expect(result.error?.issues[0]?.message).toBe("צריך לציין מי אמר");
   });
 });

@@ -643,6 +643,57 @@ the same `quoteInputSchema` and return `422` with `issues` keyed by field name;
 `QuoteForm` renders those inline. The form's own checks are for responsiveness
 only — the server is the authority.
 
+### Who said it is picked, not typed
+
+The "מי אמר?" field is a person picker now, like every other form here: the
+create page hands `QuoteForm` the meetup rotation as the fast path, and a
+directory search under the field finds anyone else. `quoteInputSchema.author` is
+a **`PersonRef` with a third arm** — `{ source: "name", name }` — and the route
+resolves it through `resolveQuoteAuthor` before anything is written, mapping the
+three failures with the shared `personFailureResponse` (422 on the field / 503 /
+500) exactly as the שוטף routes do.
+
+The third arm is quotes-only, and it is the point: the wall quotes customers,
+people from other organisations and whoever said it in 2019, and every quote on
+it today has a name and no id. Refusing a plain name would make those unaddable
+and, worse, **uneditable** — a typo fix would demand that a speaker who is not
+in AD be found in AD. It resolves to itself: no lookup, no `users` row, not even
+a database round trip, so it is also the arm that still works with the directory
+down.
+
+`author` therefore stays a **name snapshot** — it is rendered directly,
+regex-searched, sorted on and `distinct`ed for the game, so resolving it through
+a join would cost a `$lookup` on each and leave the id-less quotes with nothing
+to render. `authorId` is the row beside it, null for a typed name. Two
+consequences:
+
+- **The data layer takes the resolved author as an argument**, like
+  `createShotefReview` takes its `member`: `createQuote(input, author, actor)`.
+  `input.author` is a *reference*, and resolving a reference is the route's job.
+- **Both callers offer the rotation, by different routes.** `/quotes/create`
+  reads it server-side; `EditQuoteDialog` loads the public `GET /api/rotation`
+  when it opens, rather than drilling a prop through the feed and every card.
+  Without it the only `{ source: "user" }` reference the edit form could send is
+  the quote's own `authorId` — so *changing* the speaker to a colleague, as
+  opposed to correcting a typo, would demand the directory, which is precisely
+  the path `resolvePeople` exists to keep working with no domain controller.
+  A failed load costs the shortcut and nothing else.
+- **The create page keeps `directoryId`; the edit dialog cannot.** The same
+  person is `user:<_id>` off the rotation and `directory:<objectGUID>` off the
+  search, and only the objectGUID correlates the two — without it a teammate
+  found in the search is appended as a second button with the same name on it.
+  `withoutDirectoryId` guards pages that render *anonymously* and `/quotes/create`
+  redirects, so it keeps the field, exactly as `RotationEditor` does and for the
+  same purpose. `GET /api/rotation` never returns one, so the edit dialog can
+  still show that twin; the server folds them together either way.
+- **The names are a row of buttons, not a `Select`** — see the Base UI note
+  below. A list that grows when the search finds somebody cannot be a Select
+  here, which is the same reason `MonitorFormDialog` names people with buttons.
+- **Both ways out of the row stay on screen while the search is open.** An empty
+  rotation opens straight onto the search panel, and the typed name is the arm
+  that survives the directory being down — putting it behind "סגירת החיפוש"
+  hides the escape hatch behind the panel reporting the outage.
+
 ### Quote engagement
 
 Likes and comments are normalized into `quote_likes` and `quote_comments`.
@@ -950,6 +1001,16 @@ shadcn/ui on **Base UI** (`@base-ui/react`), not Radix. Consequences that bite:
   menu simply never opens — no error you would connect to the cause.
 - `<SelectValue>` takes children as a *function* of the value; without it the raw
   value renders instead of the label.
+- **`Select` clears a controlled value whose item is not registered.**
+  `onMapChange` in `SelectPositioner` reacts to the popup's item set changing
+  by looking for the current value among the *mounted* items and, when it is
+  absent, calling `onValueChange(null)` — so appending an option and selecting
+  it in one press un-picks it again. It hides until the popup has been opened
+  once (an early return while nothing is registered), which makes it read as
+  flakiness rather than a rule. A picker whose options grow — anything that
+  appends a directory result — uses a button row instead; `QuoteForm` and
+  `MonitorFormDialog` both do. **`ReviewFormDialog` still uses a `Select` this
+  way and has the bug.**
 - Check the installed `.d.ts` under `node_modules/@base-ui/react/` when unsure —
   the API differs from Radix-era shadcn docs.
 

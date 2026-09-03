@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import type { QuoteComment } from "@/lib/engagement-schema";
+import { personRefSchema } from "@/lib/person-ref";
 
 /**
  * Types, constants and validation shared by the server and the browser.
@@ -12,6 +13,14 @@ export interface Quote {
   id: string;
   text: string;
   author: string;
+  /**
+   * `users._id` of whoever said it, when they were named by picking them out of
+   * the app or the directory. Null on a name typed by hand — the wall may quote
+   * someone the directory has never heard of — and on every quote added before
+   * the picker existed. `author` is the name either way: it is what the card
+   * renders, what the search matches and what the game deals.
+   */
+  authorId: string | null;
   saidAt: string;
   context: string | null;
   /**
@@ -105,17 +114,46 @@ const optionalText = (max: number, tooLong: string) =>
     .nullish()
     .transform((value) => value ?? null);
 
+/**
+ * Who a quote is attributed to, as the form says it.
+ *
+ * The first two arms are the ordinary `PersonRef` — reused rather than
+ * re-spelled, so the shape the server resolves is one definition — and the
+ * server turns either into a `users` row exactly as the שוטף forms do.
+ *
+ * The third arm is quotes-only, and it is why this is not just
+ * `personRefSchema`: the wall quotes people the directory cannot answer for —
+ * somebody from another organisation, a customer on a call, whoever said it in
+ * 2019 — and it already holds quotes whose author was typed before there was
+ * anything to pick from. Refusing a plain name would make those quotes
+ * unaddable and, worse, uneditable. It resolves to itself: no lookup, no
+ * `users` row, `authorId` null.
+ */
+export const quoteAuthorSchema = z.discriminatedUnion(
+  "source",
+  [
+    ...personRefSchema.options,
+    z.object({
+      source: z.literal("name"),
+      name: z
+        .string()
+        .trim()
+        .min(1, "צריך לציין מי אמר")
+        .max(120, "השם ארוך מדי"),
+    }),
+  ],
+  { error: "צריך לציין מי אמר" },
+);
+
+export type QuoteAuthorRef = z.output<typeof quoteAuthorSchema>;
+
 export const quoteInputSchema = z.object({
   text: z
     .string()
     .trim()
     .min(1, "צריך לכתוב מה נאמר")
     .max(2000, "הציטוט ארוך מדי"),
-  author: z
-    .string()
-    .trim()
-    .min(1, "צריך לציין מי אמר")
-    .max(120, "השם ארוך מדי"),
+  author: quoteAuthorSchema,
   saidAt: dateOnly,
   context: optionalText(400, "ההקשר ארוך מדי"),
   // No `addedBy`: attribution comes from the session, never from the client.

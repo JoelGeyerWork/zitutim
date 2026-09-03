@@ -222,7 +222,9 @@ try {
           saidAt: new Date(quote.saidAt),
           // These predate authentication: the display name is all there is, so
           // there is nobody to attribute them to. Same shape as any quote added
-          // before login existed.
+          // before login existed — including the speaker, who is a name and not
+          // a `users` row, exactly like a quote whose author was typed.
+          authorId: null,
           addedById: null,
           updatedBy: null,
           updatedById: null,

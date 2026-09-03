@@ -4,18 +4,30 @@ import { GET } from "@/app/api/quotes/[id]/document/route";
 import { getDb } from "@/lib/mongodb";
 import { createQuote, type QuoteActor } from "@/lib/quotes";
 import type { QuoteValues } from "@/lib/quote-schema";
-import { TEST_USER } from "./factories";
+import { TEST_USER, nameRef, namedAuthor } from "./factories";
 
 const ACTOR: QuoteActor = { id: TEST_USER.id, name: TEST_USER.name };
 
-function input(overrides: Partial<QuoteValues> = {}): QuoteValues {
+/** `author` is a plain name — the arm that needs neither a row nor a directory. */
+type Overrides = Partial<Omit<QuoteValues, "author">> & { author?: string };
+
+function input({ author = "דנה", ...rest }: Overrides = {}): QuoteValues {
   return {
     text: "תמיד יש זמן לעוד קפה אחד",
-    author: "דנה",
+    author: nameRef(author),
     saidAt: "2026-07-28",
     context: null,
-    ...overrides,
+    ...rest,
   };
+}
+
+/** A stored quote, straight through the data layer. */
+function store(overrides: Overrides = {}) {
+  return createQuote(
+    input(overrides),
+    namedAuthor(overrides.author ?? "דנה"),
+    ACTOR,
+  );
 }
 
 function get(id: string) {
@@ -31,7 +43,7 @@ beforeEach(async () => {
 
 describe("GET /api/quotes/[id]/document", () => {
   it("serves the quote as a downloadable HTML document", async () => {
-    const quote = await createQuote(input(), ACTOR);
+    const quote = await store();
 
     const response = await get(quote.id);
     expect(response.status).toBe(200);
@@ -45,14 +57,14 @@ describe("GET /api/quotes/[id]/document", () => {
   });
 
   it("answers without a session, like every other GET here", async () => {
-    const quote = await createQuote(input(), ACTOR);
+    const quote = await store();
 
     // No cookie on the request at all.
     expect((await get(quote.id)).status).toBe(200);
   });
 
   it("offers a UTF-8 filename with an ASCII fallback", async () => {
-    const quote = await createQuote(input(), ACTOR);
+    const quote = await store();
 
     const disposition = (await get(quote.id)).headers.get(
       "Content-Disposition",
@@ -68,10 +80,7 @@ describe("GET /api/quotes/[id]/document", () => {
   });
 
   it("never lets an author's name break the header", async () => {
-    const quote = await createQuote(
-      input({ author: "דנה\r\nX-Injected: yes" }),
-      ACTOR,
-    );
+    const quote = await store({ author: "דנה\r\nX-Injected: yes" });
 
     const disposition =
       (await get(quote.id)).headers.get("Content-Disposition") ?? "";
@@ -83,13 +92,13 @@ describe("GET /api/quotes/[id]/document", () => {
   });
 
   it("is not cached, since a quote can be edited", async () => {
-    const quote = await createQuote(input(), ACTOR);
+    const quote = await store();
 
     expect((await get(quote.id)).headers.get("Cache-Control")).toBe("no-store");
   });
 
   it("refuses script even though the document contains none", async () => {
-    const quote = await createQuote(input(), ACTOR);
+    const quote = await store();
     const csp = (await get(quote.id)).headers.get("Content-Security-Policy");
 
     // Defence in depth under the escaping, not instead of it: this is served

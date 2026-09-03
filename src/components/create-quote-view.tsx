@@ -10,9 +10,10 @@ import { QuoteForm } from "@/components/quote-form";
 import { buttonVariants } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import type { Quote } from "@/lib/quote-schema";
+import { type RosterMember } from "@/lib/roster";
 import { cn } from "@/lib/utils";
 
-export function CreateQuoteView() {
+export function CreateQuoteView({ roster }: { roster: RosterMember[] }) {
   const router = useRouter();
   /** Everything added in this sitting, newest first — instant feedback. */
   const [justAdded, setJustAdded] = useState<Quote[]>([]);
@@ -46,7 +47,7 @@ export function CreateQuoteView() {
     <div className="space-y-8">
       <Card className="shadow-sm">
         <CardContent className="pt-6">
-          <QuoteForm onSuccess={handleSuccess} />
+          <QuoteForm roster={roster} onSuccess={handleSuccess} />
         </CardContent>
       </Card>
 

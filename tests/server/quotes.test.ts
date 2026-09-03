@@ -12,22 +12,38 @@ import {
   type QuoteActor,
 } from "@/lib/quotes";
 import type { QuoteValues } from "@/lib/quote-schema";
+import { nameRef, namedAuthor } from "./factories";
 
 const YOEL: QuoteActor = { id: "6b0000000000000000000001", name: "יואל" };
 const NOA: QuoteActor = { id: "6b0000000000000000000002", name: "נועה" };
 
-function input(overrides: Partial<QuoteValues> = {}): QuoteValues {
+/** A speaker who resolved to a `users` row — what a picked name comes back as. */
+const NAMED_BY_ROW = { id: "6b0000000000000000000009", name: "נועה ברקת" };
+
+/**
+ * `author` is a plain name here rather than a reference: this is the data
+ * layer, and resolving who a reference means is the route's job. The two travel
+ * together — `input` builds the body's reference, `create` also hands over the
+ * resolved author it stands for.
+ */
+type Overrides = Partial<Omit<QuoteValues, "author">> & { author?: string };
+
+function input({ author = "דנה", ...rest }: Overrides = {}): QuoteValues {
   return {
     text: "תמיד יש זמן לעוד קפה אחד",
-    author: "דנה",
+    author: nameRef(author),
     saidAt: "2026-07-28",
     context: null,
-    ...overrides,
+    ...rest,
   };
 }
 
-function create(overrides: Partial<QuoteValues> = {}, actor: QuoteActor = YOEL) {
-  return createQuote(input(overrides), actor);
+function create(overrides: Overrides = {}, actor: QuoteActor = YOEL) {
+  return createQuote(
+    input(overrides),
+    namedAuthor(overrides.author ?? "דנה"),
+    actor,
+  );
 }
 
 beforeEach(async () => {
@@ -55,11 +71,30 @@ describe("createQuote", () => {
     expect(quote.updatedById).toBeNull();
   });
 
+  it("stores the resolved author, not what the input referenced", async () => {
+    // The reference in `input` says one thing and the resolved author another;
+    // the resolved one is the fact, exactly as the route hands it over.
+    const quote = await createQuote(input({ author: "דנה" }), NAMED_BY_ROW, YOEL);
+
+    expect(quote.author).toBe("נועה ברקת");
+    expect(quote.authorId).toBe(NAMED_BY_ROW.id);
+  });
+
+  it("leaves authorId null for a name that resolves to nobody", async () => {
+    // A speaker from outside the organisation, or any quote added before the
+    // picker existed: there is a name and there is no row.
+    const quote = await create();
+
+    expect(quote.author).toBe("דנה");
+    expect(quote.authorId).toBeNull();
+  });
+
   it("ignores an addedBy sent by the client", async () => {
     // A client cannot forge attribution: the schema strips the key before it
     // ever reaches the data layer.
     const quote = await createQuote(
       { ...input(), addedBy: "מישהו אחר" } as QuoteValues,
+      namedAuthor("דנה"),
       YOEL,
     );
 
@@ -96,6 +131,7 @@ describe("updateQuote", () => {
     const updated = await updateQuote(
       created.id,
       input({ text: "ניסוח מתוקן" }),
+      namedAuthor("דנה"),
       YOEL,
     );
 
@@ -114,6 +150,7 @@ describe("updateQuote", () => {
     const updated = await updateQuote(
       created.id,
       input({ text: "נועה עורכת" }),
+      namedAuthor("דנה"),
       NOA,
     );
 
@@ -128,6 +165,7 @@ describe("updateQuote", () => {
     const updated = await updateQuote(
       created.id,
       input({ context: null }),
+      namedAuthor("דנה"),
       YOEL,
     );
     expect(updated?.context).toBeNull();
@@ -135,9 +173,11 @@ describe("updateQuote", () => {
 
   it("returns null for a missing or malformed id", async () => {
     await expect(
-      updateQuote("0".repeat(24), input(), YOEL),
+      updateQuote("0".repeat(24), input(), namedAuthor("דנה"), YOEL),
     ).resolves.toBeNull();
-    await expect(updateQuote("nope", input(), YOEL)).resolves.toBeNull();
+    await expect(
+      updateQuote("nope", input(), namedAuthor("דנה"), YOEL),
+    ).resolves.toBeNull();
   });
 });
 

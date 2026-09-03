@@ -1,28 +1,84 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { ConfigError } from "@/lib/config-error";
+import { getDb } from "@/lib/mongodb";
+
+// The route's only directory call. Everything else — the users upsert, the
+// quotes collection — is the real thing against the in-memory Mongo.
+vi.mock("@/lib/ldap", () => ({
+  findPersonById: vi.fn(),
+  findPeople: vi.fn(),
+}));
+
+import { findPersonById } from "@/lib/ldap";
 import { GET, POST } from "@/app/api/quotes/route";
 import {
   DELETE,
   GET as GET_ONE,
   PUT,
 } from "@/app/api/quotes/[id]/route";
-import { getDb } from "@/lib/mongodb";
 import { createQuote, type QuoteActor } from "@/lib/quotes";
 import type { Quote, QuotePage, QuoteValues } from "@/lib/quote-schema";
-import { TEST_USER, sessionCookie } from "./factories";
+import { TEST_USER, nameRef, namedAuthor, sessionCookie } from "./factories";
+
+const mockFindPersonById = vi.mocked(findPersonById);
+
+const ROI = {
+  directoryId: "0b8a1f2e-4d3b-4a91-9f70-1c2d3e4f5a09",
+  displayName: "רועי אשכנזי",
+  title: "אבטחת מידע",
+  username: "roi.ashkenazi",
+  upn: null,
+  mail: null,
+  dn: "CN=roi.ashkenazi",
+};
 
 const BASE = "http://localhost:3000/api/quotes";
 
 const ACTOR: QuoteActor = { id: TEST_USER.id, name: TEST_USER.name };
 
+/**
+ * `author` is a reference, like every other form here sends — a plain name by
+ * default, which is the arm that resolves to itself and touches no directory.
+ */
 function body(overrides: Record<string, unknown> = {}) {
   return {
     text: "תמיד יש זמן לעוד קפה אחד",
-    author: "דנה",
+    author: nameRef("דנה"),
     saidAt: "2026-07-28",
     context: null,
     ...overrides,
   };
+}
+
+/** A stored quote, straight through the data layer. */
+function store(overrides: Record<string, unknown> = {}) {
+  const author =
+    typeof overrides.author === "string" ? overrides.author : "דנה";
+  return createQuote(
+    body({ ...overrides, author: nameRef(author) }) as QuoteValues,
+    namedAuthor(author),
+    ACTOR,
+  );
+}
+
+/** A real `users` row, as the person a `{ source: "user" }` reference names. */
+async function insertUser(displayName: string): Promise<string> {
+  const now = new Date();
+  const db = await getDb();
+  const result = await db.collection("users").insertOne({
+    directoryId: `directory-${displayName}`,
+    username: displayName,
+    upn: null,
+    displayName,
+    title: null,
+    mail: null,
+    dn: `CN=${displayName}`,
+    createdAt: now,
+    updatedAt: now,
+    lastLoginAt: now,
+  });
+  return result.insertedId.toHexString();
 }
 
 /** A mutating request carrying a real signed session, unless told otherwise. */
@@ -61,6 +117,8 @@ function params(id: string) {
 beforeEach(async () => {
   const db = await getDb();
   await db.collection("quotes").deleteMany({});
+  await db.collection("users").deleteMany({});
+  mockFindPersonById.mockReset();
 });
 
 describe("POST /api/quotes", () => {
@@ -71,6 +129,8 @@ describe("POST /api/quotes", () => {
     const quote: Quote = await response.json();
     expect(quote.id).toMatch(/^[a-f0-9]{24}$/);
     expect(quote.author).toBe("דנה");
+    // A typed name is a name and nothing else — nobody to point at.
+    expect(quote.authorId).toBeNull();
     expect(quote.saidAt).toBe("2026-07-28T00:00:00.000Z");
   });
 
@@ -113,13 +173,91 @@ describe("POST /api/quotes", () => {
   });
 });
 
+
+describe("POST /api/quotes — who said it", () => {
+  it("takes the name off the users row the reference names", async () => {
+    const id = await insertUser("נועה ברקת");
+    // Whatever the client thinks the name is, it is not what gets stored.
+    const response = await post(body({ author: { source: "user", id } }));
+
+    expect(response.status).toBe(201);
+    const quote: Quote = await response.json();
+    expect(quote.author).toBe("נועה ברקת");
+    expect(quote.authorId).toBe(id);
+  });
+
+  it("never touches the directory for somebody the app already holds", async () => {
+    // There is no domain controller on the development network and there may be
+    // none during an outage in production. Quoting a teammate must not care.
+    mockFindPersonById.mockRejectedValue(new Error("no domain controller"));
+    const id = await insertUser("נועה ברקת");
+
+    const response = await post(body({ author: { source: "user", id } }));
+
+    expect(response.status).toBe(201);
+    expect(mockFindPersonById).not.toHaveBeenCalled();
+  });
+
+  it("quotes somebody found in the directory, giving them a users row", async () => {
+    mockFindPersonById.mockResolvedValue(ROI);
+
+    const response = await post(
+      body({ author: { source: "directory", id: ROI.directoryId } }),
+    );
+
+    expect(response.status).toBe(201);
+    const quote: Quote = await response.json();
+    expect(quote.author).toBe(ROI.displayName);
+
+    // Re-resolved server-side and written through `upsertRosterUser`, so the
+    // stored name came from the directory rather than from the request.
+    expect(mockFindPersonById).toHaveBeenCalledWith(ROI.directoryId);
+    const db = await getDb();
+    const row = await db
+      .collection("users")
+      .findOne({ directoryId: ROI.directoryId });
+    expect(row?._id.toHexString()).toBe(quote.authorId);
+  });
+
+  it("reports a reference that names nobody as a 422 on the field", async () => {
+    const response = await post(
+      body({ author: { source: "user", id: "0".repeat(24) } }),
+    );
+
+    expect(response.status).toBe(422);
+    await expect(response.json()).resolves.toMatchObject({
+      issues: { author: "לא מצאנו את מי שנבחר" },
+    });
+
+    const db = await getDb();
+    await expect(db.collection("quotes").countDocuments()).resolves.toBe(0);
+  });
+
+  it("answers 503 when the directory cannot be reached", async () => {
+    mockFindPersonById.mockRejectedValue(new Error("ECONNRESET"));
+
+    const response = await post(
+      body({ author: { source: "directory", id: ROI.directoryId } }),
+    );
+    expect(response.status).toBe(503);
+  });
+
+  it("answers 500 when the directory is not configured here", async () => {
+    // Someone else's outage and this server's own misconfiguration send whoever
+    // investigates to opposite places, so they are never the same status.
+    mockFindPersonById.mockRejectedValue(new ConfigError("LDAP_URL is not set"));
+
+    const response = await post(
+      body({ author: { source: "directory", id: ROI.directoryId } }),
+    );
+    expect(response.status).toBe(500);
+  });
+});
+
 describe("GET /api/quotes", () => {
   beforeEach(async () => {
-    await createQuote(body({ author: "דנה" }) as QuoteValues, ACTOR);
-    await createQuote(
-      body({ author: "עומר", text: "בואו נדחה את זה" }) as QuoteValues,
-      ACTOR,
-    );
+    await store({ author: "דנה" });
+    await store({ author: "עומר", text: "בואו נדחה את זה" });
   });
 
   it("returns a page with the total and a hasMore flag", async () => {
@@ -174,7 +312,7 @@ describe("GET /api/quotes", () => {
 
 describe("GET /api/quotes/:id", () => {
   it("returns the quote", async () => {
-    const created = await createQuote(body() as QuoteValues, ACTOR);
+    const created = await store();
     const response = await GET_ONE(
       new Request(`${BASE}/${created.id}`),
       params(created.id),
@@ -210,7 +348,7 @@ async function del(id: string, cookie?: string | null) {
 
 describe("PUT /api/quotes/:id", () => {
   it("replaces the quote and returns the updated record", async () => {
-    const created = await createQuote(body() as QuoteValues, ACTOR);
+    const created = await store();
     const response = await put(created.id, body({ text: "ניסוח מתוקן" }));
 
     expect(response.status).toBe(200);
@@ -220,13 +358,46 @@ describe("PUT /api/quotes/:id", () => {
   });
 
   it("returns 422 for invalid input", async () => {
-    const created = await createQuote(body() as QuoteValues, ACTOR);
+    const created = await store();
     const response = await put(created.id, body({ text: "" }));
     expect(response.status).toBe(422);
   });
 
+  it("re-points the quote when the speaker is picked again", async () => {
+    const created = await store();
+    expect(created.authorId).toBeNull();
+
+    const id = await insertUser("נועה ברקת");
+    const response = await put(
+      created.id,
+      body({ author: { source: "user", id } }),
+    );
+
+    const quote: Quote = await response.json();
+    expect(quote.author).toBe("נועה ברקת");
+    expect(quote.authorId).toBe(id);
+  });
+
+  it("keeps a typed name typed, so an old quote stays editable", async () => {
+    // Every quote added before the picker has a name and no id, and the speaker
+    // may be someone the directory cannot answer for at all. Editing the text
+    // must not demand that they be found.
+    const created = await store({ author: "שירה מהלקוח" });
+
+    const response = await put(
+      created.id,
+      body({ author: nameRef("שירה מהלקוח"), text: "ניסוח מתוקן" }),
+    );
+
+    expect(response.status).toBe(200);
+    const quote: Quote = await response.json();
+    expect(quote.author).toBe("שירה מהלקוח");
+    expect(quote.authorId).toBeNull();
+    expect(mockFindPersonById).not.toHaveBeenCalled();
+  });
+
   it("returns 400 for a malformed body", async () => {
-    const created = await createQuote(body() as QuoteValues, ACTOR);
+    const created = await store();
     await expect(put(created.id, "{nope")).resolves.toMatchObject({
       status: 400,
     });
@@ -246,7 +417,7 @@ describe("PUT /api/quotes/:id", () => {
 
 describe("DELETE /api/quotes/:id", () => {
   it("returns 204 with an empty body, then 404 on a repeat", async () => {
-    const created = await createQuote(body() as QuoteValues, ACTOR);
+    const created = await store();
 
     const first = await del(created.id);
     expect(first.status).toBe(204);
@@ -280,7 +451,7 @@ describe("authentication", () => {
   });
 
   it("rejects PUT and DELETE without a session", async () => {
-    const created = await createQuote(body() as QuoteValues, ACTOR);
+    const created = await store();
 
     expect((await put(created.id, body({ text: "חטיפה" }), null)).status).toBe(
       401,
@@ -333,7 +504,7 @@ describe("authentication", () => {
   });
 
   it("rejects a cross-origin DELETE even with a valid session", async () => {
-    const created = await createQuote(body() as QuoteValues, ACTOR);
+    const created = await store();
 
     const response = await DELETE(
       new Request(`${BASE}/${created.id}`, {
@@ -354,7 +525,7 @@ describe("authentication", () => {
   it("keeps reads public", async () => {
     // The whole point of "public read, login to write": an anonymous visitor
     // must still be able to browse the wall.
-    await createQuote(body() as QuoteValues, ACTOR);
+    await store();
 
     const list = await GET(new Request(BASE));
     expect(list.status).toBe(200);
@@ -362,7 +533,7 @@ describe("authentication", () => {
   });
 
   it("records the editor without changing the original attribution", async () => {
-    const created = await createQuote(body() as QuoteValues, ACTOR);
+    const created = await store();
     const other = { id: "6b0000000000000000000009", name: "עומר לוי" };
     const { signSession } = await import("@/lib/session");
     const { token } = await signSession({ ...other, username: "omer" });

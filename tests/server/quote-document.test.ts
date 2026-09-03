@@ -8,6 +8,7 @@ function makeQuote(overrides: Partial<Quote> = {}): Quote {
     id: "6b0000000000000000000001",
     text: "תמיד יש זמן לעוד קפה אחד",
     author: "דנה",
+    authorId: null,
     saidAt: "2026-07-28T00:00:00.000Z",
     context: null,
     addedBy: "יואל",
