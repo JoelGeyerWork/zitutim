@@ -14,7 +14,7 @@ export * from "@/lib/auth-schema";
  *
  * Keyed on objectGUID rather than sAMAccountName because AD *recycles*
  * usernames: without it, a new employee inheriting a departed colleague's
- * username would inherit their quotes, comments and likes too. objectGUID is
+ * username would inherit their quotes, comments and ratings too. objectGUID is
  * immutable for the object's lifetime and survives both rename and OU moves.
  *
  * Nothing here is password-derived, and group memberships are deliberately not

@@ -149,7 +149,7 @@ try {
     { key: { createdAt: -1 } },
     { key: { saidAt: -1 } },
     { key: { author: 1 } },
-    // "quotes I added", and the join comments and likes will want.
+    // "quotes I added", and the join comments and reactions will want.
     { key: { addedById: 1 } },
   ]);
 
@@ -175,10 +175,48 @@ try {
     { key: { guessedById: 1 } },
   ]);
 
-  await db.collection("quote_likes").createIndexes([
-    // PUT retries are idempotent, but this remains the final one-like boundary.
+  await db.collection("quote_reactions").createIndexes([
+    // One person, one reaction. PUT retries are idempotent, but this remains
+    // the final boundary — and it is what lets a swap be an upsert rather than
+    // a delete and an insert with a gap between them.
     { key: { quoteId: 1, userId: 1 }, unique: true },
   ]);
+
+  // Reactions replaced a plain like, so every like already on the wall becomes
+  // a ♦️ ("טוב") rather than being dropped — a like was a plain endorsement,
+  // which is that grade and not 🃏. Runs on every seed, not just --demo: this
+  // is a migration, and a database that has already been through it has no
+  // `quote_likes` collection left to find.
+  //
+  // Row by row, upserting on the same {quoteId, userId} key the unique index
+  // uses, so a half-finished run can simply be repeated: a pair that already
+  // reacted keeps whatever they picked since, and nothing collides.
+  const [likesCollection] = await db
+    .listCollections({ name: "quote_likes" })
+    .toArray();
+  if (likesCollection) {
+    const likes = await db.collection("quote_likes").find({}).toArray();
+    if (likes.length > 0) {
+      await db.collection("quote_reactions").bulkWrite(
+        likes.map((like) => ({
+          updateOne: {
+            filter: { quoteId: like.quoteId, userId: like.userId },
+            update: {
+              $setOnInsert: {
+                emoji: "♦️",
+                createdAt: like.createdAt ?? new Date(),
+                updatedAt: like.createdAt ?? new Date(),
+              },
+            },
+            upsert: true,
+          },
+        })),
+        { ordered: false },
+      );
+    }
+    await db.collection("quote_likes").drop();
+    console.log(`Migrated ${likes.length} like(s) to ♦️ reactions.`);
+  }
 
   await db.collection("quote_comments").createIndexes([
     // Covers both the oldest-first conversation and latest-two preview scans.
@@ -207,7 +245,7 @@ try {
   ]);
 
   console.log(
-    `Indexes ready on ${dbName}: quotes, users, login_attempts, themes, quote_likes, quote_comments, shotef_reviews, shotef_monitors`,
+    `Indexes ready on ${dbName}: quotes, users, login_attempts, themes, quote_reactions, quote_comments, shotef_reviews, shotef_monitors`,
   );
 
   if (process.argv.includes("--demo")) {

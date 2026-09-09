@@ -4,7 +4,6 @@ import { useRef, useState, type FormEvent } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import {
-  HeartIcon,
   Loader2Icon,
   MessageCircleIcon,
   PencilIcon,
@@ -17,9 +16,15 @@ import { useSession } from "@/components/session-provider";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import {
+  applyReaction,
   COMMENT_MAX_LENGTH,
-  type LikeState,
+  REACTION_EMOJI,
+  REACTION_LABELS,
+  reactionTotal,
   type QuoteComment,
+  type ReactionCounts,
+  type ReactionEmoji,
+  type ReactionState,
 } from "@/lib/engagement-schema";
 import { formatRelative, plural } from "@/lib/format";
 import type { Quote } from "@/lib/quote-schema";
@@ -31,8 +36,8 @@ export function QuoteEngagement({ quote }: { quote: Quote }) {
   const router = useRouter();
   const loginHref = `/login?next=${encodeURIComponent(pathname)}`;
 
-  const [liked, setLiked] = useState(quote.likedByViewer);
-  const [likeCount, setLikeCount] = useState(quote.likeCount);
+  const [reactions, setReactions] = useState(quote.reactions);
+  const [viewerReaction, setViewerReaction] = useState(quote.viewerReaction);
   const [commentState, setCommentState] = useState({
     count: quote.commentCount,
     comments: quote.commentsPreview,
@@ -48,7 +53,10 @@ export function QuoteEngagement({ quote }: { quote: Quote }) {
     mayBeIncomplete: boolean;
   } | null>(null);
   const commentsRequest = useRef(0);
-  const [liking, setLiking] = useState(false);
+  // Which emoji is mid-flight: it marks the chip to spin, and the whole bar is
+  // disabled meanwhile. A second press before the first answers would roll back
+  // to counts the first press had already moved.
+  const [pendingEmoji, setPendingEmoji] = useState<ReactionEmoji | null>(null);
   const [newText, setNewText] = useState("");
   const [newError, setNewError] = useState<string | null>(null);
   const [posting, setPosting] = useState(false);
@@ -63,8 +71,8 @@ export function QuoteEngagement({ quote }: { quote: Quote }) {
   const [seed, setSeed] = useState(quote);
   if (seed !== quote) {
     setSeed(quote);
-    setLiked(quote.likedByViewer);
-    setLikeCount(quote.likeCount);
+    setReactions(quote.reactions);
+    setViewerReaction(quote.viewerReaction);
     setCommentsComplete(
       expanded
         ? commentsComplete && quote.commentCount === commentCount
@@ -88,42 +96,52 @@ export function QuoteEngagement({ quote }: { quote: Quote }) {
     router.push(loginHref);
   }
 
-  async function toggleLike() {
-    if (!user || liking) return;
+  /**
+   * One person, one reaction: picking the emoji already chosen withdraws it,
+   * and picking another swaps rather than adds. The request sends the desired
+   * end state, so a retry after a failure is safe.
+   */
+  async function react(emoji: ReactionEmoji) {
+    if (!user || pendingEmoji) return;
 
-    const nextLiked = !liked;
-    const previousCount = likeCount;
-    setLiked(nextLiked);
-    setLikeCount(Math.max(0, previousCount + (nextLiked ? 1 : -1)));
-    setLiking(true);
+    const previousReaction = viewerReaction;
+    const previousCounts = reactions;
+    const next = previousReaction === emoji ? null : emoji;
+
+    setViewerReaction(next);
+    setReactions(applyReaction(previousCounts, previousReaction, next));
+    setPendingEmoji(emoji);
+
+    function rollBack() {
+      setViewerReaction(previousReaction);
+      setReactions(previousCounts);
+    }
 
     try {
-      const response = await fetch(`/api/quotes/${quote.id}/like`, {
+      const response = await fetch(`/api/quotes/${quote.id}/reaction`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ liked: nextLiked }),
+        body: JSON.stringify({ emoji: next }),
       });
       if (response.status === 401) {
-        setLiked(!nextLiked);
-        setLikeCount(previousCount);
+        rollBack();
         sendToLogin();
         return;
       }
       if (!response.ok) {
-        throw new Error(await responseMessage(response, "עדכון הלייק נכשל"));
+        throw new Error(await responseMessage(response, "עדכון הדירוג נכשל"));
       }
 
-      const state: LikeState = await response.json();
-      setLiked(state.likedByViewer);
-      setLikeCount(state.likeCount);
+      const state: ReactionState = await response.json();
+      setViewerReaction(state.viewerReaction);
+      setReactions(state.counts);
     } catch (error) {
-      setLiked(!nextLiked);
-      setLikeCount(previousCount);
+      rollBack();
       toast.error(
-        error instanceof Error ? error.message : "לא הצלחנו לעדכן את הלייק",
+        error instanceof Error ? error.message : "לא הצלחנו לעדכן את הדירוג",
       );
     } finally {
-      setLiking(false);
+      setPendingEmoji(null);
     }
   }
 
@@ -319,49 +337,23 @@ export function QuoteEngagement({ quote }: { quote: Quote }) {
     }
   }
 
-  const likeLabel = plural(likeCount, "לייק אחד", "לייקים");
   const commentLabel = plural(commentCount, "תגובה אחת", "תגובות");
   const collapsedComments = comments.slice(-2);
 
   return (
     <section
       className="mt-4 border-t pt-3"
-      aria-label="לייקים ותגובות"
+      aria-label="דירוגים ותגובות"
     >
       <div className="flex flex-wrap items-center gap-1">
-        {user ? (
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={toggleLike}
-            disabled={liking}
-            aria-pressed={liked}
-            aria-label={`${liked ? "הסרת לייק" : "סימון לייק"} — ${likeLabel}`}
-            className={cn(
-              "gap-1.5",
-              liked ? "text-primary hover:text-primary" : "text-muted-foreground",
-            )}
-          >
-            {liking ? (
-              <Loader2Icon className="size-4 animate-spin" />
-            ) : (
-              <HeartIcon className={cn("size-4", liked && "fill-current")} />
-            )}
-            {likeLabel}
-          </Button>
-        ) : (
-          <Link
-            href={loginHref}
-            className={cn(
-              buttonVariants({ variant: "ghost", size: "sm" }),
-              "text-muted-foreground gap-1.5",
-            )}
-            aria-label={`התחברות כדי לסמן לייק — ${likeLabel}`}
-          >
-            <HeartIcon className="size-4" />
-            {likeLabel}
-          </Link>
-        )}
+        <ReactionBar
+          counts={reactions}
+          viewerReaction={viewerReaction}
+          pendingEmoji={pendingEmoji}
+          signedIn={!!user}
+          loginHref={loginHref}
+          onReact={react}
+        />
 
         <Button
           variant="ghost"
@@ -582,6 +574,97 @@ export function QuoteEngagement({ quote }: { quote: Quote }) {
         <div id={`comments-${quote.id}`} hidden />
       )}
     </section>
+  );
+}
+
+/**
+ * The whole scale is drawn at every count, including zero: the emoji are the
+ * only thing telling a reader what the grades even are, so hiding the unpicked
+ * ones would leave a quote nobody rated with no way to start.
+ *
+ * Signed out the chips are links to the login page rather than hidden, exactly
+ * as the share control is — the API's 401 is the boundary, not the markup.
+ */
+function ReactionBar({
+  counts,
+  viewerReaction,
+  pendingEmoji,
+  signedIn,
+  loginHref,
+  onReact,
+}: {
+  counts: ReactionCounts;
+  viewerReaction: ReactionEmoji | null;
+  pendingEmoji: ReactionEmoji | null;
+  signedIn: boolean;
+  loginHref: string;
+  onReact: (emoji: ReactionEmoji) => void;
+}) {
+  const total = reactionTotal(counts);
+
+  function chipClass(picked: boolean) {
+    return cn(
+      "h-8 gap-1 rounded-full border px-2",
+      picked
+        ? "border-primary bg-primary/10 text-primary hover:text-primary"
+        : "text-muted-foreground border-transparent",
+    );
+  }
+
+  return (
+    <div
+      role="group"
+      aria-label={`דירוג הציטוט — ${plural(total, "דירוג אחד", "דירוגים")}`}
+      className="flex flex-wrap items-center gap-0.5"
+    >
+      {REACTION_EMOJI.map((emoji) => {
+        const count = counts[emoji] ?? 0;
+        const picked = viewerReaction === emoji;
+        const label = REACTION_LABELS[emoji];
+        const countLabel = plural(count, "דירוג אחד", "דירוגים");
+        // The glyph is decorative to a screen reader — the label names it.
+        const face = (
+          <>
+            <span aria-hidden className="text-base leading-none">
+              {emoji}
+            </span>
+            {pendingEmoji === emoji ? (
+              <Loader2Icon className="size-3 animate-spin" />
+            ) : count > 0 ? (
+              <span className="text-xs tabular-nums">{count}</span>
+            ) : null}
+          </>
+        );
+
+        return signedIn ? (
+          <Button
+            key={emoji}
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={() => onReact(emoji)}
+            disabled={pendingEmoji !== null}
+            aria-pressed={picked}
+            aria-label={`${label} — ${countLabel}`}
+            className={chipClass(picked)}
+          >
+            {face}
+          </Button>
+        ) : (
+          <Link
+            key={emoji}
+            href={loginHref}
+            aria-label={`התחברות כדי לדרג ${label} — ${countLabel}`}
+            className={cn(
+              buttonVariants({ variant: "ghost", size: "sm" }),
+              chipClass(false),
+            )}
+          >
+            {face}
+          </Link>
+        );
+      })}
+    </div>
   );
 }
 

@@ -9,7 +9,7 @@ import {
   DELETE as DELETE_COMMENT,
   PUT as PUT_COMMENT,
 } from "@/app/api/quotes/[id]/comments/[commentId]/route";
-import { PUT as PUT_LIKE } from "@/app/api/quotes/[id]/like/route";
+import { PUT as PUT_REACTION } from "@/app/api/quotes/[id]/reaction/route";
 import { getDb } from "@/lib/mongodb";
 import { createQuote, type QuoteActor } from "@/lib/quotes";
 import type { QuoteComment } from "@/lib/engagement-schema";
@@ -80,74 +80,94 @@ beforeEach(async () => {
   const db = await getDb();
   await Promise.all([
     db.collection("quotes").deleteMany({}),
-    db.collection("quote_likes").deleteMany({}),
+    db.collection("quote_reactions").deleteMany({}),
     db.collection("quote_comments").deleteMany({}),
     db.collection("users").deleteMany({}),
   ]);
   await Promise.all([insertUser(TEST_USER), insertUser(OTHER_USER)]);
 });
 
-describe("PUT /api/quotes/:id/like", () => {
-  it("sets and removes one like idempotently", async () => {
+describe("PUT /api/quotes/:id/reaction", () => {
+  it("sets, swaps and withdraws one reaction idempotently", async () => {
     const quote = await createTestQuote();
-    const url = `${BASE}/${quote.id}/like`;
+    const url = `${BASE}/${quote.id}/reaction`;
+    const db = await getDb();
 
-    for (const liked of [true, true, false]) {
-      const response = await PUT_LIKE(
-        await jsonRequest(url, "PUT", { liked }),
+    for (const emoji of ["♦️", "♦️", "😂"]) {
+      const response = await PUT_REACTION(
+        await jsonRequest(url, "PUT", { emoji }),
         quoteParams(quote.id),
       );
       expect(response.status).toBe(200);
     }
 
-    const db = await getDb();
+    // A swap replaces the row rather than adding one.
     await expect(
-      db.collection("quote_likes").countDocuments(),
+      db.collection("quote_reactions").countDocuments(),
+    ).resolves.toBe(1);
+    await expect(
+      PUT_REACTION(
+        await jsonRequest(url, "PUT", { emoji: "😂" }),
+        quoteParams(quote.id),
+      ).then((response) => response.json()),
+    ).resolves.toEqual({ counts: { "😂": 1 }, viewerReaction: "😂" });
+
+    const withdrawn = await PUT_REACTION(
+      await jsonRequest(url, "PUT", { emoji: null }),
+      quoteParams(quote.id),
+    );
+    expect(withdrawn.status).toBe(200);
+    await expect(withdrawn.json()).resolves.toEqual({
+      counts: {},
+      viewerReaction: null,
+    });
+    await expect(
+      db.collection("quote_reactions").countDocuments(),
     ).resolves.toBe(0);
   });
 
-  it("requires a session before parsing and validates signed-in input", async () => {
+  it("requires a session before parsing and refuses an emoji off the palette", async () => {
     const quote = await createTestQuote();
-    const url = `${BASE}/${quote.id}/like`;
+    const url = `${BASE}/${quote.id}/reaction`;
 
-    const anonymous = await PUT_LIKE(
+    const anonymous = await PUT_REACTION(
       new Request(url, { method: "PUT", body: "{bad" }),
       quoteParams(quote.id),
     );
     expect(anonymous.status).toBe(401);
 
-    const invalid = await PUT_LIKE(
-      await jsonRequest(url, "PUT", { liked: "yes" }),
+    const invalid = await PUT_REACTION(
+      await jsonRequest(url, "PUT", { emoji: "🦄" }),
       quoteParams(quote.id),
     );
     expect(invalid.status).toBe(422);
     await expect(invalid.json()).resolves.toMatchObject({
-      issues: { liked: "צריך לציין אם לסמן לייק" },
+      issues: { emoji: "צריך לבחור דירוג מהרשימה" },
     });
   });
 
   it("rejects cross-origin writes and returns 404 for a missing quote", async () => {
     const quote = await createTestQuote();
-    const crossOrigin = await authedRequest(`${BASE}/${quote.id}/like`, {
+    const crossOrigin = await authedRequest(`${BASE}/${quote.id}/reaction`, {
       method: "PUT",
       headers: {
         "Content-Type": "application/json",
         origin: "https://evil.example",
       },
-      body: JSON.stringify({ liked: true }),
+      body: JSON.stringify({ emoji: "♦️" }),
     });
     expect(
       (
-        await PUT_LIKE(crossOrigin, quoteParams(quote.id))
+        await PUT_REACTION(crossOrigin, quoteParams(quote.id))
       ).status,
     ).toBe(403);
 
     const missing = "0".repeat(24);
     expect(
       (
-        await PUT_LIKE(
-          await jsonRequest(`${BASE}/${missing}/like`, "PUT", {
-            liked: true,
+        await PUT_REACTION(
+          await jsonRequest(`${BASE}/${missing}/reaction`, "PUT", {
+            emoji: "♦️",
           }),
           quoteParams(missing),
         )

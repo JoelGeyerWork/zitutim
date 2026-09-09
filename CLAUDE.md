@@ -696,13 +696,63 @@ consequences:
 
 ### Quote engagement
 
-Likes and comments are normalized into `quote_likes` and `quote_comments`.
-`quote_likes` has a unique `{ quoteId, userId }` index and the API uses
-idempotent PUT desired-state semantics; `quote_comments` stores `authorId` but
+Reactions and comments are normalized into `quote_reactions` and
+`quote_comments`. `quote_reactions` has a unique `{ quoteId, userId }` index and
+the API uses idempotent PUT desired-state semantics — the client sends the emoji
+it wants to end on, or `null` to withdraw; `quote_comments` stores `authorId` but
 not a name snapshot, so reads resolve the current `users.displayName`. The quote
-feed's aggregate resolves counts, the viewer's like, and a deterministic
+feed's aggregate resolves counts, the viewer's reaction, and a deterministic
 latest-two comment preview in one database command per page rather than querying
 per card. Full comments read oldest-first and end every sort in `_id`.
+
+**One person, one reaction.** It replaced a plain like, and the unique index is
+unchanged from the one that enforced one like per person — an emoji field was
+added beside it. Three consequences worth keeping:
+
+- **A swap is an upsert on that key, never a delete and an insert.** There is no
+  gap for a second row to appear in, so the index stays the boundary rather than
+  becoming a thing the code has to work around. `createdAt` keeps the first
+  reaction; `updatedAt` moves with the swap.
+- **A duplicate key on that upsert is retried as a plain update, not swallowed.**
+  Two people rating a quote for the first time at once race inside Mongo, and the
+  index rejects the loser with 11000. The like this replaced could stop there —
+  both racers only wanted "a row exists", so the winner's insert satisfied the
+  loser too. An emoji rides in the `$set`, so it does not: ignoring the error
+  drops a write the caller is then told was applied and hands back the other
+  person's pick. Note this is **not** reachable by racing two real calls in a
+  test — whichever emoji survives is a legal last-write-wins outcome either way,
+  and inserting the rival row first only makes the upsert match it. The test
+  stands in for the rejection instead.
+- **The palette is a fixed list** (`REACTION_EMOJI` in `engagement-schema.ts`), not
+  a free picker: a picker is a bundle to ship onto an air-gapped network, it needs
+  server-side proof that the string really is one emoji, and free choice fragments
+  the counts across near-identical glyphs. Zod validates against the enum, so an
+  emoji off the palette is a `422` on the `emoji` field.
+- **It is a five-point verdict on the quote, ordered best to worst** — 🃏 אליט,
+  ♦️ טוב, 😂 צחקתי קצת, 🌓 בינוני, 🍎 גרוע — so in RTL 🃏 sits rightmost. The UI
+  calls them **דירוגים**, never תגובות: this app already spends that word on
+  comments, and the two sit in the same strip under every card.
+- **Shrinking the palette needs no migration.** `toReactionCounts` walks
+  `REACTION_EMOJI` rather than the rows it was handed, and `asReactionEmoji`
+  narrows the viewer's own stored pick, so a retired emoji simply stops being
+  drawn instead of reaching a bar that cannot render it. Both reads go through
+  them — the aggregate in `quotes.ts` as well as `engagement.ts`. The safety cuts
+  both ways, and it is quiet: dropping an emoji people have already picked takes
+  their tallies out of the UI without an error anywhere, so **retiring one wants
+  a remap of the stored rows, not just a deletion from the list.**
+
+`scripts/seed.mjs` migrates any `quote_likes` rows to **♦️** reactions and drops
+the collection — a like was a plain endorsement, which is "טוב" and not 🃏. It
+runs on every seed rather than under `--demo`, because it is a migration and not
+sample data; it upserts row by row on `{ quoteId, userId }`, so a half-finished
+run can just be repeated and anyone who has since reacted keeps what they
+picked.
+
+The bar draws **the whole scale at every count, including zero**, and signed out
+the chips are links to `/login?next=…` rather than being hidden — the emoji are
+the only thing telling a reader what the grades even are, so a quote nobody has
+rated would otherwise offer no way to start. Same rule as the share control
+below, and the API's 401 is still the boundary.
 
 `src/lib/engagement-schema.ts` is client-safe; `src/lib/engagement.ts` owns the
 Mongo documents and mutations. Comment writes require ownership in the database
@@ -797,7 +847,7 @@ Consequences worth keeping:
   lock is state in the dialog and the card unmounts it on close, so letting
   Escape through would throw the lock away mid-request and let a second copy go
   to the whole team — the exact thing the confirmation exists to prevent.
-- **Sharing is not hidden from signed-out visitors.** Like the like button, the
+- **Sharing is not hidden from signed-out visitors.** Like the reaction bar, the
   control stays visible and becomes a link to `/login?next=…`; the API's 401 is
   the boundary. The download needs no session at all.
 

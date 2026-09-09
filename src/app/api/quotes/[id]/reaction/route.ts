@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { fieldErrors } from "@/lib/api";
-import { likeInputSchema, setQuoteLike } from "@/lib/engagement";
+import { reactionInputSchema, setQuoteReaction } from "@/lib/engagement";
 import {
   forbiddenResponse,
   getSessionFrom,
@@ -27,7 +27,7 @@ export async function PUT(request: Request, { params }: Params) {
     return NextResponse.json({ error: "בקשה לא תקינה" }, { status: 400 });
   }
 
-  const parsed = likeInputSchema.safeParse(body);
+  const parsed = reactionInputSchema.safeParse(body);
   if (!parsed.success) {
     return NextResponse.json(
       { error: "יש שדות לא תקינים", issues: fieldErrors(parsed.error) },
@@ -36,7 +36,7 @@ export async function PUT(request: Request, { params }: Params) {
   }
 
   try {
-    const state = await setQuoteLike(id, session.id, parsed.data.liked);
+    const state = await setQuoteReaction(id, session.id, parsed.data.emoji);
     if (!state) {
       return NextResponse.json(
         { error: "הציטוט לא נמצא" },
@@ -45,9 +45,9 @@ export async function PUT(request: Request, { params }: Params) {
     }
     return NextResponse.json(state);
   } catch (error) {
-    console.error(`PUT /api/quotes/${id}/like failed`, error);
+    console.error(`PUT /api/quotes/${id}/reaction failed`, error);
     return NextResponse.json(
-      { error: "לא הצלחנו לעדכן את הלייק" },
+      { error: "לא הצלחנו לעדכן את הדירוג" },
       { status: 500 },
     );
   }

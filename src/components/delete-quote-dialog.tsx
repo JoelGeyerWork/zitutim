@@ -62,7 +62,7 @@ export function DeleteQuoteDialog({
           </AlertDialogMedia>
           <AlertDialogTitle>למחוק את הציטוט?</AlertDialogTitle>
           <AlertDialogDescription>
-            הציטוט של {quote.author}, הלייקים והתגובות שלו יימחקו לצמיתות. אי
+            הציטוט של {quote.author}, הדירוגים והתגובות שלו יימחקו לצמיתות. אי
             אפשר לבטל את הפעולה.
           </AlertDialogDescription>
         </AlertDialogHeader>
