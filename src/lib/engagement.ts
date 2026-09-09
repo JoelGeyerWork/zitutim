@@ -8,19 +8,25 @@ import {
 } from "mongodb";
 
 import {
+  asReactionEmoji,
+  toReactionCounts,
   type CommentValues,
-  type LikeState,
   type QuoteComment,
+  type ReactionEmoji,
+  type ReactionState,
 } from "@/lib/engagement-schema";
 import { getDb } from "@/lib/mongodb";
 
 export * from "@/lib/engagement-schema";
 
-export interface QuoteLikeDoc {
+export interface QuoteReactionDoc {
   _id: ObjectId;
   quoteId: ObjectId;
   userId: ObjectId;
+  emoji: ReactionEmoji;
   createdAt: Date;
+  /** Moves when someone swaps one emoji for another; `createdAt` keeps the first. */
+  updatedAt: Date;
 }
 
 export interface QuoteCommentDoc {
@@ -41,9 +47,9 @@ export type CommentMutationResult =
   | { status: "not_found" }
   | { status: "forbidden" };
 
-async function likes(): Promise<Collection<QuoteLikeDoc>> {
+async function reactions(): Promise<Collection<QuoteReactionDoc>> {
   const db = await getDb();
-  return db.collection<QuoteLikeDoc>("quote_likes");
+  return db.collection<QuoteReactionDoc>("quote_reactions");
 }
 
 async function comments(): Promise<Collection<QuoteCommentDoc>> {
@@ -108,7 +114,9 @@ async function resolvedComment(
  * uniqueness used in production is present in tests too.
  */
 export async function createEngagementIndexes(): Promise<void> {
-  const likeIndexes: IndexDescription[] = [
+  const reactionIndexes: IndexDescription[] = [
+    // One person, one reaction per quote — the boundary a swap relies on, since
+    // it is an upsert on this key rather than a delete and an insert.
     { key: { quoteId: 1, userId: 1 }, unique: true },
   ];
   const commentIndexes: IndexDescription[] = [
@@ -116,64 +124,92 @@ export async function createEngagementIndexes(): Promise<void> {
     { key: { authorId: 1 } },
   ];
 
-  const [likeCollection, commentCollection] = await Promise.all([
-    likes(),
+  const [reactionCollection, commentCollection] = await Promise.all([
+    reactions(),
     comments(),
   ]);
   await Promise.all([
-    likeCollection.createIndexes(likeIndexes),
+    reactionCollection.createIndexes(reactionIndexes),
     commentCollection.createIndexes(commentIndexes),
   ]);
 }
 
-export async function getLikeState(
-  quoteId: string,
-  userId?: string,
-): Promise<LikeState | null> {
-  if (!ObjectId.isValid(quoteId)) return null;
-  const quoteObjectId = new ObjectId(quoteId);
-  if (!(await quoteExists(quoteObjectId))) return null;
-
-  const collection = await likes();
-  const viewerId = userId && ObjectId.isValid(userId) ? new ObjectId(userId) : null;
-  const [likeCount, viewerLike] = await Promise.all([
-    collection.countDocuments({ quoteId: quoteObjectId }),
+/**
+ * Counts per emoji plus the viewer's own pick. Grouping in the database keeps
+ * this one round trip whatever the palette grows to.
+ */
+async function readReactionState(
+  quoteObjectId: ObjectId,
+  viewerId: ObjectId | null,
+): Promise<ReactionState> {
+  const collection = await reactions();
+  const [rows, viewerRow] = await Promise.all([
+    collection
+      .aggregate<{ emoji: string; count: number }>([
+        { $match: { quoteId: quoteObjectId } },
+        { $group: { _id: "$emoji", count: { $sum: 1 } } },
+        { $project: { _id: 0, emoji: "$_id", count: 1 } },
+      ])
+      .toArray(),
     viewerId
       ? collection.findOne({ quoteId: quoteObjectId, userId: viewerId })
       : null,
   ]);
 
-  return { likeCount, likedByViewer: viewerLike !== null };
+  return {
+    counts: toReactionCounts(rows),
+    // Narrowed rather than trusted: a row may hold an emoji the palette has
+    // since dropped, and the client only knows how to draw current ones.
+    viewerReaction: asReactionEmoji(viewerRow?.emoji),
+  };
+}
+
+export async function getReactionState(
+  quoteId: string,
+  userId?: string,
+): Promise<ReactionState | null> {
+  if (!ObjectId.isValid(quoteId)) return null;
+  const quoteObjectId = new ObjectId(quoteId);
+  if (!(await quoteExists(quoteObjectId))) return null;
+
+  const viewerId = userId && ObjectId.isValid(userId) ? new ObjectId(userId) : null;
+  return readReactionState(quoteObjectId, viewerId);
 }
 
 /**
- * PUT semantics make retries idempotent: the client sends the desired state,
- * while the unique index remains the final one-user/one-quote boundary.
+ * PUT semantics make retries idempotent: the client sends the emoji it wants to
+ * end on — or null to withdraw — while the unique index remains the final
+ * one-user/one-quote boundary.
+ *
+ * Swapping emoji is an upsert on that key rather than a delete and an insert,
+ * so a second reaction can never slip into the gap between the two.
  */
-export async function setQuoteLike(
+export async function setQuoteReaction(
   quoteId: string,
   userId: string,
-  liked: boolean,
-): Promise<LikeState | null> {
+  emoji: ReactionEmoji | null,
+): Promise<ReactionState | null> {
   if (!ObjectId.isValid(quoteId) || !ObjectId.isValid(userId)) return null;
 
   const quoteObjectId = new ObjectId(quoteId);
   const userObjectId = new ObjectId(userId);
   if (!(await quoteExists(quoteObjectId))) return null;
 
-  const collection = await likes();
+  const collection = await reactions();
   const filter = { quoteId: quoteObjectId, userId: userObjectId };
 
-  if (liked) {
+  if (emoji) {
+    const now = new Date();
     try {
       await collection.updateOne(
         filter,
-        { $setOnInsert: { createdAt: new Date() } },
+        { $set: { emoji, updatedAt: now }, $setOnInsert: { createdAt: now } },
         { upsert: true },
       );
     } catch (error) {
-      // Concurrent first likes can race at the upsert boundary. The unique
-      // index chooses one winner; once it exists, the desired state is met.
+      // Concurrent first reactions can race at the upsert boundary. The unique
+      // index chooses one winner; the loser's $set is what the retry would do
+      // anyway, so the desired state is already met.
       if (
         !error ||
         typeof error !== "object" ||
@@ -194,8 +230,7 @@ export async function setQuoteLike(
     return null;
   }
 
-  const likeCount = await collection.countDocuments({ quoteId: quoteObjectId });
-  return { likeCount, likedByViewer: liked };
+  return readReactionState(quoteObjectId, userObjectId);
 }
 
 export async function listComments(
@@ -237,7 +272,7 @@ export async function createComment(
   };
   const result = await collection.insertOne(doc as QuoteCommentDoc);
 
-  // See the like write above: this pairs with quote deletion's cleanup so a
+  // See the reaction write above: this pairs with quote deletion's cleanup so a
   // concurrent delete cannot strand a newly inserted comment.
   if (!(await quoteExists(quoteObjectId))) {
     await collection.deleteOne({ _id: result.insertedId });
@@ -347,12 +382,12 @@ export async function deleteComment(
  * the quote delete, retrying the same DELETE can therefore finish the work.
  */
 export async function deleteQuoteEngagement(quoteId: ObjectId): Promise<void> {
-  const [likeCollection, commentCollection] = await Promise.all([
-    likes(),
+  const [reactionCollection, commentCollection] = await Promise.all([
+    reactions(),
     comments(),
   ]);
   await Promise.all([
-    likeCollection.deleteMany({ quoteId }),
+    reactionCollection.deleteMany({ quoteId }),
     commentCollection.deleteMany({ quoteId }),
   ]);
 }

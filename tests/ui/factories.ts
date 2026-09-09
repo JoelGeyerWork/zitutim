@@ -21,9 +21,9 @@ export function makeQuote(overrides: Partial<Quote> = {}): Quote {
     updatedById: null,
     createdAt: "2026-08-08T09:00:00.000Z",
     updatedAt: "2026-08-08T09:00:00.000Z",
-    likeCount: 0,
+    reactions: {},
     commentCount: 0,
-    likedByViewer: false,
+    viewerReaction: null,
     commentsPreview: [],
     ...overrides,
   };

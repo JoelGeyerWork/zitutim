@@ -7,7 +7,11 @@ import {
   type Filter,
 } from "mongodb";
 
-import { deleteQuoteEngagement } from "@/lib/engagement";
+import {
+  asReactionEmoji,
+  deleteQuoteEngagement,
+  toReactionCounts,
+} from "@/lib/engagement";
 import type { QuoteComment } from "@/lib/engagement-schema";
 import { getDb } from "@/lib/mongodb";
 import { resolvePeople, type PersonFailure } from "@/lib/people";
@@ -125,9 +129,9 @@ interface QuoteCommentAggregateDoc {
 }
 
 interface QuoteAggregateDoc extends QuoteDoc {
-  likeCount: number;
+  reactionCounts: { emoji: string; count: number }[];
   commentCount: number;
-  likedByViewer: boolean;
+  viewerReaction: string | null;
   commentsPreview: QuoteCommentAggregateDoc[];
 }
 
@@ -145,12 +149,12 @@ function serializeComment(doc: QuoteCommentAggregateDoc): QuoteComment {
 
 function serialize(doc: QuoteDoc | QuoteAggregateDoc): Quote {
   const engagement =
-    "likeCount" in doc
+    "reactionCounts" in doc
       ? doc
       : {
-          likeCount: 0,
+          reactionCounts: [],
           commentCount: 0,
-          likedByViewer: false,
+          viewerReaction: null,
           commentsPreview: [],
         };
 
@@ -169,9 +173,11 @@ function serialize(doc: QuoteDoc | QuoteAggregateDoc): Quote {
     updatedById: doc.updatedById?.toHexString() ?? null,
     createdAt: doc.createdAt.toISOString(),
     updatedAt: doc.updatedAt.toISOString(),
-    likeCount: engagement.likeCount,
+    reactions: toReactionCounts(engagement.reactionCounts),
     commentCount: engagement.commentCount,
-    likedByViewer: engagement.likedByViewer,
+    // Narrowed rather than trusted: a stored emoji the palette has since
+    // dropped is not something the bar knows how to draw.
+    viewerReaction: asReactionEmoji(engagement.viewerReaction),
     commentsPreview: engagement.commentsPreview.map(serializeComment),
   };
 }
@@ -199,7 +205,7 @@ const sortSpecs: Record<SortOption, Record<string, 1 | -1>> = {
 };
 
 /**
- * Resolve counts, the current viewer's like and the latest-two preview in the
+ * Resolve counts, the current viewer's reaction and the latest-two preview in the
  * same aggregate that loads the quote page. Each lookup is index-backed and
  * avoids a query per card.
  */
@@ -210,7 +216,7 @@ function engagementStages(viewerId?: string): Document[] {
   return [
     {
       $lookup: {
-        from: "quote_likes",
+        from: "quote_reactions",
         let: { currentQuoteId: "$_id" },
         pipeline: [
           {
@@ -219,18 +225,31 @@ function engagementStages(viewerId?: string): Document[] {
             },
           },
           {
-            $group: {
-              _id: null,
-              count: { $sum: 1 },
-              viewerLiked: {
-                $max: viewer
-                  ? { $cond: [{ $eq: ["$userId", viewer] }, 1, 0] }
-                  : 0,
-              },
+            $facet: {
+              counts: [
+                { $group: { _id: "$emoji", count: { $sum: 1 } } },
+                { $project: { _id: 0, emoji: "$_id", count: 1 } },
+              ],
+              // Built only for a signed-in viewer: $facet takes no empty
+              // branch, and $ifNull below reads an absent one as "no pick".
+              ...(viewer
+                ? {
+                    viewer: [
+                      { $match: { userId: viewer } },
+                      { $project: { _id: 0, emoji: 1 } },
+                    ],
+                  }
+                : {}),
+            },
+          },
+          {
+            $project: {
+              counts: "$counts",
+              viewerReaction: { $ifNull: [{ $first: "$viewer.emoji" }, null] },
             },
           },
         ],
-        as: "likeSummary",
+        as: "reactionSummary",
       },
     },
     {
@@ -289,9 +308,11 @@ function engagementStages(viewerId?: string): Document[] {
     },
     {
       $set: {
-        likeCount: { $ifNull: [{ $first: "$likeSummary.count" }, 0] },
-        likedByViewer: {
-          $eq: [{ $ifNull: [{ $first: "$likeSummary.viewerLiked" }, 0] }, 1],
+        reactionCounts: {
+          $ifNull: [{ $first: "$reactionSummary.counts" }, []],
+        },
+        viewerReaction: {
+          $ifNull: [{ $first: "$reactionSummary.viewerReaction" }, null],
         },
         commentCount: {
           $ifNull: [{ $first: "$commentSummary.count" }, 0],
@@ -301,7 +322,7 @@ function engagementStages(viewerId?: string): Document[] {
         },
       },
     },
-    { $unset: ["likeSummary", "commentSummary"] },
+    { $unset: ["reactionSummary", "commentSummary"] },
   ];
 }
 

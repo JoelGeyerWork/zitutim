@@ -46,17 +46,23 @@ describe("QuoteEngagement", () => {
     const second = makeComment({ id: "2", text: "תגובה שנייה" });
     const third = makeComment({ id: "3", text: "תגובה שלישית" });
 
-    render(
+    renderSignedIn(
       <QuoteEngagement
         quote={makeQuote({
-          likeCount: 4,
+          reactions: { "♦️": 4, "😂": 1 },
           commentCount: 3,
           commentsPreview: [second, third],
         })}
       />,
     );
 
-    expect(screen.getByText("4 לייקים")).toBeInTheDocument();
+    expect(
+      screen.getByRole("group", { name: "דירוג הציטוט — 5 דירוגים" }),
+    ).toBeInTheDocument();
+    expect(screen.getByLabelText("טוב — 4 דירוגים")).toHaveTextContent("4");
+    expect(screen.getByLabelText("צחקתי קצת — דירוג אחד")).toHaveTextContent("1");
+    // An emoji nobody picked stays on the bar, without a count beside it.
+    expect(screen.getByLabelText("אליט — 0 דירוגים")).toHaveTextContent("🃏");
     expect(screen.getByText("3 תגובות")).toBeInTheDocument();
     expect(screen.queryByText(first.text)).not.toBeInTheDocument();
     const preview = screen.getByRole("list", { name: "תגובות אחרונות" });
@@ -92,7 +98,7 @@ describe("QuoteEngagement", () => {
     );
 
     expect(
-      screen.getByRole("link", { name: /התחברות כדי לסמן לייק/ }),
+      screen.getByRole("link", { name: /התחברות כדי לדרג טוב/ }),
     ).toHaveAttribute("href", "/login?next=%2Fquotes");
 
     await user.click(screen.getByRole("button", { name: "תגובה אחת" }));
@@ -104,51 +110,93 @@ describe("QuoteEngagement", () => {
     );
   });
 
-  it("optimistically toggles a signed-in like and reconciles the response", async () => {
+  it("optimistically swaps a signed-in reaction and reconciles the response", async () => {
     fetchMock.mockResolvedValue(
-      jsonResponse({ likeCount: 1, likedByViewer: false }),
+      jsonResponse({
+        counts: { "♦️": 1, "😂": 1, "🃏": 3 },
+        viewerReaction: "😂",
+      }),
     );
     const user = userEvent.setup();
     renderSignedIn(
       <QuoteEngagement
-        quote={makeQuote({ likeCount: 2, likedByViewer: true })}
+        quote={makeQuote({
+          reactions: { "♦️": 2, "🃏": 3 },
+          viewerReaction: "♦️",
+        })}
       />,
     );
 
-    const button = screen.getByRole("button", { name: /הסרת לייק/ });
-    expect(button).toHaveAttribute("aria-pressed", "true");
-    await user.click(button);
+    expect(screen.getByLabelText("טוב — 2 דירוגים")).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    await user.click(screen.getByLabelText("צחקתי קצת — 0 דירוגים"));
 
-    await waitFor(() => expect(screen.getByText("לייק אחד")).toBeInTheDocument());
+    // One person, one reaction: the ♦️ is given up as the 😂 is taken.
+    await waitFor(() => {
+      expect(screen.getByLabelText("צחקתי קצת — דירוג אחד")).toHaveAttribute(
+        "aria-pressed",
+        "true",
+      );
+    });
+    expect(screen.getByLabelText("טוב — דירוג אחד")).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
     expect(fetchMock).toHaveBeenCalledWith(
-      "/api/quotes/6a0000000000000000000001/like",
+      "/api/quotes/6a0000000000000000000001/reaction",
       expect.objectContaining({
         method: "PUT",
-        body: JSON.stringify({ liked: false }),
+        body: JSON.stringify({ emoji: "😂" }),
       }),
     );
     expect(refresh).not.toHaveBeenCalled();
   });
 
-  it("rolls back an optimistic like before redirecting on an expired session", async () => {
-    fetchMock.mockResolvedValue(jsonResponse({ error: "צריך להתחבר" }, 401));
+  it("withdraws the reaction already picked rather than re-sending it", async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse({ counts: {}, viewerReaction: null }),
+    );
     const user = userEvent.setup();
     renderSignedIn(
       <QuoteEngagement
-        quote={makeQuote({ likeCount: 2, likedByViewer: false })}
+        quote={makeQuote({ reactions: { "♦️": 1 }, viewerReaction: "♦️" })}
       />,
     );
 
-    await user.click(screen.getByRole("button", { name: /סימון לייק/ }));
+    await user.click(screen.getByLabelText("טוב — דירוג אחד"));
 
     await waitFor(() => {
-      expect(screen.getByText("2 לייקים")).toBeInTheDocument();
-      expect(screen.getByRole("button", { name: /סימון לייק/ })).toHaveAttribute(
+      expect(screen.getByLabelText("טוב — 0 דירוגים")).toHaveAttribute(
         "aria-pressed",
         "false",
       );
     });
-    expect(push).toHaveBeenCalledWith("/login?next=%2Fquotes");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/quotes/6a0000000000000000000001/reaction",
+      expect.objectContaining({ body: JSON.stringify({ emoji: null }) }),
+    );
+  });
+
+  it("rolls back an optimistic reaction before redirecting on an expired session", async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ error: "צריך להתחבר" }, 401));
+    const user = userEvent.setup();
+    renderSignedIn(
+      <QuoteEngagement
+        quote={makeQuote({ reactions: { "♦️": 2 }, viewerReaction: null })}
+      />,
+    );
+
+    await user.click(screen.getByLabelText("טוב — 2 דירוגים"));
+
+    await waitFor(() => {
+      expect(push).toHaveBeenCalledWith("/login?next=%2Fquotes");
+    });
+    expect(screen.getByLabelText("טוב — 2 דירוגים")).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
   });
 
   it("loads the full conversation and adds a comment inline", async () => {

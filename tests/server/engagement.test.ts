@@ -4,9 +4,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createComment,
   deleteComment,
-  getLikeState,
+  getReactionState,
   listComments,
-  setQuoteLike,
+  setQuoteReaction,
   updateComment,
 } from "@/lib/engagement";
 import { getDb } from "@/lib/mongodb";
@@ -60,7 +60,7 @@ beforeEach(async () => {
   const db = await getDb();
   await Promise.all([
     db.collection("quotes").deleteMany({}),
-    db.collection("quote_likes").deleteMany({}),
+    db.collection("quote_reactions").deleteMany({}),
     db.collection("quote_comments").deleteMany({}),
     db.collection("users").deleteMany({}),
   ]);
@@ -71,42 +71,76 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("quote likes", () => {
-  it("sets a desired like state idempotently and toggles it off", async () => {
+describe("quote reactions", () => {
+  it("sets a desired reaction idempotently and withdraws it", async () => {
     const quote = await createQuote(QUOTE_INPUT, QUOTE_AUTHOR, DANA);
 
-    await expect(setQuoteLike(quote.id, DANA.id, true)).resolves.toEqual({
-      likeCount: 1,
-      likedByViewer: true,
+    await expect(setQuoteReaction(quote.id, DANA.id, "♦️")).resolves.toEqual({
+      counts: { "♦️": 1 },
+      viewerReaction: "♦️",
     });
-    await expect(setQuoteLike(quote.id, DANA.id, true)).resolves.toEqual({
-      likeCount: 1,
-      likedByViewer: true,
+    await expect(setQuoteReaction(quote.id, DANA.id, "♦️")).resolves.toEqual({
+      counts: { "♦️": 1 },
+      viewerReaction: "♦️",
     });
 
     const db = await getDb();
     await expect(
-      db.collection("quote_likes").countDocuments(),
+      db.collection("quote_reactions").countDocuments(),
     ).resolves.toBe(1);
 
-    await expect(setQuoteLike(quote.id, DANA.id, false)).resolves.toEqual({
-      likeCount: 0,
-      likedByViewer: false,
+    await expect(setQuoteReaction(quote.id, DANA.id, null)).resolves.toEqual({
+      counts: {},
+      viewerReaction: null,
     });
   });
 
-  it("keeps one database row under concurrent like requests", async () => {
+  it("swaps one emoji for another rather than accumulating them", async () => {
+    const quote = await createQuote(QUOTE_INPUT, QUOTE_AUTHOR, DANA);
+
+    await setQuoteReaction(quote.id, DANA.id, "♦️");
+    await expect(setQuoteReaction(quote.id, DANA.id, "😂")).resolves.toEqual({
+      counts: { "😂": 1 },
+      viewerReaction: "😂",
+    });
+
+    const db = await getDb();
+    await expect(
+      db.collection("quote_reactions").countDocuments(),
+    ).resolves.toBe(1);
+  });
+
+  it("keeps the first reaction's createdAt across a swap", async () => {
+    const quote = await createQuote(QUOTE_INPUT, QUOTE_AUTHOR, DANA);
+    const db = await getDb();
+    const filter = {
+      quoteId: new ObjectId(quote.id),
+      userId: new ObjectId(DANA.id),
+    };
+
+    await setQuoteReaction(quote.id, DANA.id, "♦️");
+    const first = await db.collection("quote_reactions").findOne(filter);
+    await setQuoteReaction(quote.id, DANA.id, "🃏");
+    const swapped = await db.collection("quote_reactions").findOne(filter);
+
+    expect(swapped?.createdAt).toEqual(first?.createdAt);
+    expect(swapped?.updatedAt.getTime()).toBeGreaterThanOrEqual(
+      first!.updatedAt.getTime(),
+    );
+  });
+
+  it("keeps one database row under concurrent reactions", async () => {
     const quote = await createQuote(QUOTE_INPUT, QUOTE_AUTHOR, DANA);
 
     await Promise.all(
       Array.from({ length: 8 }, () =>
-        setQuoteLike(quote.id, DANA.id, true),
+        setQuoteReaction(quote.id, DANA.id, "♦️"),
       ),
     );
 
     const db = await getDb();
     await expect(
-      db.collection("quote_likes").countDocuments({
+      db.collection("quote_reactions").countDocuments({
         quoteId: new ObjectId(quote.id),
         userId: new ObjectId(DANA.id),
       }),
@@ -115,8 +149,8 @@ describe("quote likes", () => {
 
   it("includes counts and the current viewer state in quote reads", async () => {
     const quote = await createQuote(QUOTE_INPUT, QUOTE_AUTHOR, DANA);
-    await setQuoteLike(quote.id, DANA.id, true);
-    await setQuoteLike(quote.id, NOA.id, true);
+    await setQuoteReaction(quote.id, DANA.id, "♦️");
+    await setQuoteReaction(quote.id, NOA.id, "😂");
 
     const [anonymous, dana] = await Promise.all([
       listQuotes(),
@@ -124,23 +158,45 @@ describe("quote likes", () => {
     ]);
 
     expect(anonymous.quotes[0]).toMatchObject({
-      likeCount: 2,
-      likedByViewer: false,
+      reactions: { "♦️": 1, "😂": 1 },
+      viewerReaction: null,
     });
     expect(dana.quotes[0]).toMatchObject({
-      likeCount: 2,
-      likedByViewer: true,
+      reactions: { "♦️": 1, "😂": 1 },
+      viewerReaction: "♦️",
     });
-    await expect(getLikeState(quote.id, NOA.id)).resolves.toEqual({
-      likeCount: 2,
-      likedByViewer: true,
+    await expect(getReactionState(quote.id, NOA.id)).resolves.toEqual({
+      counts: { "♦️": 1, "😂": 1 },
+      viewerReaction: "😂",
+    });
+  });
+
+  it("drops a stored emoji the palette no longer offers", async () => {
+    const quote = await createQuote(QUOTE_INPUT, QUOTE_AUTHOR, DANA);
+    const db = await getDb();
+    await db.collection("quote_reactions").insertOne({
+      quoteId: new ObjectId(quote.id),
+      userId: new ObjectId(DANA.id),
+      emoji: "🦄",
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    await expect(getReactionState(quote.id, DANA.id)).resolves.toEqual({
+      counts: {},
+      viewerReaction: null,
+    });
+    const page = await listQuotes({ viewerId: DANA.id });
+    expect(page.quotes[0]).toMatchObject({
+      reactions: {},
+      viewerReaction: null,
     });
   });
 
   it("returns null for missing quotes", async () => {
     const missing = "0".repeat(24);
-    await expect(setQuoteLike(missing, DANA.id, true)).resolves.toBeNull();
-    await expect(getLikeState("bad-id", DANA.id)).resolves.toBeNull();
+    await expect(setQuoteReaction(missing, DANA.id, "♦️")).resolves.toBeNull();
+    await expect(getReactionState("bad-id", DANA.id)).resolves.toBeNull();
   });
 });
 
@@ -325,16 +381,16 @@ describe("quote comments", () => {
     ).toEqual(["שנייה", "שלישית"]);
   });
 
-  it("removes likes and comments when deleting a quote", async () => {
+  it("removes reactions and comments when deleting a quote", async () => {
     const quote = await createQuote(QUOTE_INPUT, QUOTE_AUTHOR, DANA);
-    await setQuoteLike(quote.id, DANA.id, true);
+    await setQuoteReaction(quote.id, DANA.id, "♦️");
     await createComment(quote.id, { text: "למחיקה" }, DANA.id);
 
     await expect(deleteQuote(quote.id)).resolves.toBe(true);
 
     const db = await getDb();
     await expect(
-      db.collection("quote_likes").countDocuments(),
+      db.collection("quote_reactions").countDocuments(),
     ).resolves.toBe(0);
     await expect(
       db.collection("quote_comments").countDocuments(),

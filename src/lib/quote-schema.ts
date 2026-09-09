@@ -1,6 +1,10 @@
 import { z } from "zod";
 
-import type { QuoteComment } from "@/lib/engagement-schema";
+import type {
+  QuoteComment,
+  ReactionCounts,
+  ReactionEmoji,
+} from "@/lib/engagement-schema";
 import { personRefSchema } from "@/lib/person-ref";
 
 /**
@@ -35,10 +39,11 @@ export interface Quote {
   updatedById: string | null;
   createdAt: string;
   updatedAt: string;
-  likeCount: number;
+  /** How many people picked each emoji. Emoji nobody picked are absent. */
+  reactions: ReactionCounts;
   commentCount: number;
-  /** Whether the signed-in viewer has liked this quote; false when anonymous. */
-  likedByViewer: boolean;
+  /** The signed-in viewer's own pick; null when anonymous or unreacted. */
+  viewerReaction: ReactionEmoji | null;
   /** Latest two comments, displayed in chronological order. */
   commentsPreview: QuoteComment[];
 }
