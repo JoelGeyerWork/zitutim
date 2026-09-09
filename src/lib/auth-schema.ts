@@ -8,7 +8,7 @@ import { z } from "zod";
 
 /** Shape handed to the client. Everything here is safe to render. */
 export interface SessionUser {
-  /** `users._id` as a hex string — what quotes, comments and likes reference. */
+  /** `users._id` as a hex string — what quotes, comments and ratings reference. */
   id: string;
   /** AD displayName. The source of the `addedBy` snapshot on a quote. */
   name: string;

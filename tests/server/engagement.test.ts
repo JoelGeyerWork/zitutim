@@ -129,6 +129,43 @@ describe("quote reactions", () => {
     );
   });
 
+  it("still lands a rating that lost the insert race to a different emoji", async () => {
+    const quote = await createQuote(QUOTE_INPUT, QUOTE_AUTHOR, DANA);
+    const db = await getDb();
+
+    // The duplicate key is raised inside Mongo, between the upsert's own match
+    // and insert, so it cannot be provoked from out here: inserting the rival
+    // row first only makes the upsert match it and succeed. Stand in for the
+    // lost race instead — the rival row exists, and this write is rejected —
+    // which is exactly the state the catch block has to recover from. Racing
+    // two real calls proves nothing either way, since whichever emoji survives
+    // is a legal last-write-wins outcome.
+    vi.spyOn(Collection.prototype, "updateOne").mockImplementationOnce(
+      async function (this: Collection) {
+        await db.collection("quote_reactions").insertOne({
+          quoteId: new ObjectId(quote.id),
+          userId: new ObjectId(DANA.id),
+          emoji: "🃏",
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        });
+        throw Object.assign(new Error("E11000 duplicate key error"), {
+          code: 11000,
+        });
+      },
+    );
+
+    // Swallowing the duplicate key would hand back 🃏 — the other write's pick,
+    // never asked for here — and quietly drop this one.
+    await expect(setQuoteReaction(quote.id, DANA.id, "🍎")).resolves.toEqual({
+      counts: { "🍎": 1 },
+      viewerReaction: "🍎",
+    });
+    await expect(
+      db.collection("quote_reactions").countDocuments(),
+    ).resolves.toBe(1);
+  });
+
   it("keeps one database row under concurrent reactions", async () => {
     const quote = await createQuote(QUOTE_INPUT, QUOTE_AUTHOR, DANA);
 

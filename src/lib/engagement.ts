@@ -207,9 +207,6 @@ export async function setQuoteReaction(
         { upsert: true },
       );
     } catch (error) {
-      // Concurrent first reactions can race at the upsert boundary. The unique
-      // index chooses one winner; the loser's $set is what the retry would do
-      // anyway, so the desired state is already met.
       if (
         !error ||
         typeof error !== "object" ||
@@ -217,6 +214,15 @@ export async function setQuoteReaction(
       ) {
         throw error;
       }
+      // Two first ratings on the same quote race at the upsert boundary and the
+      // unique index picks one winner. The like this replaced could stop here:
+      // both racers only wanted "a row exists", so the winner's insert met the
+      // loser's intent too. An emoji is carried in the $set, so it does not —
+      // swallowing this would drop a write the caller was about to be told had
+      // been applied, and hand it back the other person's pick. Retry as a
+      // plain update against the row that now exists; last write wins, which is
+      // what a desired-state PUT promises.
+      await collection.updateOne(filter, { $set: { emoji, updatedAt: now } });
     }
   } else {
     await collection.deleteOne(filter);

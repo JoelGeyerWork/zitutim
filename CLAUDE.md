@@ -713,6 +713,16 @@ added beside it. Three consequences worth keeping:
   gap for a second row to appear in, so the index stays the boundary rather than
   becoming a thing the code has to work around. `createdAt` keeps the first
   reaction; `updatedAt` moves with the swap.
+- **A duplicate key on that upsert is retried as a plain update, not swallowed.**
+  Two people rating a quote for the first time at once race inside Mongo, and the
+  index rejects the loser with 11000. The like this replaced could stop there —
+  both racers only wanted "a row exists", so the winner's insert satisfied the
+  loser too. An emoji rides in the `$set`, so it does not: ignoring the error
+  drops a write the caller is then told was applied and hands back the other
+  person's pick. Note this is **not** reachable by racing two real calls in a
+  test — whichever emoji survives is a legal last-write-wins outcome either way,
+  and inserting the rival row first only makes the upsert match it. The test
+  stands in for the rejection instead.
 - **The palette is a fixed list** (`REACTION_EMOJI` in `engagement-schema.ts`), not
   a free picker: a picker is a bundle to ship onto an air-gapped network, it needs
   server-side proof that the string really is one emoji, and free choice fragments

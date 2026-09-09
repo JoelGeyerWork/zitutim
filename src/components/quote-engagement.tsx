@@ -273,7 +273,7 @@ export function QuoteEngagement({ quote }: { quote: Quote }) {
         return;
       }
       if (!response.ok) {
-        const message = await responseMessage(response, "עדכון הדירוג נכשל");
+        const message = await responseMessage(response, "עדכון התגובה נכשל");
         setEditError(message);
         return;
       }
