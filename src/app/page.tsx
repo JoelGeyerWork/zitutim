@@ -92,7 +92,7 @@ export default async function HubPage() {
 
   return (
     <>
-      <section className="relative isolate overflow-hidden">
+      <section className="relative isolate">
         <Backdrop />
 
         <div className="mx-auto flex max-w-2xl flex-col items-center gap-6 px-4 pt-8 pb-6 text-center sm:flex-row sm:gap-10 sm:pt-14 sm:pb-10 sm:text-start">
@@ -101,7 +101,7 @@ export default async function HubPage() {
                 that. */}
             <h1 className="text-4xl font-black tracking-tight sm:text-5xl">
               היי,{" "}
-              <span className="from-primary to-chart-3 bg-linear-to-l bg-clip-text text-transparent">
+              <span className="hub-name from-primary to-chart-3 bg-linear-to-l bg-clip-text text-transparent">
                 {firstName}
               </span>
               .
@@ -147,10 +147,17 @@ type Teaser = { content?: React.ReactNode };
  * The hero's ground: a faint grid fading out from the middle, and one red glow
  * behind the stone. Both are static CSS — the gem is the only thing on this
  * page that is allowed to keep moving.
+ *
+ * The clip lives here and not on the section. The glow is far larger than the
+ * hero and has to be cut somewhere, but an `overflow` on the section would cut
+ * the stone too — perspective swells its near corner past the stage, and the
+ * float carries it a few pixels further — and on WebKit a clipping ancestor
+ * can flatten a `preserve-3d` descendant, which would put every frame back on
+ * the raster path the layer promotion exists to avoid.
  */
 function Backdrop() {
   return (
-    <div aria-hidden className="absolute inset-0 -z-10">
+    <div aria-hidden className="absolute inset-0 -z-10 overflow-hidden">
       <div className="absolute inset-0 bg-[linear-gradient(to_right,var(--border)_1px,transparent_1px),linear-gradient(to_bottom,var(--border)_1px,transparent_1px)] bg-[size:32px_32px] [mask-image:radial-gradient(ellipse_70%_80%_at_50%_30%,black_10%,transparent_75%)]" />
       <div className="bg-primary/15 absolute top-0 left-1/2 h-[26rem] w-[40rem] -translate-x-1/2 -translate-y-1/3 rounded-full blur-3xl" />
     </div>

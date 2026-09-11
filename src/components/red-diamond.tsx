@@ -94,17 +94,29 @@ function ring(top: (typeof PROFILE)[number], bottom: (typeof PROFILE)[number]) {
  * How each half is painted, waist first. The shape is mirrored but the light is
  * not: the crown catches it and the pavilion is where the stone gets its depth,
  * so it runs very dark — a red that is bright everywhere reads as pink plastic.
+ *
+ * `alpha` is a little translucency, so the far side of the stone shows through
+ * the near side and it reads as a solid rather than as a paper cut-out. It is
+ * baked into the paint rather than set as `opacity` on the face: `opacity < 1`
+ * is a grouping property, which hands each face its own stacking context, and
+ * some engines then paint those in DOM order rather than by depth — a back
+ * face drawn over a front one is the one thing that gives a CSS solid away.
  */
 const HALVES = [
-  { name: "crown", light: 52, dark: -34, opacity: 0.95 },
-  { name: "pavilion", light: 2, dark: -72, opacity: 0.88 },
+  { name: "crown", light: 52, dark: -34, alpha: 0.95 },
+  { name: "pavilion", light: 2, dark: -72, alpha: 0.88 },
 ];
 
 /** A signed mix: positive tints toward white, negative shades toward black. */
-const mix = (amount: number) =>
-  amount >= 0
-    ? `color-mix(in oklab, white ${amount}%, var(--primary))`
-    : `color-mix(in oklab, black ${-amount}%, var(--primary))`;
+const mix = (amount: number, alpha = 1) => {
+  const tone =
+    amount >= 0
+      ? `color-mix(in oklab, white ${amount}%, var(--primary))`
+      : `color-mix(in oklab, black ${-amount}%, var(--primary))`;
+  return alpha === 1
+    ? tone
+    : `color-mix(in oklab, ${tone} ${(alpha * 100).toFixed(0)}%, transparent)`;
+};
 
 const FACE_INDEXES = Array.from({ length: FACES }, (_, i) => i);
 
@@ -177,7 +189,7 @@ export function RedDiamond({
             className="gem-spin relative size-full"
             style={{ transformStyle: "preserve-3d" }}
           >
-            {HALVES.map((paint, h) => {
+            {HALVES.flatMap((paint, h) => {
               const geometry = ring(PROFILE[h], PROFILE[h + 1]);
 
               return FACE_INDEXES.map((i) => {
@@ -198,13 +210,9 @@ export function RedDiamond({
                       width: len(geometry.width),
                       height: len(geometry.slant),
                       clipPath: geometry.clip,
-                      // A little translucency, so the far side of the stone
-                      // shows through the near side and it reads as a solid
-                      // rather than as a paper cut-out.
-                      opacity: paint.opacity,
                       transformOrigin: geometry.hangs ? "50% 0" : "50% 100%",
                       transform: `rotateY(${azimuth}deg) translateZ(${len(geometry.apothem)}) rotateX(${geometry.tilt.toFixed(3)}deg)`,
-                      background: `linear-gradient(to ${geometry.hangs ? "bottom" : "top"}, ${mix(near + 26)} 0%, ${mix(near)} 5%, ${mix(paint.dark)} 100%)`,
+                      background: `linear-gradient(to ${geometry.hangs ? "bottom" : "top"}, ${mix(near + 26, paint.alpha)} 0%, ${mix(near, paint.alpha)} 5%, ${mix(paint.dark, paint.alpha)} 100%)`,
                     }}
                   />
                 );

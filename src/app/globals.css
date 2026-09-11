@@ -148,6 +148,17 @@
   background-color: color-mix(in oklab, black 50%, transparent);
 }
 
+/* The hub greeting paints the name through a gradient, which is `color:
+   transparent` under a clipped background. Under forced colours the background
+   is discarded and nothing restores the text, so the one personalised word on
+   the page would vanish. Unlayered, so it beats the utilities on the span. */
+@media (forced-colors: active) {
+  .hub-name {
+    color: CanvasText;
+    background-image: none;
+  }
+}
+
 /* Oversized decorative quotation mark used on quote cards. */
 @utility quote-mark {
   font-family: Georgia, "Times New Roman", serif;
