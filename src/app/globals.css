@@ -154,3 +154,74 @@
   line-height: 1;
   user-select: none;
 }
+
+/* The hub's diamond (`red-diamond.tsx`). It turns continuously, and the cost of
+   that is managed rather than avoided.
+
+   The expensive thing about a spinning `preserve-3d` group is not the number of
+   faces, it is that the group cannot be flattened into a cached texture — so by
+   default every frame re-rasterises all eight faces, clip paths and gradients
+   included. Promoting each face to its own layer changes the per-frame work from
+   *rastering* the scene to *re-transforming* eight textures that were rastered
+   once, which is the whole difference.
+
+   `will-change` here is the case it is actually for. The usual warning against
+   leaving it on is about elements that animate occasionally, where it pins a
+   layer that is idle almost always; this animation never stops, so the layer is
+   never idle and the promotion is never wasted.
+
+   What is *not* promoted matters as much: the halo and the contact shadow carry
+   `filter: blur()`, and a blur is only cheap if it can be painted once. They are
+   static for that reason — see the note beside them.
+
+   Every animation is declared inside the `no-preference` query, so
+   `prefers-reduced-motion` needs no overrides: there is nothing to turn off, and
+   the resting transform below is the only pose. */
+
+.gem-stage {
+  --gem-period: 20s;
+}
+
+/* Square-on the stone shows one face and reads flat, so it rests with a corner
+   toward the viewer — the pose reduced motion gets, and the one the turn both
+   starts and ends on. */
+.gem-spin {
+  transform: rotateY(28deg);
+}
+
+@keyframes gem-spin {
+  from {
+    transform: rotateY(28deg);
+  }
+  to {
+    transform: rotateY(388deg);
+  }
+}
+
+@keyframes gem-float {
+  0%,
+  100% {
+    transform: translateY(-4px);
+  }
+  50% {
+    transform: translateY(4px);
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .gem-spin {
+    animation: gem-spin var(--gem-period) linear infinite;
+    will-change: transform;
+  }
+
+  /* The point of the whole arrangement: eight textures rastered once, then only
+     re-transformed as the group turns. */
+  .gem-face {
+    will-change: transform;
+  }
+
+  .gem-float {
+    animation: gem-float 7s ease-in-out infinite;
+    will-change: transform;
+  }
+}
