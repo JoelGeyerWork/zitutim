@@ -151,10 +151,14 @@
 /* The hub greeting paints the name through a gradient, which is `color:
    transparent` under a clipped background. Under forced colours the background
    is discarded and nothing restores the text, so the one personalised word on
-   the page would vanish. Unlayered, so it beats the utilities on the span. */
+   the page would vanish. Chromium paints the glyphs with
+   `-webkit-text-fill-color`, which is not in the forced-colours override list,
+   so that has to be unset too or the fill stays transparent over nothing.
+   Unlayered, so it beats the utilities on the span. */
 @media (forced-colors: active) {
   .hub-name {
     color: CanvasText;
+    -webkit-text-fill-color: unset;
     background-image: none;
   }
 }
