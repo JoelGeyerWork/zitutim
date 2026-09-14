@@ -22,7 +22,7 @@ describe("HubHero", () => {
     render(<HubHero firstName={LONG_FIRST_NAME} />);
 
     const heading = screen.getByRole("heading", { level: 1 });
-    expect(heading).toHaveClass("break-words");
+    expect(heading).toHaveClass("wrap-anywhere");
     expect(heading.parentElement).toHaveClass("w-full", "min-w-0");
     expect(heading.parentElement?.parentElement).toHaveClass(
       "w-full",

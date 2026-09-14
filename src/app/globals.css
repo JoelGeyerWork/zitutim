@@ -163,6 +163,15 @@
   }
 }
 
+/* A long first name wraps, and `background-clip: text` otherwise paints
+   the gradient against the unwrapped box — later lines fade or clip.
+   `clone` gives each fragment its own background. Unlayered so it wins
+   against the utilities on the span. */
+.hub-name {
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}
+
 /* Oversized decorative quotation mark used on quote cards. */
 @utility quote-mark {
   font-family: Georgia, "Times New Roman", serif;

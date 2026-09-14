@@ -167,7 +167,7 @@ function MeetupTeaser({
     <>
       <div className="mt-4 flex items-center gap-3">
         <PersonAvatar name={member.name} className="size-12 text-lg" />
-        <div className="min-w-0">
+        <div className="min-w-0 flex-1">
           <p className="truncate font-semibold">{member.name}</p>
           <p className="text-muted-foreground text-sm">
             {conjugate(member, "מביא", "מביאה")} את הכיבוד ·{" "}
@@ -198,7 +198,7 @@ function ShotefTeaser({
   return (
     <div className="mt-4 flex items-center gap-3">
       <PersonAvatar name={member.name} className="size-12 text-lg" />
-      <div className="min-w-0">
+      <div className="min-w-0 flex-1">
         <p className="truncate font-semibold">{member.name}</p>
         <p className="text-muted-foreground text-sm">
           {conjugate(member, "אחראי", "אחראית")} על הבאגים · הסבב עובר{" "}
@@ -235,11 +235,11 @@ function QuoteTeaser({
         >
           ״
         </span>
-        <p className="line-clamp-3 text-lg leading-relaxed font-medium text-pretty">
+        <p className="wrap-anywhere line-clamp-3 text-lg leading-relaxed font-medium text-pretty">
           {quote.text}
         </p>
       </blockquote>
-      <figcaption className="text-muted-foreground mt-3 break-words ps-6 text-sm">
+      <figcaption className="text-muted-foreground mt-3 wrap-anywhere ps-6 text-sm">
         — {quote.author} · {plural(stats.total, "ציטוט אחד", "ציטוטים")} בקיר
       </figcaption>
     </figure>

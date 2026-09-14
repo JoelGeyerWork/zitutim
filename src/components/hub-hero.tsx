@@ -14,15 +14,17 @@ export function HubHero({ firstName }: { firstName: string }) {
       {/* `w-full min-w-0` on the measure *and* the copy: a long first name
           is one unbreakable word at 5xl, and without a floor of zero
           `max-w-2xl` loses to min-content — the heading inflates the page
-          and paints through the stone. `break-words` is what actually
-          wraps it; `min-w-0` is what lets the box stay the measure.
-          `w-full` on the copy is because this row is `items-center`, which
-          otherwise sizes the text to the name instead of the column. */}
+          and paints through the stone. `wrap-anywhere` is what actually
+          breaks it (and is the wrap that shrinks min-content, which
+          `break-words` / `overflow-wrap: break-word` does not). `min-w-0`
+          is what lets the box stay the measure. `w-full` on the copy is
+          because this row is `items-center`, which otherwise sizes the
+          text to the name instead of the column. */}
       <div className="mx-auto flex w-full min-w-0 max-w-2xl flex-col items-center gap-6 px-4 pt-8 pb-6 text-center sm:flex-row sm:gap-10 sm:pt-14 sm:pb-10 sm:text-start">
         <div className="w-full min-w-0 flex-1">
           {/* Not the app's name — the wordmark in the header already says
               that. */}
-          <h1 className="break-words text-4xl font-black tracking-tight sm:text-5xl">
+          <h1 className="wrap-anywhere text-4xl font-black tracking-tight sm:text-5xl">
             היי,{" "}
             <span className="hub-name from-primary to-chart-3 bg-linear-to-l bg-clip-text text-transparent">
               {firstName}
