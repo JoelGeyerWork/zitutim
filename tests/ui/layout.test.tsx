@@ -1,4 +1,4 @@
-import { isValidElement, type ReactNode } from "react";
+import { isValidElement, type ReactElement, type ReactNode } from "react";
 import { describe, expect, it, vi } from "vitest";
 
 import RootLayout from "@/app/layout";
@@ -23,6 +23,18 @@ function ancestorsOf(tree: ReactNode, target: unknown): unknown[] | null {
   for (const child of Array.isArray(children) ? children : [children]) {
     const found = ancestorsOf(child, target);
     if (found) return [tree.type, ...found];
+  }
+  return null;
+}
+
+function findByType(tree: ReactNode, type: unknown): ReactElement | null {
+  if (!isValidElement(tree)) return null;
+  if (tree.type === type) return tree;
+
+  const { children } = tree.props as { children?: ReactNode };
+  for (const child of Array.isArray(children) ? children : [children]) {
+    const found = findByType(child, type);
+    if (found) return found;
   }
   return null;
 }
@@ -54,5 +66,17 @@ describe("RootLayout", () => {
     // markup can't match — suppressing it is what keeps the console clean.
     expect((tree as { props: Record<string, unknown> }).props)
       .toHaveProperty("suppressHydrationWarning", true);
+  });
+
+  // `body` is a column flex container, so `main` defaults to `min-width: auto`
+  // — the min-content of the page. A long hub greeting would otherwise
+  // inflate the document past the viewport even with wrap on the heading.
+  it("lets main shrink below its min-content", async () => {
+    const tree = await RootLayout({ children: null } as never);
+    const main = findByType(tree, "main");
+    expect(main).not.toBeNull();
+    expect((main!.props as { className: string }).className).toMatch(
+      /\bmin-w-0\b/,
+    );
   });
 });

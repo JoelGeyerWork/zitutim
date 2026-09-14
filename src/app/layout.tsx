@@ -49,8 +49,12 @@ export default async function RootLayout({ children }: LayoutProps<"/">) {
           <SessionProvider user={user}>
             <SiteNav />
             {/* No bottom bar to clear any more — the section dropdown in the
-                header carries navigation at every size. */}
-            <main className="flex-1 pb-10">{children}</main>
+                header carries navigation at every size.
+                `min-w-0` because this is a column flex item: `min-width: auto`
+                is the min-content of the page, and a long unbreakable word
+                (the hub greeting) would inflate the document past the
+                viewport even when the hero itself is wrapped. */}
+            <main className="min-w-0 flex-1 pb-10">{children}</main>
             <Toaster position="top-center" richColors closeButton />
           </SessionProvider>
         </ThemeProvider>
