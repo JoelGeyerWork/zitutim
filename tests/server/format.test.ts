@@ -9,6 +9,7 @@ import {
   formatDuration,
   formatSaidAtShort,
   formatWeekRange,
+  greetingName,
   initial,
   plural,
   toInputValue,
@@ -165,6 +166,22 @@ describe("avatar helpers", () => {
 
   it("falls back to a question mark for an empty name", () => {
     expect(initial("   ")).toBe("?");
+  });
+
+  it("greets with the first token of a display name", () => {
+    expect(greetingName("דנה כהן")).toBe("דנה");
+    expect(greetingName("  אלכסנדרה-מיכאלה  ברקוביץ׳ ")).toBe(
+      "אלכסנדרה-מיכאלה",
+    );
+  });
+
+  it("splits on any whitespace, not only a literal space", () => {
+    expect(greetingName("דנה\u00a0כהן")).toBe("דנה");
+  });
+
+  it("falls back to the unsigned greeting when there is no name", () => {
+    expect(greetingName(undefined)).toBe("צוות");
+    expect(greetingName("   ")).toBe("צוות");
   });
 
   it("gives the same author the same tone every time", () => {

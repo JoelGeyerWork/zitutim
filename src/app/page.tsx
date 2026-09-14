@@ -1,10 +1,10 @@
 import Link from "next/link";
 import { ArrowLeftIcon } from "lucide-react";
 
+import { HubHero } from "@/components/hub-hero";
 import { PersonAvatar } from "@/components/person-avatar";
-import { RedDiamond } from "@/components/red-diamond";
-import { formatMeetupDate, plural } from "@/lib/format";
-import { HUB, SECTIONS, type Section } from "@/lib/navigation";
+import { formatMeetupDate, greetingName, plural } from "@/lib/format";
+import { SECTIONS, type Section } from "@/lib/navigation";
 import { type RosterMember } from "@/lib/roster";
 import { getRotation } from "@/lib/rotation";
 import {
@@ -88,42 +88,17 @@ export default async function HubPage() {
     "/quotes": { content: <QuoteTeaser stats={stats} quote={latest.quotes[0]} /> },
   };
 
-  const firstName = user ? user.name.split(" ")[0] : "צוות";
+  const firstName = greetingName(user?.name);
 
   return (
     <>
-      <section className="relative isolate">
-        <Backdrop />
-
-        <div className="mx-auto flex max-w-2xl flex-col items-center gap-6 px-4 pt-8 pb-6 text-center sm:flex-row sm:gap-10 sm:pt-14 sm:pb-10 sm:text-start">
-          <div className="min-w-0 flex-1">
-            {/* Not the app's name — the wordmark in the header already says
-                that. */}
-            <h1 className="text-4xl font-black tracking-tight sm:text-5xl">
-              היי,{" "}
-              <span className="hub-name from-primary to-chart-3 bg-linear-to-l bg-clip-text text-transparent">
-                {firstName}
-              </span>
-              .
-            </h1>
-            <p className="text-muted-foreground mt-3 text-lg">{HUB.description}</p>
-          </div>
-
-          {/* Leads on a phone, where the column stacks: the stone is the
-              page's idea, and the greeting reads better under it than over
-              it. Beside the text once there is room for both. */}
-          <RedDiamond
-            size="clamp(112px, 28vw, 150px)"
-            className="shrink-0 max-sm:order-first"
-          />
-        </div>
-      </section>
+      <HubHero firstName={firstName} />
 
       {/* The two weekly rotations share the first row — they lead `SECTIONS`
           because they are the things here that expire — and anything after
           them runs full width, so a fourth section lands in a sensible place
           without this grid being revisited. */}
-      <section className="mx-auto grid max-w-2xl gap-4 px-4 pt-4 sm:grid-cols-2 sm:pt-6">
+      <section className="mx-auto grid w-full min-w-0 max-w-2xl gap-4 px-4 pt-4 sm:grid-cols-2 sm:pt-6">
           {SECTIONS.map((section, index) => (
             <SectionCard
               key={section.href}
@@ -143,27 +118,6 @@ export default async function HubPage() {
 // with nothing registered.
 type Teaser = { content?: React.ReactNode };
 
-/**
- * The hero's ground: a faint grid fading out from the middle, and one red glow
- * behind the stone. Both are static CSS — the gem is the only thing on this
- * page that is allowed to keep moving.
- *
- * The clip lives here and not on the section. The glow is far larger than the
- * hero and has to be cut somewhere, but an `overflow` on the section would cut
- * the stone too — perspective swells its near corner past the stage, and the
- * float carries it a few pixels further — and on WebKit a clipping ancestor
- * can flatten a `preserve-3d` descendant, which would put every frame back on
- * the raster path the layer promotion exists to avoid.
- */
-function Backdrop() {
-  return (
-    <div aria-hidden className="absolute inset-0 -z-10 overflow-hidden">
-      <div className="absolute inset-0 bg-[linear-gradient(to_right,var(--border)_1px,transparent_1px),linear-gradient(to_bottom,var(--border)_1px,transparent_1px)] bg-[size:32px_32px] [mask-image:radial-gradient(ellipse_70%_80%_at_50%_30%,black_10%,transparent_75%)]" />
-      <div className="bg-primary/15 absolute top-0 left-1/2 h-[26rem] w-[40rem] -translate-x-1/2 -translate-y-1/3 rounded-full blur-3xl" />
-    </div>
-  );
-}
-
 /** A whole section as one click target — the hub is a list of front doors. */
 function SectionCard({
   section,
@@ -178,7 +132,7 @@ function SectionCard({
     <Link
       href={section.href}
       className={cn(
-        "group bg-card/70 hover:border-primary/40 hover:shadow-primary/30 flex flex-col rounded-2xl border p-5 backdrop-blur transition-all hover:-translate-y-0.5 hover:shadow-[0_28px_60px_-32px]",
+        "group bg-card/70 hover:border-primary/40 hover:shadow-primary/30 flex min-w-0 flex-col rounded-2xl border p-5 backdrop-blur transition-all hover:-translate-y-0.5 hover:shadow-[0_28px_60px_-32px]",
         className,
       )}
     >
@@ -285,7 +239,7 @@ function QuoteTeaser({
           {quote.text}
         </p>
       </blockquote>
-      <figcaption className="text-muted-foreground mt-3 ps-6 text-sm">
+      <figcaption className="text-muted-foreground mt-3 break-words ps-6 text-sm">
         — {quote.author} · {plural(stats.total, "ציטוט אחד", "ציטוטים")} בקיר
       </figcaption>
     </figure>

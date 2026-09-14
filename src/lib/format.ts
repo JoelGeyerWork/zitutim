@@ -168,6 +168,17 @@ export function initial(name: string): string {
   return name.trim().charAt(0).toUpperCase() || "?";
 }
 
+/**
+ * The hub greeting is first-name-only, so a long AD `displayName` doesn't
+ * become the headline. `\s+` rather than a literal space, because a name
+ * copied out of AD sometimes arrives with a non-breaking space. Empty,
+ * whitespace, or no session all fall back to the unsigned "צוות".
+ */
+export function greetingName(displayName: string | null | undefined): string {
+  const first = displayName?.trim().split(/\s+/u)[0];
+  return first || "צוות";
+}
+
 /** Deterministic hue-free tint per author so avatars aren't all identical. */
 export function authorTone(name: string): number {
   let hash = 0;
